@@ -1,7 +1,8 @@
 const path = require('path');
-const REPO = path.resolve(process.argv[2]), EXT = path.resolve(process.argv[3]), ID = process.argv[4];
+const { REPO, EXT, WORK } = require('./args.js')();
+const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
-const PROFILE = require('path').join(require('os').tmpdir(), 'keo-start-profile');
+const PROFILE = path.join(WORK, 'profile-start');
 require('fs').rmSync(PROFILE, { recursive: true, force: true });
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
@@ -23,7 +24,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   out.signIn = await act('#signin');
   const dl = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
   out.export = await act('#export');
-  const d = await dl; if (d) { const p = path.join(path.resolve(process.argv[5]), 'keo-identity-draft.json'); await d.saveAs(p); out.exportFile = p; }
+  const d = await dl; if (d) { const p = path.join(WORK, 'keo-identity-draft.json'); await d.saveAs(p); out.exportFile = p; }
   // second launch, same profile: does the local account persist across a browser restart? (the virtual authenticator itself does not, so no sign-in here)
   await ctx.close();
   ctx = await chromium.launchPersistentContext(PROFILE, { headless: false, args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`] });

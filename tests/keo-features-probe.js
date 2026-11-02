@@ -1,7 +1,7 @@
 // Opens each on-demand feature in the built extension's world and reports what it asked the package for and could not get.
 // Usage: node keo-features-probe.js <repo root> <extension folder> <work dir> [feature ...]
 const path = require('path');
-const [REPO, EXT, WORK] = process.argv.slice(2, 5);
+const { REPO, EXT, WORK } = require('./args.js')();
 const ONLY = process.argv.slice(5);
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const ID = 'cgjphijackijgcjkfdfieihkbfooigjp', sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -5,7 +5,7 @@
 // Usage: node keo-overlay-test.js <repo root> <extension folder> <work dir>
 const path = require('path');
 const fs = require('fs');
-const [REPO, EXT, WORK] = process.argv.slice(2);
+const { REPO, EXT, WORK } = require('./args.js')();
 const { chromium } = require(path.join(path.resolve(REPO), 'node_modules', 'playwright-core'));
 const ID = 'cgjphijackijgcjkfdfieihkbfooigjp', sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];

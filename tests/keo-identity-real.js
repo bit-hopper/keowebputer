@@ -12,7 +12,7 @@
 // the extension id in your OS passkey settings if it is not wanted.
 const fs = require('fs');
 const path = require('path');
-const REPO = path.resolve(process.argv[2]), EXT = path.resolve(process.argv[3]), WORK = path.resolve(process.argv[4]);   // absolute: a relative path would resolve from this file, not from the shell's cwd
+const { REPO, EXT, WORK } = require('./args.js')();
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
