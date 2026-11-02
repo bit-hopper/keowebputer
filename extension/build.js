@@ -1,9 +1,12 @@
 // Assemble the keo world extension: shell page start.html + sandboxed world.html + the static
 // files a plain boot of blank.html requests, so the world runs from the package with no server.
-// Usage: node build.js <output folder> [--kernel <LivelyKernel checkout>]
+// Usage: node build.js <output folder> [--kernel <LivelyKernel checkout>] [--version <release tag, e.g. v0 or v0.2.1>]
 //   --kernel  the LivelyKernel checkout the package is made from (its core/, blank.html, node_modules/esbuild, babel).
 //             Also read from $KEO_KERNEL. With neither, a folder named LivelyKernel next to this repository is used if
 //             (and only if) it looks like a kernel.
+//   --version the release this package is, written as the extension's version (what the browser shows for it). A leading "v" is
+//             dropped; what is left must be one to four dot-separated whole numbers (0-65535), which is all the browser accepts.
+//             Also read from $KEO_VERSION. Without it the version is 0.0.0, so a local build is never taken for a release.
 // Needs no server: the generated combinedModules bundle comes from kernel-bundle.js and the WebDAV directory listings are
 // written from the folders. Needs the kernel's `npm install` done. Run from anywhere.
 // Writes keo-build.json into the package: which kernel commit it was built from, and whether the files it copied differed
@@ -16,16 +19,21 @@ const { buildBundle } = require('./kernel-bundle');
 const { listPackage } = require('./package-files');
 
 // ---- arguments
-let OUT = null, KERNEL_ARG = process.env.KEO_KERNEL || null;
+let OUT = null, KERNEL_ARG = process.env.KEO_KERNEL || null, VERSION_ARG = process.env.KEO_VERSION || null;
 {
   const a = process.argv.slice(2);
   for (let i = 0; i < a.length; i++) {
     if (a[i] === '--kernel') KERNEL_ARG = a[++i];
+    else if (a[i] === '--version') VERSION_ARG = a[++i];
     else if (!OUT) OUT = a[i];
     else { console.error('unexpected argument: ' + a[i]); process.exit(1); }
   }
 }
-if (!OUT) { console.error('usage: node build.js <output folder> [--kernel <LivelyKernel checkout>]'); process.exit(1); }
+if (!OUT) { console.error('usage: node build.js <output folder> [--kernel <LivelyKernel checkout>] [--version <release tag>]'); process.exit(1); }
+const VERSION = VERSION_ARG ? String(VERSION_ARG).replace(/^v/, '') : '0.0.0';
+if (!/^\d{1,5}(\.\d{1,5}){0,3}$/.test(VERSION) || VERSION.split('.').some((n) => Number(n) > 65535)) {
+  console.error('--version must be a release tag such as v0 or v0.2.1 (one to four dot-separated numbers, each up to 65535): ' + VERSION_ARG); process.exit(1);
+}
 // Files a folder must have to be taken for a LivelyKernel checkout this script can build from.
 const KERNEL_MARKERS = ['core/lively/bootstrap.js', 'blank.html', 'core/lively/identity/IdentityVaultFrame.js'];
 const isKernel = (dir) => KERNEL_MARKERS.every((f) => fs.existsSync(path.join(dir, f)));
@@ -195,7 +203,7 @@ lively.Config.set('loadUserConfig', false);
   put('keo-release.js', fs.readFileSync(path.join(SHELL, 'keo-release.js')));
   put('bg.js', "chrome.action.onClicked.addListener(() => chrome.tabs.create({ url: chrome.runtime.getURL('start.html') }));\n");
   put('manifest.json', JSON.stringify({
-    manifest_version: 3, name: 'keo (prototype)', version: '0.0.3', description: 'keo world from the package, no server. Prototype.',
+    manifest_version: 3, name: 'keo (prototype)', version: VERSION, description: 'keo world from the package, no server. Prototype.',
     key: der.toString('base64'), action: { default_title: 'keo' }, background: { service_worker: 'bg.js' },
     sandbox: { pages: ['world.html'] },
     // Extension pages (shell, vault): the default script-src plus 'wasm-unsafe-eval', which libsodium's WebAssembly needs.
@@ -212,7 +220,7 @@ lively.Config.set('loadUserConfig', false);
   const kernelGit = (args) => { try { return execSync('git ' + args, { cwd: REPO, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').trim(); } catch (e) { return null; } };
   const changed = kernelGit('status --porcelain -- core users blank.html');
   put('keo-build.json', JSON.stringify({
-    builtAt: new Date().toISOString(), extensionId: id, bundleHash: hash,
+    builtAt: new Date().toISOString(), version: VERSION, extensionId: id, bundleHash: hash,
     kernel: { commit: kernelGit('rev-parse HEAD'), branch: kernelGit('rev-parse --abbrev-ref HEAD'),
       changed: changed === null ? null : changed.split('\n').filter(Boolean).slice(0, 100) }
   }, null, 2) + '\n');

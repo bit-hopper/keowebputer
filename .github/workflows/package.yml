@@ -47,7 +47,10 @@ jobs:
           npm run test:did
           npm run test:release
 
+      # A tag build is labelled with its tag (v0 -> version 0); a manual run is labelled 0.0.0.
       - name: Build the package
+        env:
+          KEO_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: node extension/build.js dist
 
       - name: Zip
