@@ -74,9 +74,13 @@ const copy = (rel) => put(rel, fs.readFileSync(path.join(REPO, rel)));
 // Not shipped: apps and heavy assets that come from the inventory (or are not used at run time) instead of the package.
 // Jenga3D (module code here, its 50 MB of libraries under core/lib/jenga3d), MicroBlocks, Snap and the like are downloaded
 // from the inventory on demand.
-const NOT_SHIPPED = ['core/lively/jenga3d', 'core/lib/jenga3d'];
+// Also not shipped, because the kernel does not track them (they exist only in some working trees, so a build from a commit
+// could never include them and a local build must not either): the soundboard clips, two dead files under users/ (the kernel
+// ignores that folder) and a note in the empty material-icons folder. The soundboard module is copied and finds no clips.
+const NOT_SHIPPED = ['core/lively/jenga3d', 'core/lib/jenga3d', 'core/media/soundboard',
+  'core/lively/users/WebAuthn.js', 'core/lively/users/WebAuthnLoginMorph.js', 'core/media/material-icons/README.txt'];
 const copyDir = (rel) => { if (NOT_SHIPPED.includes(rel)) return; for (const e of fs.readdirSync(path.join(REPO, rel), { withFileTypes: true })) {
-  if (e.isDirectory()) copyDir(rel + '/' + e.name); else copy(rel + '/' + e.name); } };
+  if (e.isDirectory()) copyDir(rel + '/' + e.name); else if (!NOT_SHIPPED.includes(rel + '/' + e.name)) copy(rel + '/' + e.name); } };
 
 // A WebDAV multistatus answer for the folder `rel` of the kernel: the folder itself, then each file in it. The runtime
 // only lists these folders (names, sizes, types); every entry is a file, which is checked here because a subfolder would
