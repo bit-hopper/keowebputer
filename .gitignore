@@ -4,3 +4,9 @@ dist/
 *.log
 # one-off probes and the first prototype: kept locally for reference, not published
 research/
+# private working notes and instructions for the assistant: every markdown file except the README
+*.md
+!README.md
+
+# build cache (transpiled kernel files, linked kernel root)
+.cache/

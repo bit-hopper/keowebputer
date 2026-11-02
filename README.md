@@ -1,12 +1,12 @@
 # keowebputer
 
-A prototype of **keo**: a Lively-style live, modifiable browser runtime with no backend. The world runs from the app's own files, and identity, keys and storage live on the user's device.
+A prototype of **keo**: a Lively-style live, modifiable browser runtime with no backend. The world runs from keo's own files, and identity, keys and storage live on the user's device.
 
 Status: early prototype. Nothing here is audited. Local identity creation has been run against a virtual authenticator and against one real one (the platform authenticator built into one desktop computer); other authenticators and browsers are untested.
 
 ## How it fits together
 
-The app is an unpacked browser extension with two realms:
+keo is an unpacked browser extension with two realms:
 
 | Folder | Realm | What it does |
 |---|---|---|
@@ -25,11 +25,11 @@ An identity is made on the device with a passkey and no server. Its DID is `did:
 
 ## Building
 
-The package is made from a LivelyKernel checkout (the runtime) that has `core/`, `users/` and `blank.html`, and the kernel's dev server must be running while you build (it supplies the generated module bundle and two directory listings).
+The package is made from a LivelyKernel checkout (the runtime) that has `core/` and `blank.html` and has had its own `npm install`. No server is needed: the generated module bundle is made by the kernel's own code (`extension/kernel-bundle.js`) and the two directory listings are written from the folders.
 
 ```
 npm install
-node extension/build.js dist --kernel <path to the kernel checkout> [--server http://localhost:9001]
+node extension/build.js dist --kernel <path to the kernel checkout>
 ```
 
 `--kernel` can also be set with `KEO_KERNEL`; with neither, a folder named `LivelyKernel` next to this repository is used if it looks like a kernel. The build writes `keo-build.json` into the package with the kernel commit it came from and the paths that differed from that commit. Load `dist/` with *Load unpacked* in `chrome://extensions` (developer mode), click the toolbar icon, and the world opens.

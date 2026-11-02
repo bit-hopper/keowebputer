@@ -1,5 +1,5 @@
-// Workers inside the built extension's sandboxed world: Logo, Pyodide (the real PyodideWorker class),
-// and the generic Worker wrapper's handling of non-package URLs.
+// Workers inside the built extension's sandboxed world: Logo and the generic Worker wrapper's handling of non-package URLs.
+// (Python is not shipped in the package, so there is no Pyodide check.)
 // Usage: node keo-workers-test.js <repo root> <extension folder> <work dir>
 const path = require('path');
 const [REPO, EXT, WORK] = process.argv.slice(2);
@@ -36,22 +36,6 @@ function check(name, ok, detail) { results.push(ok); console.log((ok ? 'PASS ' :
   check('logo: worker starts and the engine loads (init ok)', initMsg && initMsg.ok, logo);
   check('logo: a program runs to done and draws', done && done.state === 'done' && draw.length > 0, logo);
   check('logo: printed text came back', JSON.stringify(logo.msgs).includes('hello'), logo);
-
-  // ---- Pyodide through the real wrapper class ----
-  const py = await frame.evaluate(() => new Promise((res) => {
-    const t = setTimeout(() => res({ timeout: true }), 150000);
-    lively.require('lively.identity.PyodideWorker').toRun(function () {
-      lively.identity.PyodideWorker.ensureReady(function (err) {
-        if (err) { clearTimeout(t); return res({ ready: false, err: String(err.message || err) }); }
-        lively.identity.PyodideWorker.run('import numpy as np\nprint(int(np.arange(5).sum()))\n2 + 3', function (e2, r) {
-          clearTimeout(t); res({ ready: true, err: e2 && String(e2.message || e2), r });
-          lively.identity.PyodideWorker.terminate();
-        });
-      });
-    });
-  }));
-  check('pyodide: runtime + numpy load in the package', py.ready, py);
-  check('pyodide: a cell runs (stdout 10, result 5)', py.r && /10/.test(py.r.stdout) && py.r.result === '5', py);
 
   // ---- the wrapper leaves other URLs alone ----
   const other = await frame.evaluate(() => {

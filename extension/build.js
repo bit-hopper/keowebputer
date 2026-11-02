@@ -1,35 +1,32 @@
 // Assemble the keo world extension: shell page start.html + sandboxed world.html + the static
 // files a plain boot of blank.html requests, so the world runs from the package with no server.
-// Usage: node build.js <output folder> [--kernel <LivelyKernel checkout>] [--server <url, default http://localhost:9001>]
-//   --kernel  the LivelyKernel checkout the package is made from (its core/, users/, blank.html, node_modules/esbuild).
+// Usage: node build.js <output folder> [--kernel <LivelyKernel checkout>]
+//   --kernel  the LivelyKernel checkout the package is made from (its core/, blank.html, node_modules/esbuild, babel).
 //             Also read from $KEO_KERNEL. With neither, a folder named LivelyKernel next to this repository is used if
 //             (and only if) it looks like a kernel.
-//   --server  the dev server of that kernel (a bare URL as the second argument still works).
-// Needs the dev server up at build time only: it supplies the generated combinedModules bundle and the WebDAV
-// directory listings (neither exists as a file in the repo). Run from anywhere.
+// Needs no server: the generated combinedModules bundle comes from kernel-bundle.js and the WebDAV directory listings are
+// written from the folders. Needs the kernel's `npm install` done. Run from anywhere.
 // Writes keo-build.json into the package: which kernel commit it was built from, and whether the files it copied differed
 // from that commit (the package is made from the working tree, not from the commit).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
+const { buildBundle } = require('./kernel-bundle');
 
 // ---- arguments
-let OUT = null, KERNEL_ARG = process.env.KEO_KERNEL || null, SERVER_ARG = null;
+let OUT = null, KERNEL_ARG = process.env.KEO_KERNEL || null;
 {
   const a = process.argv.slice(2);
   for (let i = 0; i < a.length; i++) {
     if (a[i] === '--kernel') KERNEL_ARG = a[++i];
-    else if (a[i] === '--server') SERVER_ARG = a[++i];
     else if (!OUT) OUT = a[i];
-    else if (/^https?:\/\//.test(a[i])) SERVER_ARG = a[i];     // the old positional form
     else { console.error('unexpected argument: ' + a[i]); process.exit(1); }
   }
 }
-const SERVER = (SERVER_ARG || 'http://localhost:9001').replace(/\/+$/, '');
-if (!OUT) { console.error('usage: node build.js <output folder> [--kernel <LivelyKernel checkout>] [--server <url>]'); process.exit(1); }
+if (!OUT) { console.error('usage: node build.js <output folder> [--kernel <LivelyKernel checkout>]'); process.exit(1); }
 // Files a folder must have to be taken for a LivelyKernel checkout this script can build from.
-const KERNEL_MARKERS = ['core/lively/bootstrap.js', 'blank.html', 'core/lively/identity/IdentityVaultFrame.js', 'users/unknown_user/config.js'];
+const KERNEL_MARKERS = ['core/lively/bootstrap.js', 'blank.html', 'core/lively/identity/IdentityVaultFrame.js'];
 const isKernel = (dir) => KERNEL_MARKERS.every((f) => fs.existsSync(path.join(dir, f)));
 const REPO = path.resolve(KERNEL_ARG || path.join(__dirname, '..', '..', 'LivelyKernel'));
 if (!isKernel(REPO)) {
@@ -54,11 +51,13 @@ fs.mkdirSync(OUT, { recursive: true });
 fs.writeFileSync(MARKER, 'built by extension/build.js\n');
 
 // libraries (and their workers) that on-demand features load; add a directory here when a feature is found to need one
-const ONDEMAND_LIBS = ['core/lib/marked', 'core/lib/logo', 'core/lib/ml', 'core/lib/scheme', 'core/lib/pyodide',
-  'core/lib/geo', 'core/lib/astro', 'core/lib/postcard', 'core/lib/wallet', 'core/media', 'core/styles'];
+const ONDEMAND_LIBS = ['core/lib/marked', 'core/lib/logo', 'core/lib/ml', 'core/lib/scheme',
+  'core/lib/geo', 'core/lib/astro', 'core/lib/postcard', 'core/media', 'core/styles'];
 const ONDEMAND_FILES = ['core/lib/grasp.js', 'core/lib/escodegen.browser.js', 'core/lib/lively.ast.dev.js', 'core/lib/lively-libs.js'];
 // Also not shipped yet: core/lib/privacy-pools (23 MB) and core/lib/mediapipe (16 MB, face effects); add them here when the
 // feature that loads them is brought over. See NOT_SHIPPED above for what is deliberately never shipped.
+// Not shipped by decision: core/lib/pyodide (Python, 25 MB) and core/lib/wallet (crypto bundles, 11 MB). The kernel modules
+// that load them (PyodideWorker, Wallet*, PrivacyPoolClient) are still copied with core/lively and fail at first use.
 
 let bytes = 0, files = 0;
 const put = (rel, data) => { const p = path.join(OUT, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, data); bytes += data.length; files++; };
@@ -69,6 +68,26 @@ const copy = (rel) => put(rel, fs.readFileSync(path.join(REPO, rel)));
 const NOT_SHIPPED = ['core/lively/jenga3d', 'core/lib/jenga3d'];
 const copyDir = (rel) => { if (NOT_SHIPPED.includes(rel)) return; for (const e of fs.readdirSync(path.join(REPO, rel), { withFileTypes: true })) {
   if (e.isDirectory()) copyDir(rel + '/' + e.name); else copy(rel + '/' + e.name); } };
+
+// A WebDAV multistatus answer for the folder `rel` of the kernel: the folder itself, then each file in it. The runtime
+// only lists these folders (names, sizes, types); every entry is a file, which is checked here because a subfolder would
+// need its own entry shape.
+const propfind = (rel) => {
+  const entry = (href, stat, isDir) => '<d:response><d:href>' + href + '</d:href><d:propstat><d:prop>' +
+    '<d:getlastmodified xmlns:b="urn:uuid:c2f41010-65b3-11d1-a29f-00aa00c14882/" b:dt="dateTime.rfc1123">' + stat.mtime.toUTCString() + '</d:getlastmodified>' +
+    (isDir ? '<d:resourcetype><d:collection/></d:resourcetype>'
+           : '<d:getcontentlength>' + stat.size + '</d:getcontentlength><d:resourcetype></d:resourcetype><d:getcontenttype>' +
+             (href.endsWith('.js') ? 'application/javascript; charset=utf-8' : 'application/octet-stream') + '</d:getcontenttype>') +
+    '</d:prop><d:status>HTTP/1.1 200 Ok</d:status></d:propstat></d:response>';
+  const dir = path.join(REPO, rel), names = fs.readdirSync(dir).sort();
+  let xml = '<?xml version="1.0" encoding="utf-8"?><d:multistatus xmlns:d="DAV:" xmlns:a="http://ajax.org/2005/aml">' + entry('/' + rel + '/', fs.statSync(dir), true);
+  for (const n of names) {
+    const st = fs.statSync(path.join(dir, n));
+    if (st.isDirectory()) throw new Error('propfind: ' + rel + '/' + n + ' is a folder; the listing shape for folders in a listing is not implemented');
+    xml += entry('/' + rel + '/' + encodeURIComponent(n).replace(/%2F/g, '/'), st, false);
+  }
+  return xml + '</d:multistatus>';
+};
 
 (async () => {
   // 1. static boot files (list produced from probes/boot-inventory.js)
@@ -97,7 +116,6 @@ const copyDir = (rel) => { if (NOT_SHIPPED.includes(rel)) return; for (const e o
   for (const d of ONDEMAND_LIBS) copyDir(d);
   for (const f of ONDEMAND_FILES) copy(f);
   copy('core/media/lively.ico');
-  copy('users/unknown_user/config.js');
   // the identity vault page (vault.html below) runs this file and libsodium, neither of which a plain boot loads
   copy('core/lively/identity/IdentityVaultFrame.js');
   copy('core/lib/libsodium/sodium.js');
@@ -112,6 +130,9 @@ lively.Config.set('identityVaultTransport', 'parent');
 // The module load check (bootstrap.js loadMain, after this many ms) walks every property of window with a for-in, and in a
 // sandboxed page reading window.caches throws SecurityError. It is a diagnostic only; "falsy" disables it.
 lively.Config.set('moduleLoadTestTimeout', false);
+// The per-user config module (users/<name>/config.js) is a server-era hook; the package has no users/ folder, so do not
+// request one.
+lively.Config.set('loadUserConfig', false);
 `);
   // files the shipped stylesheets point at with url(...) (fonts, mostly); they load lazily, after boot, so the boot
   // inventory does not list them
@@ -130,16 +151,12 @@ lively.Config.set('moduleLoadTestTimeout', false);
   const listed = ['core/lively/ide/codeeditor/modes', 'core/lively/ide/snippets'];
   for (const d of listed) copyDir(d);
 
-  // 2. things only the server has: the generated bundle and the directory listings
-  const hash = (await (await fetch(SERVER + '/generated/combinedModulesHash.txt')).text()).trim();
+  // 2. what the kernel's server would generate: the boot bundle (made by the kernel's own code, see kernel-bundle.js) and
+  //    the directory listings (a PROPFIND answer for a folder with no subfolders, same shape the server gives)
+  const { hash, code } = await buildBundle(REPO, path.join(ROOT, '.cache'));
   put('generated/combinedModulesHash.txt', hash);
-  const bundle = Buffer.from(await (await fetch(SERVER + '/generated/' + hash + '/combinedModules.js')).arrayBuffer());
-  put('generated/' + hash + '/combinedModules.js', bundle);
-  for (const d of listed) {
-    const r = await fetch(SERVER + '/' + d + '/', { method: 'PROPFIND', headers: { Depth: '1' } });
-    if (r.status !== 207) throw new Error('PROPFIND ' + d + ' -> ' + r.status);
-    put('webdav-index/' + (d + '/').replace(/\//g, '_') + '.xml', Buffer.from(await r.arrayBuffer()));
-  }
+  put('generated/' + hash + '/combinedModules.js', code);
+  for (const d of listed) put('webdav-index/' + (d + '/').replace(/\//g, '_') + '.xml', propfind(d));
   put('stub/empty.txt', '');
   put('stub/login.json', JSON.stringify({ username: 'unknown user', email: null, group: null, lastLogin: null }, null, 2));
 

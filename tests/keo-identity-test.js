@@ -120,7 +120,7 @@ async function waitForWorld(page) {
     });
     check('create: a second create while one is running is refused', both.filter((x) => x === 'ok').length === 1 && both.some((x) => /already being created/.test(x)), both);
 
-    // ---- the real dialog, in the keo app: local form, then create
+    // ---- the real dialog, in keo: local form, then create
     await frame.evaluate(() => lively.LocalStorage.set(lively.identity.PasskeyPrimingDialog ? lively.identity.PasskeyPrimingDialog.SKIP_FLAG_KEY : 'identity-skip-passkey-priming', true));
     const dlg = await frame.evaluate(() => new Promise((res) => {
       lively.require('lively.identity.RegisterDialog').toRun(() => {
@@ -131,7 +131,7 @@ async function waitForWorld(page) {
         setTimeout(() => res({ local: d._isLocal, hasLabel: !!d.get('labelInput'), hasHandle: !!d.get('handleInput'), btn: d.get('registerBtn') && d.get('registerBtn').getLabel && d.get('registerBtn').getLabel(), title: d.getTitle && d.getTitle() }), 500);
       });
     }));
-    check('dialog: inside the keo app it shows the local form (a label, no handle)', dlg.local === true && dlg.hasLabel === true && dlg.hasHandle === false, dlg);
+    check('dialog: inside keo it shows the local form (a label, no handle)', dlg.local === true && dlg.hasLabel === true && dlg.hasHandle === false, dlg);
     await page.screenshot({ path: path.join(WORK, 'identity-dialog-form.png') });
     await frame.evaluate(() => { window.__dlg.get('labelInput').setTextString('Dialog made'); window.__dlg.register(); });
     let status = '';
