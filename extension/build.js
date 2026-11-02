@@ -101,7 +101,9 @@ const propfind = (rel) => {
 (async () => {
   // 1. static boot files (list produced from probes/boot-inventory.js)
   const list = fs.readFileSync(path.join(__dirname, 'boot-files.txt'), 'utf8').split(/\r?\n/).filter((l) => l && l[0] !== '#');
-  for (const rel of list) copy(rel);
+  // localconfig.js is written below from this build's own settings: the kernel's copy is untracked and differs per machine
+  // (a fresh checkout does not have it), so a package that read it could not be rebuilt from a commit.
+  for (const rel of list) if (rel !== 'core/lively/localconfig.js') copy(rel);
   // On-demand features: the module loader fetches a module by URL when a feature is first used, so the package carries
   // every module file (a missing one fails at first use, not at boot), and the libraries and workers those features load.
   // The boot list above stays the record of what a plain boot needs; the later copies (localconfig.js below) win.
@@ -128,10 +130,9 @@ const propfind = (rel) => {
   // the identity vault page (vault.html below) runs this file and libsodium, neither of which a plain boot loads
   copy('core/lively/identity/IdentityVaultFrame.js');
   copy('core/lib/libsodium/sodium.js');
-  // localconfig.js is loaded at boot: keep the repo's settings and add the ones that make the identity code use the
-  // extension as its origin: the passkey rpId, and the shell as the vault host (see core/lively/config.json)
-  put('core/lively/localconfig.js', fs.readFileSync(path.join(REPO, 'core/lively/localconfig.js'), 'utf8') + `
-// ---- added by the keo extension build ----
+  // localconfig.js is loaded at boot. Everything else takes the kernel's config.json defaults; this sets what makes the
+  // identity code use the extension as its origin: the passkey rpId, and the shell as the vault host (see config.json)
+  put('core/lively/localconfig.js', `/* Written by the keo extension build; not the kernel's localconfig.js. */
 lively.Config.set('identityRpId', ${JSON.stringify(id)});
 lively.Config.set('identityOrigin', ${JSON.stringify(EXT_ORIGIN)});
 lively.Config.set('identityVaultOrigin', ${JSON.stringify(EXT_ORIGIN)});
