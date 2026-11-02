@@ -9,8 +9,8 @@ const path = require('path');
 const { Writable } = require('stream');
 
 // The kernel writes its transpile cache and combined.js under the root it is given. Give it a root of our own whose
-// core/ and node_modules/ are links to the kernel's, so building the package never writes into a checkout that a dev server
-// is serving from.
+// core/ and node_modules/ are links to the kernel's, so refreshing the snapshot never writes into a checkout that a dev server
+// is serving from. Only refresh-kernel.js uses this: a package build reads the bundle from kernel/ and needs none of it.
 function prepareRoot(kernel, cacheDir) {
   const root = path.join(cacheDir, 'kernel-root');
   fs.mkdirSync(root, { recursive: true });

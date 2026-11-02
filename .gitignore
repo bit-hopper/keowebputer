@@ -9,5 +9,5 @@ research/
 !README.md
 !THIRD-PARTY-NOTICES.md
 
-# build cache (transpiled kernel files, linked kernel root)
+# cache of a snapshot refresh (transpiled kernel files, linked kernel root); a package build does not write it
 .cache/

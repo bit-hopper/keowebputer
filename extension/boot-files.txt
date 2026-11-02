@@ -1,4 +1,6 @@
 # Static files requested by a plain boot of blank.html (probes/boot-inventory.js, 2026-11-01), repo-relative.
+# Read only by refresh-kernel.js, which copies these from the kernel into kernel/. core/lively/localconfig.js is listed because a
+# plain boot requests it, but the refresh skips it: build.js writes the package's own.
 core/lib/Color.js
 core/lib/ace/ace.ext.custom-text-attributes.js
 core/lib/ace/ace.ext.keys.js
