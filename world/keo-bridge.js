@@ -174,6 +174,7 @@
     try { Object.defineProperty(Document.prototype, 'cookie', { configurable: true, get: function () { return ''; }, set: function () {} }); } catch (e) {}
     try { Object.defineProperty(navigator, 'credentials', { configurable: true, get: function () { return credentialsFacade; } }); } catch (e) {}
     patchPublicKeyCredential();
+    if (window.__keoSetOverlay) window.__keoSetOverlay(init.overlay);   // before keo-boot loads the bootstrap
     window.keo.init = init;
     return init;
   });

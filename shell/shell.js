@@ -42,7 +42,11 @@
 
   var OPS = {
     init: function () {
-      return window.keoStore.lsAll().then(function (ls) { return { localStorage: ls, extensionId: location.hostname, origin: EXT_ORIGIN }; });
+      // The overlay is read-only for the world: this is the only way it gets one, and no op writes it. If it cannot be read the
+      // world starts from the package alone.
+      return Promise.all([window.keoStore.lsAll(), window.keoOverlay.all().catch(function () { return {}; })]).then(function (r) {
+        return { localStorage: r[0], overlay: r[1], extensionId: location.hostname, origin: EXT_ORIGIN };
+      });
     },
     'ls.apply': function (a) { return window.keoStore.lsApply(a); },
     'idb.list': function () { return window.keoStore.idbList(); },

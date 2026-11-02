@@ -90,6 +90,57 @@
   };
   window.Worker.prototype = RealWorker.prototype;
 
+  // ---- 1c. overlay: files that replace the package's own (updates) ----
+  // The shell sends them in the bridge handshake ({ package path: text }, see shell/keo-overlay.js) and the bridge hands them
+  // to __keoSetOverlay once, before the bootstrap is added. The kernel loads code three ways and all three are covered:
+  // a <script src> tag (the tag is given the text inline instead: the sandbox policy allows inline script but not blob: script
+  // URLs), XHR, and fetch (getViaXHR uses it). A worker script is read with a synchronous XHR above, so it is covered too.
+  // Not covered: anything the browser fetches by itself (<link> stylesheets, images, fonts, css url(...)). Text files only.
+  var OVERLAY = {}, overlaySet = false;
+  window.__keoSetOverlay = function (files) {
+    if (overlaySet) return;      // once: what the shell sent at start is what this world runs
+    overlaySet = true;
+    if (files && typeof files === 'object') Object.keys(files).forEach(function (k) { if (typeof files[k] === 'string') OVERLAY[k] = files[k]; });
+  };
+  function overlayKey(url) {
+    var u;
+    try { u = new URL(String(url), location.href); } catch (e) { return null; }
+    if (u.href.indexOf(PKG) !== 0) return null;
+    var p = decodeURIComponent(u.pathname.slice(new URL(PKG).pathname.length));     // query and hash (cache busters) are dropped
+    return Object.prototype.hasOwnProperty.call(OVERLAY, p) ? p : null;
+  }
+  function overlayType(p) {
+    return /\.js$/.test(p) ? 'application/javascript; charset=utf-8' : /\.json$/.test(p) ? 'application/json' :
+      /\.css$/.test(p) ? 'text/css' : /\.xml$/.test(p) ? 'text/xml' : 'text/plain; charset=utf-8';
+  }
+  // A script element whose src is an overlaid path gets the text instead, and the load event the browser would have fired.
+  // The kernel sets src after it has appended the element, so the text is set on a connected, empty script, which runs it.
+  function overlayScript(script, url) {
+    var key = overlayKey(url);
+    if (key === null) return false;
+    script.textContent = OVERLAY[key] + '\n//# sourceURL=' + PKG + key + '\n';
+    setTimeout(function () { script.dispatchEvent(new Event('load')); }, 0);
+    return true;
+  }
+  var origSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    if (this instanceof HTMLScriptElement && String(name).toLowerCase() === 'src' && overlayScript(this, value)) return;
+    return origSetAttribute.apply(this, arguments);
+  };
+  var srcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+  Object.defineProperty(HTMLScriptElement.prototype, 'src', {
+    configurable: true, enumerable: srcDesc.enumerable, get: srcDesc.get,
+    set: function (v) { if (!overlayScript(this, v)) srcDesc.set.call(this, v); }
+  });
+  var realFetch = window.fetch;
+  window.fetch = function (input, init) {
+    var isReq = typeof Request !== 'undefined' && input instanceof Request;
+    var method = String((init && init.method) || (isReq && input.method) || 'GET').toUpperCase();
+    var key = method === 'GET' ? overlayKey(isReq ? input.url : input) : null;
+    if (key !== null) return Promise.resolve(new Response(OVERLAY[key], { status: 200, headers: { 'content-type': overlayType(key) } }));
+    return realFetch.apply(this, arguments);
+  };
+
   // ---- 2. server-only requests -> static files in the package, or a canned reply ----
   // - A WebDAV directory listing (PROPFIND) is answered from the XML the dev server returned when the package was built
   //   (webdav-index/<path with / replaced by _>.xml).
@@ -103,6 +154,10 @@
   function rewrite(method, url) {
     var path;
     try { path = new URL(url, location.href).pathname; } catch (e) { return null; }
+    if (method === 'GET') {
+      var ok = overlayKey(url);
+      if (ok !== null) return { fake: { status: 200, statusText: 'OK', text: OVERLAY[ok] } };
+    }
     for (var i = 0; i < FAKE.length; i++) if (FAKE[i].re.test(path)) return { fake: FAKE[i] };
     if (method === 'PROPFIND') {
       return { method: 'GET', url: 'webdav-index/' + path.replace(/^\/+/, '').replace(/\//g, '_') + '.xml' };

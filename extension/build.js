@@ -177,7 +177,7 @@ lively.Config.set('loadUserConfig', false);
 
   // 4. shell page, the vault page and the manifest
   put('start.html', fs.readFileSync(path.join(SHELL, 'start.html')));
-  for (const f of ['shell.js', 'shell-store.js', 'keo-did.js', 'keo-identity.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
+  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-identity.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
   put('start.js', fs.readFileSync(path.join(__dirname, 'panel.js')));   // the account panel in the shell bar; the package calls it start.js
   // The vault page as the server builds it (IdentityServer.js buildIdentityVaultPage), with the shell's origin as the one
   // app origin it will answer. Relative script paths: this page lives at the package root.
