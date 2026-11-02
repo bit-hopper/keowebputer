@@ -12,7 +12,8 @@ keo is an unpacked browser extension with two realms:
 |---|---|---|
 | `shell/` | the extension's own page (trusted) | Holds the passkey ceremonies, the account secret, the keys and the persistent storage. Answers requests from the world over `postMessage` and only ever returns plain data. |
 | `world/` | a sandboxed iframe (untrusted) | Runs the LivelyKernel runtime. A bridge gives it `localStorage`, an IndexedDB stand-in, `navigator.credentials` and an identity API that are all backed by the shell. |
-| `extension/` | build time | `build.js` assembles the extension package. Also holds the boot-file list and the **pinned public key** (see below). |
+| `extension/` | build time | `build.js` assembles the extension package from the files below. Also holds `refresh-kernel.js`, the boot-file list and the **pinned public key** (see below). |
+| `kernel/` | | Snapshot of the runtime's shipped files (see Building). Not edited by hand, except `THIRD-PARTY-NOTICES.md`. |
 | `tests/` | | Tests of the shell, the bridge and the built package. |
 
 ### Local identities
@@ -25,16 +26,17 @@ An identity is made on the device with a passkey and no server. Its DID is `did:
 
 ## Building
 
-The package is made from a LivelyKernel checkout (the runtime) that has `core/` and `blank.html` and has had its own `npm install`. No server is needed: the generated module bundle is made by the kernel's own code (`extension/kernel-bundle.js`) and the two directory listings are written from the folders.
+The runtime's files are in this repository: `kernel/` is a verbatim snapshot of the files the package ships from the LivelyKernel runtime (its modules, the libraries and workers it loads on demand, the boot bundle and the world's document). `kernel/SNAPSHOT.json` records the kernel commit it was taken from. The runtime's own repository is a separate project and is not shipped; this repository is what is built and released. A build needs only Node, no kernel checkout, no server and no packages:
 
 ```
-npm install
-node extension/build.js dist --kernel <path to the kernel checkout>
+node extension/build.js dist
 ```
 
-`--kernel` can also be set with `KEO_KERNEL`; with neither, a folder named `LivelyKernel` next to this repository is used if it looks like a kernel. The build writes `keo-build.json` into the package with the kernel commit it came from and the paths that differed from that commit. Load `dist/` with *Load unpacked* in `chrome://extensions` (developer mode), click the toolbar icon, and the world opens.
+The build writes `keo-build.json` into the package with the kernel commit the snapshot came from. Load `dist/` with *Load unpacked* in `chrome://extensions` (developer mode), click the toolbar icon, and the world opens.
 
-The built package contains the kernel's code, so it carries the kernel's licence notice (`LICENSE-lively-kernel`). The libraries the kernel vendors have their own licences; they have not been audited here.
+To move the snapshot to a newer kernel commit, run `node extension/refresh-kernel.js --kernel <path to a clean kernel checkout>` (a checkout made with `git clone -c core.autocrlf=false`, with the kernel's own `npm install` done). It rewrites `kernel/` completely, including the boot bundle, which only the kernel's own code can generate; so a change to the runtime's code is made in the kernel and arrives here by a refresh. Files under `kernel/` are stored byte for byte (`.gitattributes`).
+
+The package contains the kernel's code, so it carries the kernel's licence notice (`LICENSE-lively-kernel`) and `THIRD-PARTY-NOTICES.md` (kept in `kernel/`, by hand). The libraries the kernel vendors have their own licences; they have not been audited, and that file says which have a notice and which do not.
 
 ## Releases
 

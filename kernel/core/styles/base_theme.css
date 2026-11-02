@@ -1,0 +1,433 @@
+.World {
+	font-family: 'Atkinson Hyperlegible', Helvetica, Arial, sans-serif;
+}
+
+.Box {
+	border: 1px solid #aaa;
+}
+
+.Selection {
+	background: rgba(222,222,222, 0.6);
+	border: 1px solid #aaa;
+}
+
+.Box.selection-indicator {
+	background: none;
+	outline: 4px solid #E73F22;
+}
+
+.Text.edit-field {
+	background: white;
+	box-shadow: inset 1px 1px 1px #666;
+	border: 1px solid #aaa;
+	border-radius: 2px;
+}
+
+.Button {
+	font-size: 9pt;
+	color: #333;
+	text-align: center;
+	background: #EEE;
+	border-radius: 2px;
+	cursor: pointer;
+	border: 1px solid #888;
+}
+
+.Button.pressed {
+	box-shadow: inset 1px 1px 1px rgba(0, 0, 0, 0.5);
+}
+
+.Button.toggled {
+	color: black;
+}
+
+.Button.disabled {
+	color: gray;
+}
+
+.Button.disabled .Text span{
+	opacity: .3;
+}
+
+/* for centered button labels let the textNode use table layouting */
+
+.Text.vertically-centered > div {
+	display: table !important;
+}
+
+.Text.vertically-centered span {
+	display: table-cell;
+	vertical-align: middle;
+	text-align: center;
+}
+
+.Button .Text > div {
+	display: table !important;
+}
+
+.Button .Text span {
+	display: table-cell;
+	vertical-align: middle;
+	text-align: center;
+}
+
+/* Modal dialogs (lively.morphic.AbstractDialog and subclasses in Widgets.js):
+   pink-accent frame + pill buttons, matching the identity dialogs
+   (PasskeyPrimingDialog et al.). Classes are added from JS; !important is
+   needed on the button label color because Button's built-in label style
+   bakes an inline green textColor into the leaf span. */
+.lively-dialog {
+	box-shadow: 0 6px 24px rgba(0,0,0,0.28);
+}
+
+/* text/password/code input inside a dialog -- same field look as the
+   identity dialogs (white, 1px light-gray border, small radius) */
+.lively-dialog-input {
+	background: #fff !important;
+	border: 1px solid rgb(203,203,203) !important;
+	border-radius: 4px !important;
+	box-sizing: border-box;
+}
+
+input.lively-dialog-input {
+	padding: 0 8px;
+	font: 12px Arial, sans-serif;
+}
+
+.lively-dialog-input:focus,
+.lively-dialog-input:focus-within {
+	border-color: rgb(255,16,144) !important;
+	box-shadow: 0 0 0 2px rgba(255,16,144,0.15);
+	outline: none;
+}
+
+.Button.lively-dialog-btn {
+	background: #fff !important;
+	border: 1px solid rgb(214,214,214) !important;
+	border-radius: 5px !important;
+	box-shadow: none;
+}
+
+.Button.lively-dialog-btn:hover {
+	background: rgb(246,246,246) !important;
+}
+
+.Button.lively-dialog-btn.pressed {
+	box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+}
+
+.Button.lively-dialog-btn .Text,
+.Button.lively-dialog-btn .Text span {
+	color: rgb(90,90,90) !important;
+	font-family: Arial, sans-serif !important;
+}
+
+.Button.lively-dialog-btn.lively-dialog-btn-primary {
+	background: rgb(255,240,247) !important;
+	border-color: rgb(240,190,210) !important;
+}
+
+.Button.lively-dialog-btn.lively-dialog-btn-primary:hover {
+	background: rgb(255,228,240) !important;
+}
+
+.Button.lively-dialog-btn.lively-dialog-btn-primary .Text,
+.Button.lively-dialog-btn.lively-dialog-btn-primary .Text span {
+	color: rgb(200,0,110) !important;
+}
+
+.Menu {
+	background-color: #FFF !important;
+	box-shadow: 0px 2px 6px #666;
+}
+
+.PartsBinItem {
+	box-shadow: 1px 1px 5px 1px #DDD;
+}
+
+.Window {
+	background-color: rgb(244, 244, 244);
+	box-shadow: 0px 2px 6px #666;
+	border-radius: 3px;
+}
+
+.Window.highlighted {
+	background-color: rgb(222, 222, 222);
+	box-shadow: 0px 2px 6px #333;
+	border: 1px solid white;
+}
+
+.Window .TitleBar, .Window .reframe-handle {
+	border: none;
+	background: none;
+}
+
+.reframe-handle.corner {
+	cursor: se-resize;
+}
+
+.reframe-handle.right {
+	cursor: e-resize;
+}
+
+.reframe-handle.bottom {
+	cursor: s-resize;
+}
+
+.Window .Text.window-title {
+	padding-top: 2px !important;
+	font-size: 10pt;
+	text-align: left;
+	margin-left: 2px;
+	color: #555;
+}
+.Window.highlighted .Text.window-title {
+	font-weight: bold;
+	color: #333;
+}
+
+.Button.WindowControl {
+	border: none;
+	border-radius: 50%;
+	/* Near-opaque neutral backdrop, not a faint tint of whatever's behind
+	   it — a window's own fill can be anything from near-white to a
+	   saturated accent color, and a low-opacity tint reads fine against
+	   light chrome but leaves the (fixed dark) icon glyph with weak
+	   contrast against a colored one. A consistent light backdrop keeps
+	   icon contrast constant regardless of the window's own color. */
+	background: rgba(255,255,255,0.55);
+	font-weight: normal;
+}
+
+.Button.WindowControl span {
+	padding-top: 1px !important;
+}
+
+.Button.WindowControl:hover {
+	background: rgba(255,255,255,0.85);
+}
+
+.Button.WindowControl .Text {
+	color: rgba(0,0,0,0.7);
+}
+
+/* close/collapse/menu render as Material Symbols Rounded glyphs (see
+   WindowControl#styleAsIcon in Widgets.js) — scoped to just these three
+   classes, not all .Button.WindowControl, so an unrelated custom
+   WindowControl button (e.g. BrowserFramework.js's "N" nav button) keeps
+   its own literal text/font instead of falling back to a missing glyph. */
+.Button.WindowControl.close .Text,
+.Button.WindowControl.window-collapse-btn .Text,
+.Button.WindowControl.window-menu-btn .Text {
+	font-family: "Material Symbols Rounded";
+	font-size: 13px;
+}
+
+.Button.WindowControl.close:hover {
+	background: rgba(224,66,66,0.9);
+}
+.Button.WindowControl.close:hover .Text {
+	color: #fff;
+}
+
+.Button.WindowControl.window-collapse-btn:hover {
+	background: rgba(76,175,80,0.9);
+}
+.Window.is-collapsed .Button.WindowControl.window-collapse-btn:hover {
+	background: rgba(255,193,7,0.9);
+}
+
+/* Inventory's sort-options button (lively.identity.Inventory) is icon-only
+   (a "filter_list" Material Symbols glyph replacing literal "More ▾" text)
+   -- same CSS-cascade sidestep as .Button.WindowControl above for the
+   JS-model-layer fontFamily-DOM-sync bug, scoped to its own class so the
+   plain-text Popular/Recent sort pills next to it are unaffected. No
+   !important needed here (confirmed live): this label's own leaf <span>
+   never gets an inline font-family/font-size baked in the way its
+   textColor does, so the class selector cleanly wins. */
+.Button.InventorySortMenuBtn .Text {
+	font-family: "Material Symbols Rounded";
+	font-size: 16px;
+}
+
+/* Lists */
+.MorphList .selected {
+    outline: 3px orange solid;
+}
+
+.List .list-item {
+	font-family: Helvetica,Verdana,sans-serif;
+	font-size: 10pt;
+	color: black;
+}
+
+.List .list-item.selected {
+	background: rgb(43, 88, 255) !important;
+	color: white !important;
+}
+
+.HorizontalDivider {
+	cursor: ns-resize;
+}
+
+.VerticalDivider {
+	cursor: ew-resize;
+}
+
+.Slider {
+	border-radius: 6px;
+	border: 1px solid #BBB;
+	background: #EEE;
+	box-shadow: inset 1px 1px 1px #666;
+}
+
+.SliderKnob {
+	box-shadow: inset 1px 1px 1px rgba(255, 255, 255, 0.8);
+	cursor: pointer;
+	border: 1px solid #888;
+	border-radius: 5px;
+	background-image: -webkit-linear-gradient(top, #EEE, #CCC);
+	background-image: -moz-linear-gradient(top, #EEE, #CCC);
+	background: linear-gradient(to bottom, #EEE, #CCC);
+}
+
+.AccordionHeader {
+	background-image: -webkit-linear-gradient(top, #eee, #ccc);
+	background-image: -moz-linear-gradient(top, #eee, #ccc);
+	background-image: linear-gradient(to top, #eee, #ccc);
+	border-radius: 3px;
+	box-shadow: inset 1px 1px 1px rgba(255, 255, 255, 0.8);
+	cursor: pointer;
+	border: 1px solid #888;
+}
+
+.AccordionHeader.active {
+	background-image: -webkit-linear-gradient(top, #fff, #eee);
+	background-image: -moz-linear-gradient(top, #fff, #eee);
+	background-image: linear-gradient(to top, #fff, #eee);
+}
+
+/* -=-=-=-=-=-=-=-=-=-=-=
+   messaging in the world
+   -=-=-=-=-=-=-=-=-=-=-= */
+
+.messageMorph {
+	background: rgba(0,0,0,0.6);
+	border-radius: 8px;
+	border: none;
+}
+
+.messageMorph .closeButton {
+	visibility: hidden;
+	line-height: 3.6;
+	margin-left: 0px;
+	font-size: 12pt;
+	text-shadow: 0px 0px 4px rgba(255, 255, 255, 0.5);
+	color: white;
+}
+
+.messageMorph:hover .closeButton, .messageMorph.maximized .closeButton {
+	visibility: visible;
+	cursor: pointer;
+}
+
+.messageMorph .messageText {
+	font-size: 10pt;
+	font-family: Helvetica Neue,Helvetica,Arial;
+	color: white;
+	white-space: normal;
+	word-break: break-all !important;
+	line-height: 1.2 !important;
+	text-shadow: 0px 1px 2px rgba(255, 255, 255, 0.7);
+}
+
+.messageMorph:hover .messageText, .messageMorph.maximized .messageText {
+	margin-left: 0px;
+}
+
+.messageMorph.success {
+	background: rgba(0,180,0,0.6);
+}
+
+.messageMorph.success .messageText {
+	text-shadow: 0px 1px 2px rgba(220, 255, 220, 0.7);
+}
+
+.messageMorph.failure {
+	background: rgb(180,0,0);
+}
+
+.messageMorph.failure .messageText {
+	text-shadow: 0px 1px 2px rgba(255, 220, 220, 0.7);
+}
+
+/* -=-=-=-=-=-=-=-=-=-
+   codeeditor related
+   -=-=-=-=-=-=-=-=-=- */
+
+#ace-editor {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	right: 0;
+}
+
+.ace-global-var {
+	position: absolute;
+	border-bottom: 2px rgb(255,120, 0) dotted;
+}
+
+.ace_dark .ace-global-var {
+	border-bottom: 2px rgba(255,150, 0, 0.6) dotted;
+}
+
+.ace-syntax-error {
+	position: absolute;
+	border-radius: 3px;
+	background: rgba(255,0,0,0.7);
+}
+
+.ace-marker-warning {
+	position: absolute;
+	border-radius: 3px;
+	background: rgba(204,204,0,0.7);
+}
+
+.ace_line .ace_link {
+	pointer-events: auto;
+	cursor: pointer;
+}
+
+/*-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-*/
+/*for action texts*/
+.ace_link:hover, .ace_action:hover {
+	text-decoration: underline;
+/*font-weight: bold;*/
+}
+
+.ace_line .ace_action {
+	pointer-events: auto;
+	cursor: pointer;
+}
+
+.text-overlay {
+    z-index: 999;
+    font-family: Monaco, monospace;
+    font-size: inherit;
+    position: absolute;
+    color: white;
+    padding: 1px;
+    border-radius: 4px;
+	border: 1px #666 solid;
+    cursor: pointer;
+    white-space: pre;
+	pointer-events: auto;
+	background: #666;
+	box-shadow: none;
+	white-space: pre;
+}
+
+.text-overlay.hidden {
+	display: none;
+}

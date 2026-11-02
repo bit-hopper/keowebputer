@@ -1,0 +1,564 @@
+{
+  "bootstrap": [
+    ["optimizedLoading", true, "Combine commonly used modules into one file and load that while bootstrapping instead of individual modules."],
+    ["loadUserConfig", true, "For sth like jens/config.js, used in lively.bootstrap."],
+    ["libsFile", "core/lib/lively-libs-debug.js", "Library code."],
+
+    ["bootstrapFiles", [
+	    "node_modules/lively.lang/dist/lively.lang.dev.js",
+	    "node_modules/lively.ast/dist/lively.ast_no-deps.js",
+      "core/lively/Migration.js",
+      "core/lively/JSON.js",
+      "core/lively/lang/LocalStorage.js",
+      "core/lively/Base.js",
+      "core/lively/ModuleSystem.js"
+    ], "Loaded to initialize the base Lively system."],
+
+    ["bootstrapModules", [
+      "lively.bindings",
+      "lively.Main"
+      ], "Lively modules to start a world (after the bootstrapFiles are loaded)."]
+  ],
+
+  "cop": [
+    ["copDynamicInlining", false, "Dynamically compile layered methods for improving their execution performance."],
+    ["ignoredepricatedProceed", true]
+  ],
+
+  "cookie": [
+    {
+      "name": "cookie",
+      "type": "Object",
+      "doc": "Get the parsed cookie data",
+      "get": {
+          "type": "function",
+          "code": "function() { return typeof document !== 'undefined' && document.cookie ? document.cookie.split(';').map(function(ea) { return ea.split('='); }).reduce(function(cookie, kv) { cookie[kv[0].trim()] = decodeURIComponent(kv[1]); return cookie; }, {}) : {}; }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    }
+  ],
+
+  "ssl": [
+    {
+      "name": "ssl-subject",
+      "type": "Object|null",
+      "doc": "parsed subject from SSL certificate",
+      "get": {
+        "type": "function",
+        "code": "function() { var subj = Config.get('cookie')[\"ssl-certificate-subject\"];\nreturn subj ? Config.get('cookie')[\"ssl-certificate-subject\"]\n.split('/').compact()\n.invoke('split', '=').reduce(function(subj, kv) {\nsubj[kv[0]] = kv[1]; return subj;\n}, {}) : null; }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    },
+    {
+      "name": "ssl-auth",
+      "type": "String|null",
+      "doc": "User defined by SSL client certificate",
+      "get": {
+        "type": "function",
+        "code": "function() { var subj = Config.get('ssl-subject'); \n return subj ? {user: subj.CN, email: subj.emailAddress} : null; }"
+      },
+      "set": {"type": "function", "code": "function() {} "}
+    }
+  ],
+
+  "identity": [
+    ["identityRpId", "dev.tinylil.world", "WebAuthn relying party ID — must exactly match the hostname served over HTTPS."],
+    ["identityOrigin", "https://dev.tinylil.world", "WebAuthn expected origin — the full HTTPS origin where the Lively world is served."],
+    ["identityVaultOrigin", null, "Origin of the identity vault iframe (Encryption.md §19.5), e.g. https://vault.dev.tinylil.world. Its host must equal identityRpId or be a subdomain of it, and the server must be reachable on that host (the vault app origin allow-list is derived from the Host: 'vault.' + the app host; IDENTITY_VAULT_APP_ORIGINS adds more). Unset = off: the KEK and X25519 key stay in this page's memory as before."],
+    ["identityVaultGesture", false, "If true the vault ceremony always runs from a click inside the vault frame instead of trying a plain postMessage first (only needed if a browser refuses cross-origin ceremonies without a user gesture in the frame)."],
+    ["identityVaultTransport", null, "How this page reaches the identity vault. Unset (default): it creates the vault iframe itself from identityVaultOrigin. 'parent': this page is itself embedded in the page that hosts the vault, so the vault protocol is posted to window.parent (whose origin must be identityVaultOrigin) and that page forwards it to the vault; a request to show the vault's unlock button is sent to the parent as {keo:1, op:'vault.frame', args:{shown}}. Used when the world runs sandboxed inside the extension shell."]
+  ],
+
+  "wallet": [
+    ["identityWalletOrigin", null, "Origin the Wallet Vault iframe is served from (e.g. https://vault.tinylil.world). Its host must equal identityRpId or be a subdomain of it (the browser checks the rpId against the iframe's own origin, so a sibling like vault.tinylil.world fails when identityRpId is dev.tinylil.world; use vault.dev.tinylil.world, or change identityRpId to the shared parent domain, which orphans existing credentials; WalletSpec.md §3.2). Unset = reduced-isolation same-origin dev fallback — never leave unset in production."],
+    ["ethereumRpcUrl", null, "Ethereum mainnet JSON-RPC endpoint. REQUIRED for balance/send — no default shipped (WalletSpec.md §12, §14 item 1). Set a real value in localconfig.js, not here."],
+    ["ethereumSepoliaRpcUrl", null, "Sepolia testnet JSON-RPC endpoint, for the plain-wallet (balance/send) network switcher only — deposit/withdraw/exit stay locked to Ethereum mainnet regardless of this setting, since the Privacy Pools contracts/ASP below have no known Sepolia deployment. No default shipped here; set a real value in localconfig.js."],
+    ["privacyPoolAspEndpoint", "https://api.0xbow.io", "Association Set Provider HTTP API base URL (WalletSpec.md §6.3, §12, §15 step 5). Real production host — live-verified from a browser at this app's own origin, including CORS preflight for the custom X-Pool-Scope header every call needs. No auth required. core/servers/ASPStubServer.js (/nodejs/ASPStubServer) remains available as an offline/no-network fallback — point this at it instead if working without internet access; that stub always reports an empty association set, never a real one."],
+    ["privacyPoolRelayerEndpoint", null, "Relayer HTTP API base URL, implementing WalletSpec.md §6.5's confirmed /relayer/quote, /relayer/request, /relayer/details contract. Set to the local RelayerStubServer.js (/nodejs/RelayerStubServer) for development; that stub errors on /relayer/request rather than broadcasting anything. Direct-submission withdrawal needs no relayer at all."],
+    ["privacyPoolEntrypointAddress", "0x6818809EefCe719E480a7526D76bD3e561526b46", "Privacy Pools Entrypoint proxy contract address on Ethereum mainnet (WalletSpec.md §12, §15 step 7). Live-verified via assetConfig()/scopeToPool() against ethereumRpcUrl. Note: an earlier draft of §12's own table had the same underlying hex digits with an invalid EIP-55 checksum (wrong letter-casing) — this value is the corrected checksum. The Entrypoint is UUPS-upgradeable and pools are added/removed by governance — re-verify against the live deployments manifest periodically rather than trusting this indefinitely."],
+    ["privacyPoolEthPoolAddress", "0xF241d57C6DebAe225c0F2e6eA1529373C9A9C9fB", "PrivacyPoolSimple (native ETH) contract address on Ethereum mainnet (WalletSpec.md §12). SCOPE() is queried at runtime from this address rather than hardcoding the scope value, per this doc's own preference for querying over hardcoding."]
+  ],
+
+  "auth": [
+    ["userAuthEnabled", false, "Is user authentication enabled?"],
+    ["cookieField", "lvUserData_2013-10-12", "Cookie used for user data"],
+    ["usersFile", null, "File containing the authentication information and access rules"],
+    ["usersDefaultWorld", "/users/%USERNAME%/start.html", "Users' default world placed in their workspace"],
+    ["authPaths", {
+      "login": "/login",
+      "register": "/register",
+      "logout": "/logout",
+      "currentUser": "/current-user",
+      "checkPassword": "/check-password",
+      "userExists": "/user-exists",
+      "listUsers": "/list-users"
+    }, "Routes for user management, e.g. login, logout, registration"]
+  ],
+
+  "user": [
+    {
+      "name": "UserName",
+      "type": "String",
+      "doc": "UserName identifies the current Lively user",
+      "get": {
+        "type": "function",
+        "code": "function() { var user = lively.LocalStorage.get('UserName');\nif (user && user !== 'undefined') return user;\nvar sslAuth = Config.get('ssl-auth');\nreturn (sslAuth && sslAuth.user) || user; }"
+      },
+      "set": {
+        "type": "function",
+        "code": "function(val) { return lively.LocalStorage.set('UserName', val ? val.replace(/ /g, '_') : val); }"
+      }
+    },
+    {
+      "name": "UserEmail",
+      "type": "String",
+      "doc": "Email of user",
+      "get": {
+        "type": "function",
+        "code": "function() { var val = lively.LocalStorage.get('UserEmail');\nif (val && val !== 'undefined') return val;\nvar sslAuth = Config.get('ssl-auth');return (sslAuth && sslAuth.email) || val; }"
+      },
+      "set": {
+        "type": "function",
+        "code": "function(val) { return lively.LocalStorage.set('UserEmail', val ? val.replace(/ /g, '_') : val); }"
+      }
+    }
+  ],
+
+  "lively.shell": [
+    {
+      "name":  "shellEnvVars",
+      "type":  "String",
+      "doc":  "Environment variables to be set whenever Lively runs a shell command on the OS the Lively server is running. Includes Config.shellUserEnvVars.",
+      "get":  {
+        "type":  "function",
+        "code":  "function()  { return lively.lang.obj.merge(lively.Config._shellEnvVars, lively.Config.get('shellUserEnvVars'));  }"
+      },
+      "set":  {
+        "type":  "function",
+        "code":  "function(val) { lively.Config._shellEnvVars = val || {};  }"
+      }
+    },
+    {
+      "name": "shellUserEnvVars",
+      "type": "String",
+      "doc":  "Custom environment variables that can be set by the user and will be remembered in localStorage.",
+      "get":  {
+        "type":  "function",
+        "code":  "function()  { var val = lively.LocalStorage.get('shellUserEnvVars');\nif (val && val !== 'undefined') try { return JSON.parse(val); } catch(e)  { console.warn(e); }\n return {}; }"
+      },
+      "set":  {
+        "type":  "function",
+        "code":  "function(val) { return lively.LocalStorage.set('shellUserEnvVars', val ? JSON.stringify(val) : '{}');  }"
+      }
+    }
+  ],
+
+  "lively.Network": [
+    {
+      "name": "location",
+      "type": "Object",
+      "doc": "The interpreted document.location or something similar for non-browser environments.",
+      "get": {
+          "type": "function",
+          "code": "function() { return LivelyLoader.location; }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    },
+
+    {
+      "name": "proxyURL",
+      "type": "String",
+      "doc": "URL that acts as a proxy for network operations, computed at system start.",
+      "get": {
+          "type": "function",
+          "code": "function() { return lively.Config.location.protocol + '//' + lively.Config.location.host + '/proxy'; }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    }
+  ],
+
+  "Lively2Lively": [
+    ["isPublicServer", false, "Is the lively server this world is started from considered public?"],
+    ["lively2livelyAutoStart", true, "Whether to automatically connect to a session tracker server and enable Lively-to-Lively connections."],
+    ["lively2livelyCentral", null, "Central server to connect to for inter-realm Lively-to-Lively connections. Nullify to deactivate."],
+    ["lively2livelyAllowRemoteEval", true, "Allow eval actions from other Lively worlds."],
+    ["lively2livelyEnableConnectionIndicator", true, "Show a morph that indicates whether lively2lively is running and which provides access to collab actions."],
+    ["lively2livelyInformAboutReceivedMessages", true, "Visually log when receiving a lively2lively message."],
+    ["lively2livelyTrackerHeartbeatInterval", 30000, "In milliseconds. Ensure staying connected to the tracker by sending regular heartbeats. Change to undefined to disable heartbeats."],
+    ["lively2livelyLogHeartbeatRoundtripTime", false, "Logging heartbeat."]
+  ],
+
+  "server.nodejs": [
+    {
+      "name": "nodeJSURL",
+      "type": "String",
+      "doc": "Base URL of Lively subservers. Computed at system start.",
+      "get": {
+          "type": "function",
+          "code": "function() { return Config.location.protocol + '//' + Config.location.host + '/nodejs'; }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    },
+    {
+      "name": "nodeJSWebSocketURL",
+      "type": "String",
+      "doc": "Optional url to be used for websocket connections. By default the normal nodeJSURL will be used but under certain circumstances it can be blocked for websocket traffic. In this case you can set this aleernate url, e.g. to re-route to a certain port.",
+      "get": {
+          "type": "function",
+          "code": "function() { return Config._nodeJSWebSocketURL; }"
+      },
+      "set": {
+        "type": "function",
+        "code": "function(val) { Config._nodeJSWebSocketURL = val; var sessionTracker = typeof lively !== 'undefined' && lively.lang && lively.lang.Path('net.SessionTracker').get(lively); if (sessionTracker) { sessionTracker.localSessionTrackerURL = new URL(val.replace(/\\$/, '') + '/SessionTracker/'); if (lively.Config.get('lively2livelyAutoStart')) sessionTracker.resetSession(); } return val; }"
+      }
+    }
+  ],
+
+  "lively.persistence": [
+    ["ignoreClassNotFound", true, "if a class is not found during deserializing a place holder object can be created instead of raising an error"],
+    ["ignoreLoadingErrors", true],
+    ["ignoreMissingModules", false],
+    ["keepSerializerIds", false],
+    ["createWorldPreview", true, "Whether to store an HTML document showing a static version of the serialized world."],
+    ["manuallyCreateWorld", false, "Loads up Lively and creates a complete new world from scratch instead of using a serialized one."],
+    ["removeDOMContentBeforeWorldLoad", true, "Whether to remove all the DOM child nodes of the DOM element that is used to display the World."],
+    ["garbageCollectAttributeConnections", true, "Will remove connections and connected objects when connection targets in the object graph can only be reached through the connection itself. Can be disabled per connection using the garbageCollect: false option."],
+    ["checkWriteAuthorizationOfUsers", false, "Saving worlds and parts will use the user's credentials to check if saving is allowed and stuff."],
+    {
+      "name": "userPermissions",
+      "type": "Object",
+      "doc": "Map of special user permissions used when checkWriteAuthorizationOfUsers is on.",
+      "get": {
+          "type": "function",
+          "code": "function() { return this._userPermissions || {}; }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    },
+    {
+      "name": "globalPermissions",
+      "type": "Object",
+      "doc": "Global resource permissions.",
+      "get": {
+          "type": "function",
+          "code": "function() { return lively.Config._globalPermissions || []; }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    }
+  ],
+
+  "lively.Storage": [
+    ["defaultIndexedDBStores", ["default", "Debugging"], "The default stores created once IndexedDB is opened."]
+  ],
+
+  "lively.bindings": [
+    ["selfConnect", false, "DEPRECATED! some widgets self connect to a private model on startup, but it doesn't seem necessary, turn on to override"],
+    ["debugConnect", false, "For triggering a breakpoint when an connect update throws an error"],
+    ["visualConnectEnabled", false, "Show data-flow arrows when doing a connect using the UI."]
+  ],
+
+  "lively.morphic": [
+    ["isNewMorphic", true, "Deprecated option, defaults to true. Used in 2011 when Lively2 was being developed."],
+    ["shiftDragForDup", false, "Allows easy object duplication using the Shift key."],
+    ["usePieMenus", false],
+
+    ["nullMoveAfterTicks", false, "For the engine/piano demo (and any other simulation interacting with unmoving mouse) it is necessary to generate a mouseMove event after each tick set this true in localconfig if you need this behavior"],
+
+    ["askBeforeQuit", true, "Confirm system shutdown from the user"],
+
+    ["useShadowMorphs", true],
+
+    ["loadSerializedSubworlds", false, "load serialized worlds instead of building them from Javascript"],
+
+    ["personalServerPort", 8081, "where the local web server runs"],
+
+    ["resizeScreenToWorldBounds", false],
+
+    ["changeLocationOnSaveWorldAs", false],
+    ["showWorldSave", true],
+
+    ["gridSpacing", 10, "determins the pixels to snap to alt-dragging the drag halo"],
+    ["maxStatusMessages", 3, "Number of statusmessages that should appear at one time on the screen."],
+    ["coloredHaloItems", false, "Halo Items can be made colorful for better recognition."]
+  ],
+
+  "lively.TestFramework": [
+    ["serverInvokedTest", false],
+    ["serverTestDebug", false]
+  ],
+
+  "lively.ModuleSystem": [
+    ["modulesBeforeWorldLoad", ["lively.morphic.HTML"], "evaluated before all changes"],
+    ["modulesOnWorldLoad", ["lively.ide", "lively.IPad", "lively.net.SessionTracker", "lively.net.Wiki"], "evaluated before world is setup"],
+    ["codeBase", null, "The URL or path to the core/ Lively modules. Dynamically determined in bootstrap."],
+    ["showModuleDefStack", true, "So modules know where they were required from."],
+    ["modulePaths", ["apps", "users", "node_modules"], "root URLs of module lookup"],
+    ["moduleLoadTestTimeout", 10000, "Timeout in ms after which to run a module load check. Make it falsy to disable the check."],
+    ["warnIfAppcacheError", true, "In case a world is loaded without being able to reach the application cache (probably because the server cannot be reached) show a warning on world load."],
+
+    ["disableScriptCaching", true],
+    ["defaultDisplayTheme", "lively"],
+
+    ["onWindowResizeUpdateWorldBounds", true],
+    ["disableNoConsoleWarning", true],
+
+    ["thatCapture", true, "Alt-click on morphs assigns them to the global variable 'that'."],
+    ["confirmNavigation", false, "don't show confirmation dialog when navigating a link"],
+    ["useAltAsCommand", false, "User Platform Keys (Ctrl und Windows and Meta under Mac as command key)"]
+
+  ],
+
+  "lively.presentation": [
+    ["pageNavigationName", "nothing"],
+    ["pageNavigationWithKeys", true, "boy, that's ugly!!!"],
+    ["showPageNumber", true]
+  ],
+
+  "codedb": [
+    {
+      "name": "couchDBURL",
+      "type": "String",
+      "doc": "Deprecated",
+      "get": {
+          "type": "function",
+          "code": "function() { return Config.location.protocol + '//' + Config.location.host + '/couchdb'; }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    },
+    ["defaultCodeDB", "code_db"]
+  ],
+
+  "lively.morphic.Connectors": [
+    ["enableMagneticConnections", true, "Connectors / lines can \"dock\" to magnet points of morphs."]
+  ],
+
+  "lively.morphic.Events": [
+    ["useMetaAsCommand", false, "Use the meta modifier (maps to Command on the Mac) instead of alt"],
+    ["enableHaloItems", true, "enable or disable showing halo items when Command/Control-clicking"],
+    ["showGrabHalo", false, "enable grab halo (alternative to shadow) on objects in the hand."],
+    ["hideSystemCursor", false],
+    ["handleOnCapture", true],
+    ["globalGrabbing", true],
+    ["touchBeMouse", false, "Dynamically determined."],
+    ["usePointerevents", true, "Switch between native event handling and Googles Pointerevents library"],
+    ["useSingleHand", false, "Enforce the use of only one hand on mobile devices"]
+  ],
+
+  "lively.debugging": [
+    ["ignoreAdvice", false, "Ignore function logging through the prototype.js wrap mechanism rhino will give more useful exception info"],
+    ["verboseLogging", true, "Whether to make logging/alerting highly visible in the UI"],
+    ["loadRewrittenCode", false, "Is currently running code rewritten?"],
+    ["enableDebuggerStatements", false, "Whether to throw Debugger exceptions in rewritten code"],
+    ["bugReportWorld", "https://tinylil.world/c/tinylil.world/issues/IssueTemplate.html?openCreateIssuePrompt=true", "Where to report bugs"]
+  ],
+
+  "lively.morphic.Text": [
+    ["useSoftTabs", true],
+    ["useElasticTabs", false],
+    {
+      "name": "defaultTabSize",
+      "type": "Number",
+      "doc": "Tab width",
+      "get": {
+          "type": "function",
+          "code": "function() { return lively.Config.hasOwnProperty('_defaultTabSize') ? lively.Config._defaultTabSize : 2; }"
+      },
+      "set": {"type": "function", "code": "function(v) { lively.Config._defaultTabSize = v; module('lively.ide.CodeEditor').runWhenLoaded(function() { lively.morphic.CodeEditor.prototype.style.tabSize = v; lively.whenLoaded(function() { lively.ide.allCodeEditors().invoke('setTabSize', v); }); }); return v; }"}
+    },
+    ["disableSyntaxHighlighting", false],
+    ["textUndoEnabled", false, "Deprecated. Wether Lively takes care of undoing text changes or leaves it to the browser."]
+  ],
+
+  "lively.morphic.CodeEditor": [
+    ["defaultCodeFontSize", 12, "In which pt size code appears."],
+    ["defaultCodeFontFamily", "Monaco,monospace", "Code font"],
+    ["autoIndent", true, "Automatically indent new lines."],
+    ["useAceEditor", true, "Whether to use the ace.ajax editor for code editing."],
+    ["aceDefaultTheme", "chrome", "Ace theme to use"],
+    ["aceWorkspaceTheme", "chrome", "Ace theme to use"],
+    ["aceTextEditorTheme", "chrome", "Ace theme to use"],
+    ["aceSystemCodeBrowserTheme", "chrome", "Ace theme to use"],
+    ["aceDefaultTextMode", "javascript", "Ace text mode to use"],
+    ["aceDefaultLineWrapping", true, "Wrap lines in ace?"],
+    ["aceDefaultShowGutter", true, "Enables the line number gutter"],
+    {
+      "name": "aceShowGutterInObjectEditor",
+      "type": "Boolean",
+      "doc": "Enables the line number gutter in Object Editor",
+      "get": {
+        "type": "function",
+        "code": "function() { return Config._aceShowGutterInObjectEditor || false; }"
+      },
+      "set": {
+        "type": "function",
+        "code": "function(val) { var spec, path = lively.PropertyPath('attributeStore.submorphs.0.attributeStore.submorphs.0.attributeStore._ShowGutter');\n Config._aceShowGutterInObjectEditor = val;\n if (lively && lively.BuildSpec && (spec = lively.BuildSpec('lively.ide.tools.ObjectEditor'))) {\n path.set(spec, val); } }"
+      }
+    },
+    {
+      "name": "aceShowGutterInWorkspace",
+      "type": "Boolean",
+      "doc": "Enables the line number gutter in Workspace",
+      "get": {
+        "type": "function",
+        "code": "function() { return Config._aceShowGutterInWorkspace || false; }"
+      },
+      "set": {
+        "type": "function",
+        "code": "function(val) { var spec, path = lively.PropertyPath('attributeStore.submorphs.1.attributeStore._ShowGutter');\n Config._aceShowGutterInWorkspace = val;\n if (lively && lively.BuildSpec && (spec = lively.BuildSpec('lively.ide.tools.JavaScriptWorkspace'))) {\n path.set(spec, val); } }"
+      }
+    },
+    ["aceDefaultShowInvisibles", false, "Indicators for whitespace / non-print chars."],
+    ["aceDefaultShowPrintMargin", false, "Show a vertical line at the print margin column."],
+    ["aceDefaultShowIndents", true, "Indicators for indents in the beginning of lines."],
+    ["aceDefaultUseJavaScriptLinter", false, "Linting JavaScript code on-the-fly"],
+    ["aceDefaultShowActiveLine", false, "Current line is highlighted"],
+    ["aceDefaultShowWarnings", true, "Should autocompletion be enabled?"],
+    ["aceDefaultShowErrors", true, "Show syntax errors in programming language mode?"],
+    ["aceDefaultEnableAutocompletion", true, "Should autocompletion be enabled?"],
+    ["aceDefaultEnableBehaviors", true, "Should behaviors be enabled? (auto insert closing parens and quotation marks)"],
+    ["computeCodeEditorCompletionsOnStartup", false, "when enabled all JS files udner core/ are read on startup nd their content is used to compute word completions"],
+    ["showDoitErrorMessages", true, "When a doit eval results in an error a error message pops up."],
+    ["showDoitInMessageMorph", true, "Print eval results in message boxes of the code editor morph."],
+    ["improvedJavaScriptEval", true, "Eval that changes semantics of how object literals and if statements are evaluated."],
+    ["showImprovedJavaScriptEvalErrors", false, "Visibly show errors when improved JavaScript eval transformation fail"],
+    ["aceDefaultUseIyGotoChar", true, "Quickly jump to next / prev characters using Cmd/Ctrl-, and Cmd/Ctrl-. "],
+    ["evalMarkersEnabled", true, "Eval markers are code selections that can be rerun by pressing a code. Useful for live development and quick testing."],
+    ["codeEditorMenuShowsSettings", true, "Include the settings menu item in the codeeditor context menu"],
+    ["draggableCodeInCodeEditor", false, "Based on AST, make code draggable"],
+    ["aceDefaultScrubbingEnabled", false, "Make number sin code editors scrubbable or not"],
+    {
+      "name": "useEmacsyKeys",
+      "type": "Boolean",
+      "doc": "Keybindings that resemble what you expect from an emacs.",
+      "get": {
+          "type": "function",
+          "code": "function() { return lively.LocalStorage.get('useEmacsyKeys') || false; }"
+      },
+      "set": {"type": "function", "code": "function(v) { lively.LocalStorage.set('useEmacsyKeys', v); require('lively.ide.CodeEditor').toRun(function() { lively.ide.CodeEditor.KeyboardShortcuts.reinitKeyBindingsForAllOpenEditors(); }); return v; }"}
+    },
+    {
+      "name": "codeEditorUserKeySetup",
+      "type": "function",
+      "doc": "function to setup custom key bindings",
+      "get": {
+        "type": "function",
+        "code": "function() { return Config._codeEditorUserKeySetup; }"
+      },
+      "set": {
+        "type": "function",
+        "code": "function(val) { Config._codeEditorUserKeySetup = val; var shortcuts = lively.lang.Path('ide.CodeEditor.KeyboardShortcuts').get(lively); shortcuts.reinitKeyBindingsForAllOpenEditors(); }"
+      }
+    }
+  ],
+
+  "lively.ide.Search": [
+    ["codeSearchGrepExclusions", [".svn", ".git", "node_modules", "combined.js", "BootstrapDebugger.js", ".optimized-loading-cache"], "Patterns for files to exclude from grep code search."]
+  ],
+
+  "lively.morphic.StyleSheets": [
+    {
+      "name": "baseThemeStyleSheetURL",
+      "type": "String",
+      "doc": "The base theme CSS file location.",
+      "get": {
+          "type": "function",
+          "code": "function() { return lively.Config.codeBase + 'styles/base_theme.css' }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    }, {
+      "name": "ipadThemeStyleSheetURL",
+      "type": "String",
+      "doc": "The ipad theme CSS file location.",
+      "get": {
+          "type": "function",
+          "code": "function() { return lively.Config.codeBase + 'styles/ipad_theme.css' }"
+      },
+      "set": {"type": "function", "code": "function() {}"}
+    }
+  ],
+
+  "lively.PartsBin": [
+    ["PartCachingEnabled", true, "Whether parts are cached after they are loaded the first time"],
+    ["partsbinURLs", ["https://smalltalkzoo.computerhistory.org/PartsBin/"], "What PartsBins to offer for upload and download except for the local"]
+  ],
+
+  "lively.identity.Inventory": [
+    ["instanceURLs", [], "Other known identity-server instances to offer for browsing public Inventory from, in addition to this one."]
+  ],
+
+  "lively.media": [
+    ["mediaBase", "/apps/RetroMediaConsole/media/", "Base URL serving RetroMediaConsole's track/video/sfx media assets."]
+  ],
+
+  "lively.morphic.Windows": [
+    ["useWindowSwitcher", true, "Use the window switcher (F5/CMD+`/CTRL+`)."]
+  ],
+
+  "lively.ide.tools": [
+    ["defaultSCBExtent", [830,515], "Size of SCB"],
+    ["defaultTextEditorExtent", [670,600], "Size of TextEditor"],
+    ["defaultWorkspaceExtent", [600,250], "Size of Workspace"],
+    ["defaultSCBSourcePaneToListPaneRatio", 0.525, "Ratio how much vertical space the sourcePane vs. the list panes get by default in SCB."],
+    ["useHistoryTracking", true, "When loading lively.ide.SystemCodeBrowserAddons, install history browsing for all future browsers, or not."],
+    ["propertyPreservation", null, "When saving a method (property) with a changed name, save the old behavior, or loose it. If not set (undefined), you are asked."]
+  ],
+
+  "lively.ide.tools.SelectionNarrowing": [
+    ["selectionNarrowerInputLineAtTop", true, "Show the input line at top or bottom?"]
+  ],
+
+  "askpass": [
+    ["askpassSSLcaFile", "", ""],
+    ["askpassSSLkeyFile", "", ""],
+    ["askpassSSLcertFile", "", ""]
+  ],
+
+  "Wiki": [
+    ["showWikiToolFlap", false, "Show tool flap that gives access to wiki tools."],
+    ["wikiRepoUrl", null, "Deprecated"]
+  ],
+
+  "lively.Worker": [
+    ["lively.Worker.idleTimeOfPoolWorker", 60000, "Milliseconds a lively.Worker that is automatically added to the worker pool is kept alive."]
+  ],
+
+  "Changesets": [
+    ["changesetsExperiment", false, "track changes and provide a UI for a changesets-based worlkflow"],
+    ["automaticChangesReplay", true, "restore changes automatically on world load"]
+  ],
+
+  "lively.morphic.tools.MenuBar": [
+    ["showMenuBar", true, "Should a menu bar be opened on world load?"],
+    {
+      "name": "menuBarEntries",
+      "type": "Array",
+      "doc": "The actual menubar entries currently loaded",
+      "get": {
+          "type": "function",
+          "code": "function() { return lively.Config._menuBarEntries || (lively.Config._menuBarEntries = lively.Config.get('menuBarDefaultEntries')); }"
+      },
+      "set": {"type": "function", "code": "function(v) { lively.Config._menuBarEntries = v; module('lively.morphic.tools.MenuBar').runWhenLoaded(function() { lively.morphic.tools.MenuBar.openOnWorldLoad(); }); return v; }"}
+    },
+
+    ["menuBarDefaultEntries", [
+      "lively.net.tools.Lively2Lively",
+      "lively.morphic.tools.ProcessCatMenuBarEntry",
+      "lively.morphic.tools.LivelyMenuBarEntry",
+      "lively.ide.tools.CurrentDirectoryMenuBarEntry",
+      "lively.morphic.tools.LogMenuBarEntry",
+      "lively.net.tools.Wiki",
+      "lively.ide.tools.JavaScriptToolsMenuBarEntries",
+      "lively.identity.MenuBarEntry",
+      "lively.morphic.tools.WorldNameMenuBarEntry"
+      ], "Which menu bar entries to add by default? Specifies modules that should implement a getMenuBarEntries() method."]
+  ],
+
+  "lively.VM": [
+    ["useJsx", true, "jsx is a JS language extension for the react framework. When enabled code editors will know how to parse jsx."],
+    ["useBabelJsForEval", false, "babel.js is an ES6 / JSX transformer. When enabled will be used to transform evaled code."],
+    ["useBabelJsForScriptLoad", false, "babel.js is an ES6 / JSX transformer. When enabled will be used to transform evaled code."]
+  ],
+
+  "lively.lang.Runtime": [
+    ["lively.lang.Runtime.active", true, "Should lively.lang.Runtime look for lively-runtime.js files in external projects and run those as well evaluate code in the external project's context when edited in Lively?"]
+  ]
+}

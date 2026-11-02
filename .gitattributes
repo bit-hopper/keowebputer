@@ -1,0 +1,3 @@
+# kernel/ is a verbatim snapshot: store its bytes exactly. Without this, a checkout that converts line endings on commit
+# (core.autocrlf) rewrites the files that use CRLF, and the snapshot no longer matches the kernel commit it records.
+kernel/** -text

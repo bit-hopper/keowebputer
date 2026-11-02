@@ -1,0 +1,354 @@
+/*
+ * Vendored Google Fonts (decorative/display faces requested for the
+ * TextFormattingToolbar font-family picker) -- self-hosted per this
+ * project's convention of vendoring third-party assets locally rather
+ * than pulling from a CDN (see material-symbols.css, KaTeX under
+ * core/lib/postcard/fonts/). Latin-subset, regular weight/style only --
+ * these are used for short preview/label text, not full documents.
+ * Source: Google Fonts (https://fonts.google.com), original licenses
+ * (mostly OFL) accompany each family upstream.
+ */
+
+@font-face {
+  font-family: 'Cedarville Cursive';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/CedarvilleCursive/CedarvilleCursive-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Coiny';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Coiny/Coiny-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Comic Neue';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/ComicNeue/ComicNeue-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Creepster';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Creepster/Creepster-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Eater';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Eater/Eater-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Emilys Candy';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/EmilysCandy/EmilysCandy-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Freckle Face';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/FreckleFace/FreckleFace-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Give You Glory';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/GiveYouGlory/GiveYouGlory-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Gloria Hallelujah';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/GloriaHallelujah/GloriaHallelujah-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Gluten';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Gluten/Gluten-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Gochi Hand';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/GochiHand/GochiHand-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Grandstander';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Grandstander/Grandstander-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Gravitas One';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/GravitasOne/GravitasOne-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Serif';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/IBMPlexSerif/IBMPlexSerif-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Indie Flower';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/IndieFlower/IndieFlower-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Jolly Lodger';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/JollyLodger/JollyLodger-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Just Me Again Down Here';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/JustMeAgainDownHere/JustMeAgainDownHere-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Kablammo';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Kablammo/Kablammo-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Loved by the King';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/LovedbytheKing/LovedbytheKing-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Manufacturing Consent';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/ManufacturingConsent/ManufacturingConsent-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Matemasie';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Matemasie/Matemasie-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Menbere';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Menbere/Menbere-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Miltonian';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Miltonian/Miltonian-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Mystery Quest';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/MysteryQuest/MysteryQuest-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Offside';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Offside/Offside-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Patrick Hand';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/PatrickHand/PatrickHand-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Peralta';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Peralta/Peralta-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Rancho';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Rancho/Rancho-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Reem Kufi Fun';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/ReemKufiFun/ReemKufiFun-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Rubik Beastly';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/RubikBeastly/RubikBeastly-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Rubik Burned';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/RubikBurned/RubikBurned-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Rubik Distressed';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/RubikDistressed/RubikDistressed-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Rubik Gemstones';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/RubikGemstones/RubikGemstones-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Rubik Glitch';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/RubikGlitch/RubikGlitch-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Rubik Moonrocks';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/RubikMoonrocks/RubikMoonrocks-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Rubik Vinyl';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/RubikVinyl/RubikVinyl-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Shadows Into Light Two';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/ShadowsIntoLightTwo/ShadowsIntoLightTwo-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Short Stack';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/ShortStack/ShortStack-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Slackey';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Slackey/Slackey-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Stack Sans Notch';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/StackSansNotch/StackSansNotch-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Sue Ellen Francisco';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/SueEllenFrancisco/SueEllenFrancisco-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Yuyu';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/Yuyu/Yuyu-Regular.woff2) format('woff2');
+}
+
+@font-face {
+  font-family: 'Yuyu Short';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(../lib/google-fonts/YuyuShort/YuyuShort-Regular.woff2) format('woff2');
+}

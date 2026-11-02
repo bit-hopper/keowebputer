@@ -1,0 +1,18 @@
+Flag images in this directory are Twemoji graphics by Twitter, Inc. and
+other contributors, used under the Creative Commons Attribution 4.0
+International License (CC-BY 4.0):
+
+  https://creativecommons.org/licenses/by/4.0/
+
+Source: Twemoji (maintained fork: https://github.com/jdecked/twemoji),
+obtained via the emoji-datasource-twitter npm package
+(https://www.npmjs.com/package/emoji-datasource-twitter), which packages
+these graphics for build tooling under its own MIT-licensed wrapper code —
+the graphics themselves remain CC-BY 4.0 per that package's own README.
+
+Copyright 2020 Twitter, Inc and other contributors.
+
+Files are named by their emoji's own Unicode codepoint sequence in
+lowercase hex, hyphen-joined (e.g. 1f1fa-1f1f8.png for the US flag) — see
+MediaPickerDialog.js's flag-rendering code for how the filename is derived
+from a glyph at render time.

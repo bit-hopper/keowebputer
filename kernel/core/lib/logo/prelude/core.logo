@@ -1,0 +1,25 @@
+; The always-loaded Logo library (LOGO.md 5.4): the manual's "(library procedure)" entries that are not worth a JS
+; primitive. Written from the manual's descriptions, NOT from the reference's logolib (decision 10).
+; Everything here is marked a library procedure: PROCEDURES does not list it and ERALL leaves it alone.
+; Iteration tools that must honour STOP / OUTPUT through their templates (MAP, FOREACH, FOR, ...) are machine operations in
+; control.js, not definitions here.
+
+; MDARRAY sizelist [origin]: an array of arrays, one level per size.
+to mdarray :sizes [:origin 1]
+localmake "result (array first :sizes :origin)
+if emptyp bf :sizes [output :result]
+for [i :origin [:origin + (first :sizes) - 1]] [setitem :i :result (mdarray bf :sizes :origin)]
+output :result
+end
+
+; MDITEM indexlist array: follow one index per level.
+to mditem :indexes :array
+if emptyp :indexes [output :array]
+output mditem bf :indexes (item first :indexes :array)
+end
+
+; MDSETITEM indexlist array value
+to mdsetitem :indexes :array :value
+if emptyp bf :indexes [setitem first :indexes :array :value stop]
+mdsetitem bf :indexes (item first :indexes :array) :value
+end

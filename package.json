@@ -7,7 +7,8 @@
   "scripts": {
     "build": "node extension/build.js dist",
     "test:did": "node tests/keo-did-test.js",
-    "test:release": "node tests/keo-release-test.js"
+    "test:release": "node tests/keo-release-test.js",
+    "refresh-kernel": "node extension/refresh-kernel.js"
   },
   "devDependencies": {
     "playwright-core": "1.63.0"

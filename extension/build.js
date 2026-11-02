@@ -1,49 +1,40 @@
 // Assemble the keo world extension: shell page start.html + sandboxed world.html + the static
 // files a plain boot of blank.html requests, so the world runs from the package with no server.
-// Usage: node build.js <output folder> [--kernel <LivelyKernel checkout>] [--version <release tag, e.g. v0 or v0.2.1>]
-//   --kernel  the LivelyKernel checkout the package is made from (its core/, blank.html, node_modules/esbuild, babel).
-//             Also read from $KEO_KERNEL. With neither, a folder named LivelyKernel next to this repository is used if
-//             (and only if) it looks like a kernel.
+// Usage: node build.js <output folder> [--version <release tag, e.g. v0 or v0.2.1>]
 //   --version the release this package is, written as the extension's version (what the browser shows for it). A leading "v" is
 //             dropped; what is left must be one to four dot-separated whole numbers (0-65535), which is all the browser accepts.
 //             Also read from $KEO_VERSION. Without it the version is 0.0.0, so a local build is never taken for a release.
-// Needs no server: the generated combinedModules bundle comes from kernel-bundle.js and the WebDAV directory listings are
-// written from the folders. Needs the kernel's `npm install` done. Run from anywhere.
-// Writes keo-build.json into the package: which kernel commit it was built from, and whether the files it copied differed
-// from that commit (the package is made from the working tree, not from the commit).
+// The runtime's files come from kernel/ in this repository, a snapshot of the kernel's shipped files that refresh-kernel.js
+// writes (including the boot bundle and the minified editor files), so a build needs no kernel checkout, no server and no
+// npm packages. This script adds keo's own files, the settings, the world document and the manifest. Run from anywhere.
+// Writes keo-build.json into the package: the kernel commit the snapshot was taken from.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execSync } = require('child_process');
-const { buildBundle } = require('./kernel-bundle');
 const { listPackage } = require('./package-files');
+const { LISTED_DIRS } = require('./kernel-list');
 
 // ---- arguments
-let OUT = null, KERNEL_ARG = process.env.KEO_KERNEL || null, VERSION_ARG = process.env.KEO_VERSION || null;
+let OUT = null, VERSION_ARG = process.env.KEO_VERSION || null;
 {
   const a = process.argv.slice(2);
   for (let i = 0; i < a.length; i++) {
-    if (a[i] === '--kernel') KERNEL_ARG = a[++i];
-    else if (a[i] === '--version') VERSION_ARG = a[++i];
+    if (a[i] === '--version') VERSION_ARG = a[++i];
     else if (!OUT) OUT = a[i];
     else { console.error('unexpected argument: ' + a[i]); process.exit(1); }
   }
 }
-if (!OUT) { console.error('usage: node build.js <output folder> [--kernel <LivelyKernel checkout>] [--version <release tag>]'); process.exit(1); }
+if (!OUT) { console.error('usage: node build.js <output folder> [--version <release tag>]'); process.exit(1); }
 const VERSION = VERSION_ARG ? String(VERSION_ARG).replace(/^v/, '') : '0.0.0';
 if (!/^\d{1,5}(\.\d{1,5}){0,3}$/.test(VERSION) || VERSION.split('.').some((n) => Number(n) > 65535)) {
   console.error('--version must be a release tag such as v0 or v0.2.1 (one to four dot-separated numbers, each up to 65535): ' + VERSION_ARG); process.exit(1);
 }
-// Files a folder must have to be taken for a LivelyKernel checkout this script can build from.
-const KERNEL_MARKERS = ['core/lively/bootstrap.js', 'blank.html', 'core/lively/identity/IdentityVaultFrame.js'];
-const isKernel = (dir) => KERNEL_MARKERS.every((f) => fs.existsSync(path.join(dir, f)));
-const REPO = path.resolve(KERNEL_ARG || path.join(__dirname, '..', '..', 'LivelyKernel'));
-if (!isKernel(REPO)) {
-  console.error((KERNEL_ARG ? 'not a LivelyKernel checkout: ' : 'no --kernel given, and there is no LivelyKernel checkout next to this repository: ') + REPO +
-    '\npass --kernel <path> (or set KEO_KERNEL). A kernel has: ' + KERNEL_MARKERS.join(', '));
-  process.exit(1);
-}
 const ROOT = path.join(__dirname, '..');
+const KERNEL = path.join(ROOT, 'kernel');
+for (const f of ['SNAPSHOT.json', 'blank.html', 'core/lively/bootstrap.js']) {
+  if (!fs.existsSync(path.join(KERNEL, f))) { console.error('kernel/' + f + ' is missing: kernel/ is the snapshot refresh-kernel.js writes'); process.exit(1); }
+}
+const SNAPSHOT = JSON.parse(fs.readFileSync(path.join(KERNEL, 'SNAPSHOT.json'), 'utf8'));
 const SHELL = path.join(ROOT, 'shell'), WORLD = path.join(ROOT, 'world');   // the two realms' sources; this folder holds the builder, the boot list and the pinned key
 const MARKER = path.join(OUT, '.keo-world-build');
 // The public key pinned in the manifest fixes the extension id, which is the origin and the passkey rpId everywhere below.
@@ -59,30 +50,19 @@ if (fs.existsSync(OUT)) for (const f of fs.readdirSync(OUT)) fs.rmSync(path.join
 fs.mkdirSync(OUT, { recursive: true });
 fs.writeFileSync(MARKER, 'built by extension/build.js\n');
 
-// libraries (and their workers) that on-demand features load; add a directory here when a feature is found to need one
-const ONDEMAND_LIBS = ['core/lib/marked', 'core/lib/logo', 'core/lib/ml', 'core/lib/scheme',
-  'core/lib/geo', 'core/lib/astro', 'core/lib/postcard', 'core/media', 'core/styles'];
-const ONDEMAND_FILES = ['core/lib/grasp.js', 'core/lib/escodegen.browser.js', 'core/lib/lively.ast.dev.js', 'core/lib/lively-libs.js'];
-// Also not shipped yet: core/lib/privacy-pools (23 MB) and core/lib/mediapipe (16 MB, face effects); add them here when the
-// feature that loads them is brought over. See NOT_SHIPPED above for what is deliberately never shipped.
-// Not shipped by decision: core/lib/pyodide (Python, 25 MB) and core/lib/wallet (crypto bundles, 11 MB). The kernel modules
-// that load them (PyodideWorker, Wallet*, PrivacyPoolClient) are still copied with core/lively and fail at first use.
-
 let bytes = 0, files = 0;
 const put = (rel, data) => { const p = path.join(OUT, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, data); bytes += data.length; files++; };
-const copy = (rel) => put(rel, fs.readFileSync(path.join(REPO, rel)));
-// Not shipped: apps and heavy assets that come from the inventory (or are not used at run time) instead of the package.
-// Jenga3D (module code here, its 50 MB of libraries under core/lib/jenga3d), MicroBlocks, Snap and the like are downloaded
-// from the inventory on demand.
-// Also not shipped, because the kernel does not track them (they exist only in some working trees, so a build from a commit
-// could never include them and a local build must not either): the soundboard clips, two dead files under users/ (the kernel
-// ignores that folder) and a note in the empty material-icons folder. The soundboard module is copied and finds no clips.
-const NOT_SHIPPED = ['core/lively/jenga3d', 'core/lib/jenga3d', 'core/media/soundboard',
-  'core/lively/users/WebAuthn.js', 'core/lively/users/WebAuthnLoginMorph.js', 'core/media/material-icons/README.txt'];
-const copyDir = (rel) => { if (NOT_SHIPPED.includes(rel)) return; for (const e of fs.readdirSync(path.join(REPO, rel), { withFileTypes: true })) {
-  if (e.isDirectory()) copyDir(rel + '/' + e.name); else if (!NOT_SHIPPED.includes(rel + '/' + e.name)) copy(rel + '/' + e.name); } };
+// What the snapshot holds at its top level that is not a package file as it stands: the world's document (becomes world.html),
+// the licence notices (renamed below) and the record of where the snapshot came from.
+const SNAPSHOT_ONLY = new Set(['SNAPSHOT.json', 'blank.html', 'LICENSE', 'AUTHORS']);
+const copySnapshot = (rel) => {
+  for (const e of fs.readdirSync(path.join(KERNEL, rel), { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const r = rel ? rel + '/' + e.name : e.name;
+    if (e.isDirectory()) copySnapshot(r); else if (!SNAPSHOT_ONLY.has(r)) put(r, fs.readFileSync(path.join(KERNEL, r)));
+  }
+};
 
-// A WebDAV multistatus answer for the folder `rel` of the kernel: the folder itself, then each file in it. The runtime
+// A WebDAV multistatus answer for the folder `rel` of the snapshot: the folder itself, then each file in it. The runtime
 // only lists these folders (names, sizes, types); every entry is a file, which is checked here because a subfolder would
 // need its own entry shape.
 const propfind = (rel) => {
@@ -92,7 +72,7 @@ const propfind = (rel) => {
            : '<d:getcontentlength>' + stat.size + '</d:getcontentlength><d:resourcetype></d:resourcetype><d:getcontenttype>' +
              (href.endsWith('.js') ? 'application/javascript; charset=utf-8' : 'application/octet-stream') + '</d:getcontenttype>') +
     '</d:prop><d:status>HTTP/1.1 200 Ok</d:status></d:propstat></d:response>';
-  const dir = path.join(REPO, rel), names = fs.readdirSync(dir).sort();
+  const dir = path.join(KERNEL, rel), names = fs.readdirSync(dir).sort();
   let xml = '<?xml version="1.0" encoding="utf-8"?><d:multistatus xmlns:d="DAV:" xmlns:a="http://ajax.org/2005/aml">' + entry('/' + rel + '/', fs.statSync(dir), true);
   for (const n of names) {
     const st = fs.statSync(path.join(dir, n));
@@ -103,37 +83,9 @@ const propfind = (rel) => {
 };
 
 (async () => {
-  // 1. static boot files (list produced from probes/boot-inventory.js)
-  const list = fs.readFileSync(path.join(__dirname, 'boot-files.txt'), 'utf8').split(/\r?\n/).filter((l) => l && l[0] !== '#');
-  // localconfig.js is written below from this build's own settings: the kernel's copy is untracked and differs per machine
-  // (a fresh checkout does not have it), so a package that read it could not be rebuilt from a commit.
-  for (const rel of list) if (rel !== 'core/lively/localconfig.js') copy(rel);
-  // On-demand features: the module loader fetches a module by URL when a feature is first used, so the package carries
-  // every module file (a missing one fails at first use, not at boot), and the libraries and workers those features load.
-  // The boot list above stays the record of what a plain boot needs; the later copies (localconfig.js below) win.
-  copyDir('core/lively');
-  // Ace is a vendored 2013-era fork: ship its bundle and the lazily loaded mode files minified (the repo keeps them readable)
-  // and leave out what nothing loads: the 1.5 MB duplicate bundle, the build script, the syntax-check workers (the session
-  // setup turns workers off), ext-* files and ace's own snippets (Lively's are under core/lively/ide/snippets).
-  // Measured: a run through 21 text modes requested lively-ace.js and nine mode-*.js files, no theme, worker or snippet file.
-  // Ace's BSD licence asks for its notice to stay with redistributions, so each file keeps the leading licence block.
-  const esbuild = require(path.join(REPO, 'node_modules', 'esbuild'));
-  const minified = (rel) => {
-    const src = fs.readFileSync(path.join(REPO, rel), 'utf8');
-    const m = src.match(/^\s*\/\*[\s\S]*?END LICENSE BLOCK[\s\S]*?\*\//);
-    const code = esbuild.transformSync(src, { minify: true, legalComments: 'none', logLevel: 'silent' }).code;
-    return (m ? m[0].trim() + '\n' : '') + code;
-  };
-  for (const f of fs.readdirSync(path.join(REPO, 'core/lib/ace'))) {
-    if (f === 'lively-ace.js' || /^mode-.*\.js$/.test(f) || /^ace\..*\.js$/.test(f)) put('core/lib/ace/' + f, minified('core/lib/ace/' + f));
-  }
-  put('core/lib/ace/LICENSE', fs.readFileSync(path.join(REPO, 'core/lib/ace/LICENSE')));
-  for (const d of ONDEMAND_LIBS) copyDir(d);
-  for (const f of ONDEMAND_FILES) copy(f);
-  copy('core/media/lively.ico');
-  // the identity vault page (vault.html below) runs this file and libsodium, neither of which a plain boot loads
-  copy('core/lively/identity/IdentityVaultFrame.js');
-  copy('core/lib/libsodium/sodium.js');
+  // 1. every file the snapshot holds: the boot files, the modules and libraries, the editor files, the boot bundle (see
+  //    refresh-kernel.js for what is in it and why). localconfig.js is not among them: it is written below.
+  copySnapshot('');
   // localconfig.js is loaded at boot. Everything else takes the kernel's config.json defaults; this sets what makes the
   // identity code use the extension as its origin: the passkey rpId, and the shell as the vault host (see config.json)
   put('core/lively/localconfig.js', `/* Written by the keo extension build; not the kernel's localconfig.js. */
@@ -148,35 +100,16 @@ lively.Config.set('moduleLoadTestTimeout', false);
 // request one.
 lively.Config.set('loadUserConfig', false);
 `);
-  // files the shipped stylesheets point at with url(...) (fonts, mostly); they load lazily, after boot, so the boot
-  // inventory does not list them
-  const have = new Set(list);
-  for (const css of list.filter((f) => f.endsWith('.css'))) {
-    const text = fs.readFileSync(path.join(REPO, css), 'utf8');
-    for (const m of text.matchAll(/url\(\s*['"]?([^'")\s]+)['"]?\s*\)/g)) {
-      if (/^(data:|https?:|\/\/|#)/.test(m[1])) continue;
-      const rel = path.posix.normalize(path.posix.join(path.posix.dirname(css), m[1].split(/[?#]/)[0]));
-      if (have.has(rel)) continue;
-      have.add(rel);
-      if (fs.existsSync(path.join(REPO, rel))) copy(rel); else console.warn('css refers to a missing file: ' + css + ' -> ' + rel);
-    }
-  }
-  // directories the runtime lists with PROPFIND: ship every file in them
-  const listed = ['core/lively/ide/codeeditor/modes', 'core/lively/ide/snippets'];
-  for (const d of listed) copyDir(d);
-
-  // 2. what the kernel's server would generate: the boot bundle (made by the kernel's own code, see kernel-bundle.js) and
-  //    the directory listings (a PROPFIND answer for a folder with no subfolders, same shape the server gives)
-  const { hash, code } = await buildBundle(REPO, path.join(ROOT, '.cache'));
-  put('generated/combinedModulesHash.txt', hash);
-  put('generated/' + hash + '/combinedModules.js', code);
-  for (const d of listed) put('webdav-index/' + (d + '/').replace(/\//g, '_') + '.xml', propfind(d));
+  // 2. the directory listings the kernel's server would answer (a PROPFIND answer for a folder with no subfolders, same shape
+  //    the server gives); the boot bundle they sit beside is already in the snapshot
+  const hash = SNAPSHOT.bundleHash;
+  for (const d of LISTED_DIRS) put('webdav-index/' + (d + '/').replace(/\//g, '_') + '.xml', propfind(d));
   put('stub/empty.txt', '');
   put('stub/login.json', JSON.stringify({ username: 'unknown user', email: null, group: null, lastLogin: null }, null, 2));
 
-  // 3. world.html: the committed blank.html minus its style blocks (the bootstrap removes them anyway),
-  //    with the shim loaded before the bootstrap
-  let html = execSync('git show HEAD:blank.html', { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }).toString('utf8');
+  // 3. world.html: the snapshot's blank.html (as the kernel committed it) minus its style blocks (the bootstrap removes them
+  //    anyway), with the shim loaded before the bootstrap
+  let html = fs.readFileSync(path.join(KERNEL, 'blank.html'), 'utf8');
   html = html.replace(/<style[\s\S]*?<\/style>/g, '').replace('<title>blank</title>', '<title>keo world</title>');
   // A page served by the dev server gets "charset=utf-8" from the HTTP header; an extension page has no header, so without this
   // the page (and every script it loads) is decoded as the legacy single-byte charset (windows-1252) and non-ASCII source text turns to mojibake (the
@@ -217,22 +150,21 @@ lively.Config.set('loadUserConfig', false);
     content_security_policy: { extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'", sandbox: "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; child-src 'self' blob:;" },
   }, null, 2));
 
-  // The package carries LivelyKernel's code. It is MIT licensed and its notice has to travel with it.
-  for (const [from, to] of [['LICENSE', 'LICENSE-lively-kernel'], ['AUTHORS', 'AUTHORS-lively-kernel']]) if (fs.existsSync(path.join(REPO, from))) put(to, fs.readFileSync(path.join(REPO, from)));
+  // The package carries LivelyKernel's code. It is MIT licensed and its notice has to travel with it. So does the list of what
+  // is known about the licences of the libraries it vendors, which is kernel/THIRD-PARTY-NOTICES.md and so is copied with the
+  // snapshot to the package root.
+  for (const [from, to] of [['LICENSE', 'LICENSE-lively-kernel'], ['AUTHORS', 'AUTHORS-lively-kernel']]) put(to, fs.readFileSync(path.join(KERNEL, from)));
 
-  // 5. where this package came from. The files above were copied from the kernel's WORKING TREE (only blank.html comes from
-  //    the commit), so "commit" alone does not say what is in the package: `changed` lists what differed from it.
-  const kernelGit = (args) => { try { return execSync('git ' + args, { cwd: REPO, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').trim(); } catch (e) { return null; } };
-  const changed = kernelGit('status --porcelain -- core users blank.html');
+  // 5. where this package came from: the kernel commit the snapshot in kernel/ was taken from (the snapshot is verbatim, so
+  //    the commit says what the runtime's files are)
   put('keo-build.json', JSON.stringify({
     builtAt: new Date().toISOString(), version: VERSION, extensionId: id, bundleHash: hash,
-    kernel: { commit: kernelGit('rev-parse HEAD'), branch: kernelGit('rev-parse --abbrev-ref HEAD'),
-      changed: changed === null ? null : changed.split('\n').filter(Boolean).slice(0, 100) }
+    kernel: { commit: SNAPSHOT.commit }
   }, null, 2) + '\n');
 
   // 6. every file with its hash, written last. It is the baseline an update is diffed against (what the package has), not a
   //    security statement: whatever an update downloads is checked against the signed release, never against this.
   put('keo-files.json', JSON.stringify({ v: 1, files: listPackage(OUT) }) + '\n');
 
-  console.log('built ' + OUT + ': ' + files + ' files, ' + bytes + ' bytes, extension id ' + id + ', bundle ' + hash + ', kernel ' + (kernelGit('rev-parse --short HEAD') || 'unknown') + (changed ? ' (+' + changed.split('\n').filter(Boolean).length + ' changed paths)' : ''));
+  console.log('built ' + OUT + ': ' + files + ' files, ' + bytes + ' bytes, extension id ' + id + ', bundle ' + hash + ', kernel ' + SNAPSHOT.commit.slice(0, 7));
 })().catch((e) => { console.error(e); process.exit(1); });
