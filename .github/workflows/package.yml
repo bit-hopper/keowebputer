@@ -1,0 +1,69 @@
+# Build the keo package (the folder you load unpacked in the browser) and attach it as a zip.
+# A tag like v0.1.0 builds and publishes a release; a manual run only keeps the zip as a run artifact.
+# The kernel is a separate repository: it is checked out next to this one and pinned by the ref input, and the commit it was
+# built from is written into the package (keo-build.json).
+name: package
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: 'Kernel branch, tag or commit to build from'
+        default: 'main'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      KEO_KERNEL: ${{ github.workspace }}/kernel
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: bit-hopper/keo_livelywebputer
+          ref: ${{ inputs.kernel_ref || 'main' }}
+          path: kernel
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The kernel's own install step builds libraries keo does not ship (and downloads more), so skip its scripts. The
+      # one thing the build needs from them is the patch to lively-loader, which the bundle step loads.
+      - name: Install the kernel's packages
+        working-directory: kernel
+        run: |
+          npm ci --ignore-scripts
+          npx patch-package
+
+      - name: Unit test
+        run: npm run test:did
+
+      - name: Build the package
+        run: node extension/build.js dist
+
+      - name: Zip
+        id: zip
+        run: |
+          name="keo-${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          mv dist keo
+          zip -qr "$name.zip" keo
+          echo "file=$name.zip" >> "$GITHUB_OUTPUT"
+          cat keo/keo-build.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keo-package
+          path: ${{ steps.zip.outputs.file }}
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.zip.outputs.file }}" --title "$GITHUB_REF_NAME" --generate-notes
