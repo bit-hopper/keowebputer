@@ -1,0 +1,14 @@
+{
+  "name": "keowebputer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "keo: a live, modifiable browser runtime with no backend. Prototype.",
+  "license": "MIT",
+  "scripts": {
+    "build": "node extension/build.js dist",
+    "test:did": "node tests/keo-did-test.js"
+  },
+  "devDependencies": {
+    "playwright-core": "1.63.0"
+  }
+}
