@@ -36,15 +36,15 @@ jobs:
       - name: Zip
         id: zip
         run: |
-          name="keo-${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
-          mv dist keo
-          zip -qr "$name.zip" keo
+          name="keo-webputer-${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          mv dist keo-webputer
+          zip -qr "$name.zip" keo-webputer
           echo "file=$name.zip" >> "$GITHUB_OUTPUT"
-          cat keo/keo-build.json
+          cat keo-webputer/keo-build.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: keo-package
+          name: keo-webputer
           path: ${{ steps.zip.outputs.file }}
 
       - name: Publish the release
