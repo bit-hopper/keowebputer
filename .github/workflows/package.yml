@@ -42,8 +42,10 @@ jobs:
           npm ci --ignore-scripts
           npx patch-package
 
-      - name: Unit test
-        run: npm run test:did
+      - name: Unit tests
+        run: |
+          npm run test:did
+          npm run test:release
 
       - name: Build the package
         run: node extension/build.js dist

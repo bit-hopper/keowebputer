@@ -13,6 +13,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 const { buildBundle } = require('./kernel-bundle');
+const { listPackage } = require('./package-files');
 
 // ---- arguments
 let OUT = null, KERNEL_ARG = process.env.KEO_KERNEL || null;
@@ -186,6 +187,12 @@ lively.Config.set('loadUserConfig', false);
     '<button id="unlock" type="button">Unlock with passkey</button>' +
     '<script src="core/lib/libsodium/sodium.js"></script><script src="core/lively/identity/IdentityVaultFrame.js"></script>' +
     '</body></html>\n');
+  // The public key(s) a release must be signed with, pinned in the package. Without the file the package takes no updates.
+  // (Never generate or sign here: the private key is held offline, see sign-release.js.)
+  const updateKey = path.join(__dirname, 'update-key.json');
+  if (fs.existsSync(updateKey)) put('update-key.json', fs.readFileSync(updateKey));
+  else console.warn('no extension/update-key.json: this package will not take updates');
+  put('keo-release.js', fs.readFileSync(path.join(SHELL, 'keo-release.js')));
   put('bg.js', "chrome.action.onClicked.addListener(() => chrome.tabs.create({ url: chrome.runtime.getURL('start.html') }));\n");
   put('manifest.json', JSON.stringify({
     manifest_version: 3, name: 'keo (prototype)', version: '0.0.3', description: 'keo world from the package, no server. Prototype.',
@@ -209,6 +216,10 @@ lively.Config.set('loadUserConfig', false);
     kernel: { commit: kernelGit('rev-parse HEAD'), branch: kernelGit('rev-parse --abbrev-ref HEAD'),
       changed: changed === null ? null : changed.split('\n').filter(Boolean).slice(0, 100) }
   }, null, 2) + '\n');
+
+  // 6. every file with its hash, written last. It is the baseline an update is diffed against (what the package has), not a
+  //    security statement: whatever an update downloads is checked against the signed release, never against this.
+  put('keo-files.json', JSON.stringify({ v: 1, files: listPackage(OUT) }) + '\n');
 
   console.log('built ' + OUT + ': ' + files + ' files, ' + bytes + ' bytes, extension id ' + id + ', bundle ' + hash + ', kernel ' + (kernelGit('rev-parse --short HEAD') || 'unknown') + (changed ? ' (+' + changed.split('\n').filter(Boolean).length + ' changed paths)' : ''));
 })().catch((e) => { console.error(e); process.exit(1); });

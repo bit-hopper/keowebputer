@@ -36,12 +36,24 @@ node extension/build.js dist --kernel <path to the kernel checkout>
 
 The built package contains the kernel's code, so it carries the kernel's licence notice (`LICENSE-lively-kernel`). The libraries the kernel vendors have their own licences; they have not been audited here.
 
+## Releases
+
+A release is the built package plus a signed list of every file in it and its hash (`release-<n>.json`). The signing key is held offline by the person who cuts the release; the build and CI never see it. The package pins the public key (`extension/update-key.json`, copied into the package) and a client accepts only a release signed by a pinned key whose version is higher than the one it runs.
+
+```
+node extension/sign-release.js keygen --out <key file outside this repository>    # once; commit the printed public key as extension/update-key.json
+node extension/sign-release.js sign <built package folder> --key <key file> --version <n> --name <label>
+```
+
+Which files an update may carry, and what it must leave to a new package, is decided by `overlayable` in `shell/keo-release.js`.
+
 ## Tests
 
 The browser tests drive a headed browser through `playwright-core` with the extension loaded. Their first argument is the folder that holds `node_modules/playwright-core` (here: `.`).
 
 ```
 npm run test:did                                     # no browser: DID, inception and verifier
+npm run test:release                                 # no browser: release signing and verification
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator
 node tests/keo-bridge-test.js   . dist <work dir>    # the shell <-> world bridge
 node tests/keo-identity-real.js . dist <work dir>    # a REAL authenticator: you approve four OS prompts
