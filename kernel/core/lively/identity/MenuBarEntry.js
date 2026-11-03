@@ -184,11 +184,15 @@ module("lively.identity.MenuBarEntry")
           }
           if (lively.identity.did.currentUser().local) {
             var did = lively.identity.did.currentUser().did;
+            // What is about the identity itself (its DID, its name) sits in a submenu, so the top level stays short and
+            // is what a person reaches for: their page, and signing out.
             return [
-              [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
-              ["Copy DID",           function () { self.copyDid(); }],
               ["My homestar",        function () { self.openMyHomestar(); }],
-              ["Rename this identity ...", function () { self.renameLocal(); }],
+              ["Identity", [
+                [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
+                ["Copy DID",           function () { self.copyDid(); }],
+                ["Rename this identity ...", function () { self.renameLocal(); }],
+              ]],
               ["Sign out",           function () { self.signOut(); }],
             ];
           }
@@ -335,7 +339,9 @@ module("lively.identity.MenuBarEntry")
           var loggedIn = lively.identity.did.isLoggedIn();
           var user = loggedIn && lively.identity.did.currentUser();
           this.textString = loggedIn ? lively.identity.did.handleLabel() : "sign in";
-          this.updateAvatar(loggedIn ? (user.local ? user.displayLabel : user.handle) : null);
+          // A local identity's handle IS its DID: the avatar follows the identity, so renaming it does not change it (and
+          // it matches the one on the home page and in the sign-in dialog).
+          this.updateAvatar(loggedIn ? user.handle : null);
           this.fitWidth();
           this.placeUnreadDot();
           if (loggedIn) lively.identity.MenuBarEntry.startUnreadPolling(this);
@@ -434,6 +440,9 @@ module("lively.identity.MenuBarEntry")
 
           this._avatarMorph.setImageURL(
             lively.identity.postCardUtils.identiconDataUrl(handle, AV));
+
+          // A local identity has no profile on a server to fetch an uploaded avatar from.
+          if (/^did:keo:/.test(handle)) return;
 
           fetch("/@" + handle + "/profile", { credentials: "include" })
             .then(function (res) { return res.ok ? res.json() : null; })

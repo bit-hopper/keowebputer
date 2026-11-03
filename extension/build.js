@@ -178,7 +178,8 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
 
   // 5. where this package came from: the kernel commit the snapshot in kernel/ was taken from (the snapshot is verbatim, so
   //    the commit says what the runtime's files are). gateWorld says the package carries a landing page for the world to start
-  //    from (see 5b), which the shell then uses as its sign-in screen instead of its own HTML one. Written after 5b for that.
+  //    from (see 5b). The shell does not read it (a package without one starts the blank world with the sign-in dialog open); it
+  //    is there so a test, or a person looking at a package, can tell which of the two it is. Written after 5b for that.
   put('keo-build.json', JSON.stringify({
     builtAt: new Date().toISOString(), version: VERSION, extensionId: id, bundleHash: hash,
     kernel: { commit: SNAPSHOT.commit }, gateWorld: fs.existsSync(path.join(OUT, 'gate-world.html'))

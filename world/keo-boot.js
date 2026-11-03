@@ -3,7 +3,8 @@
 // is already in place. The bootstrap is added as a script element: it finds its own URL among the page's scripts to work
 // out the code base, which a dynamically added script satisfies just like the static tag it replaces.
 //
-// The handshake also says how to start (init.startup, decided by the shell's sign-in screen, see shell/keo-gate.js):
+// The handshake also says how to start (init.startup, decided by the shell, see shell/keo-gate.js):
+//   gate      nobody signed in: the package's landing page (gate-world.html), or the blank world with the sign-in dialog open
 //   guest     the document as it is: the blank world
 //   world     a saved world: its serialized data replaces the blank world's in this document, before the bootstrap reads it
 //   homestar  a new identity (nothing saved yet): the blank world, then the identity's home page opened on it
@@ -34,7 +35,8 @@
   function applySavedWorld(doc) {
     var saved = new DOMParser().parseFromString(String(doc), 'text/html').querySelector('script[type="text/x-lively-world"]');
     var mine = document.querySelector('script[type="text/x-lively-world"]');
-    if (!saved || !mine) throw new Error('the saved page holds no world');
+    if (!saved) throw new Error('the saved page holds no world');
+    if (!mine) throw new Error('this page has no world script yet (readyState ' + document.readyState + ')');
     mine.textContent = saved.textContent;
     var level = saved.getAttribute('data-migrationlevel');
     if (level !== null) mine.setAttribute('data-migrationlevel', level);
@@ -150,6 +152,13 @@
     });
   }
 
+  // The same dialog the landing page's own link opens, in its local mode (the identities on this device, by label).
+  function openSignIn() {
+    lively.require('lively.identity.LoginDialog').toRun(function () {
+      lively.BuildSpec('lively.identity.LoginDialog').createMorph().openInWorldCenter();
+    });
+  }
+
   // The runtime's own "world is loaded" queue (lively.whenLoaded) exists before its configuration does, and a callback queued
   // that early fails. So poll for the loaded world itself, the way the tests do, and install once it is there.
   function afterLoad(startup) {
@@ -164,18 +173,35 @@
         if (startup && startup.kind === 'world') local.current = startup.name;
         refreshList();
         if (startup && startup.kind === 'homestar') openHomestar(startup.session, startup.warning);
+        if (startup && startup.noLanding) openSignIn();
         return;
       }
       if (++tries < 1200) setTimeout(wait, 100);
     })();
   }
 
+  // This script runs while the page is still being parsed, and the page's own world script (the element a saved world is
+  // copied into) comes AFTER it. The shell's answer can be handled before the parser has made that element (seen as about one
+  // start in two on the saved-world path: the copy found no element, and the person landed on the home page instead of
+  // their world). So the saved world is applied once the document is parsed, which is also before the bootstrap is added
+  // (go() waits for the load event). A timer would only make the race rarer.
+  function whenParsed(fn) {
+    if (document.readyState !== 'loading') fn();
+    else document.addEventListener('DOMContentLoaded', fn, { once: true });
+  }
+
   if (!keo) return go();
-  keo.ready.then(function (init) {
+  keo.ready.then(function (init) { whenParsed(function () { start(init); }); }, function (e) {
+    console.warn('keo: starting without the shell\'s storage (' + e.message + ')');
+    go();
+  });
+
+  function start(init) {
     var startup = init && init.startup;
     if (startup && startup.kind === 'gate') {
       // Nobody is signed in: start from the package's own landing page (a saved world shipped as gate-world.html), whose
-      // buttons sign in or create an identity through the shell. Falls back to the blank world if it is not there.
+      // buttons sign in or create an identity through the shell. Without it the blank world starts with the sign-in dialog
+      // open on it, so a package with no landing page can still be entered.
       try {
         var x = new XMLHttpRequest();
         x.open('GET', 'gate-world.html', false);
@@ -184,15 +210,15 @@
         // The page names its pictures as uploads on some host; here they are files of the package, so make those addresses
         // relative to the package (the world works with no network).
         applySavedWorld(x.responseText.replace(/https?:\/\/[^"\\\/]+(?=\/users\/[^"\\]+\/uploads\/)/g, ''));
-      } catch (e) { console.warn('keo: the landing page could not be loaded (' + e.message + ')'); }
+      } catch (e) {
+        console.warn('keo: no landing page (' + e.message + '), opening the sign-in dialog on the blank world');
+        startup = { kind: 'gate', noLanding: true };
+      }
     } else if (startup && startup.kind === 'world') {
       try { applySavedWorld(startup.doc); }
       catch (e) { console.warn('keo: starting the blank world (' + e.message + ')'); startup = { kind: 'homestar', session: startup.session, warning: 'Your saved world could not be opened.' }; }
     }
     go();
     afterLoad(startup);
-  }, function (e) {
-    console.warn('keo: starting without the shell\'s storage (' + e.message + ')');
-    go();
-  });
+  }
 })();

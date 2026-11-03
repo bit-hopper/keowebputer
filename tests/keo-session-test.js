@@ -1,7 +1,9 @@
-// End-to-end test of the sign-in screen, the session and saved worlds in the built keo extension.
+// End-to-end test of the session and saved worlds in the built keo extension.
 // Usage: node keo-session-test.js <repo root> <extension folder> <work dir>
-// A headed browser with the extension loaded, `localhost` unresolvable, and a CDP virtual authenticator with PRF. It drives the
-// real sign-in screen (the shell's own HTML one, start.html#html; the world's landing page is keo-gate-test.js): create an identity (two passkey prompts, lands on the home page), check the menu bar and the ambient panel
+// A headed browser with the extension loaded, `localhost` unresolvable, and a CDP virtual authenticator with PRF. The page
+// starts as the sign-in (nobody is signed in); the identity ceremonies are asked of the shell directly and the world is asked for
+// world.go {kind:'enter'}, as the sign-in dialog does (keo-gate-test.js drives the dialogs themselves): create an identity (two
+// passkey prompts, lands on the home page), check the menu bar and the ambient panel
 // see the session, start a blank world and save it, refresh the tab (the session comes back with no prompt), look at what is
 // stored on disk, sign out from the world, sign in again (lands on the saved world), and break a saved record on purpose.
 // NOT covered: a browser RESTART (a virtual authenticator does not survive one, so its passkey is gone), and a real
@@ -52,35 +54,47 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
       hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
 
-    // ---- 1. the gate: nothing runs until someone chooses
-    await page.goto(`chrome-extension://${ID}/start.html#html`);
-    await sleep(1500);
-    check('gate: the sign-in screen is showing', await page.evaluate(() => !document.getElementById('gate').classList.contains('hidden')));
-    check('gate: no world has been started', !worldFrame(page));
-    check('gate: no identity yet, so no sign-in list', await page.evaluate(() => document.getElementById('signinbox').hidden));
+    // ---- 1. the gate: nobody is signed in, so the world starts as the sign-in (the package's landing page, or the blank world
+    //         with the dialog open); the shell draws no sign-in screen of its own
+    await page.goto(`chrome-extension://${ID}/start.html`);
+    let frame = await waitForWorld(page, 'gate');
+    check('gate: the world started as the sign-in, with no session', (await page.evaluate(() => window.keoIdentity.current())) === null);
+    check('gate: the shell page has no sign-in screen of its own', await page.evaluate(() => !document.getElementById('gate') && !document.getElementById('idlist') && !document.getElementById('create')));
+    check('gate: no identity yet', (await page.evaluate(() => window.keoIdentity.list())).length === 0);
 
-    // ---- 2. a new identity lands on the home page
-    await page.fill('#label', 'Maya');
-    await page.click('#create');
-    let frame = await waitForWorld(page, 'homestar');
+    // ---- 2. a new identity lands on the home page. The dialogs ask the shell for the ceremony and then for world.go {kind:'enter'}
+    //         (keo-gate-test.js drives the dialogs themselves); the same two steps are made here directly.
+    await page.evaluate(() => window.keoIdentity.create({ label: 'Maya' }));
+    await keoCall(frame, 'world.go', { kind: 'enter' }).catch(() => {});
+    frame = await waitForWorld(page, 'homestar');
     const st = await frame.evaluate(() => window.keo.init.startup);
     check('new identity: the world starts as the home page', st.kind === 'homestar' && st.session && st.session.label === 'Maya', st);
     const did = st.session.did;
     check('new identity: two passkey prompts (create, sign the inception), not three', JSON.stringify(await page.evaluate(() => window.__cred)) === '{"create":1,"get":1}', await page.evaluate(() => window.__cred));
-    check('new identity: the gate is gone and there is no top bar (the world has the whole page)', await page.evaluate(() => document.getElementById('gate').classList.contains('hidden') && !document.getElementById('bar') && document.getElementById('world').getBoundingClientRect().height >= innerHeight - 1));
+    check('new identity: there is no top bar (the world has the whole page)', await page.evaluate(() => !document.getElementById('bar') && document.getElementById('world').getBoundingClientRect().height >= innerHeight - 1));
     const menu = await frame.evaluate(() => {
       const did = lively.identity.did, bar = $world.get(/MenuBar/), entry = $world.get('IdentityMenuBarEntry') || (bar && bar.submorphs.filter((m) => m.name === 'IdentityMenuBarEntry')[0]);
-      const items = entry ? entry.morphMenuItems().map((i) => i[0]) : null;
+      const top = entry ? entry.morphMenuItems() : null, items = top && top.map((i) => i[0]), sub = top && (top.filter((i) => i[0] === 'Identity')[0] || [])[1], subItems = sub && sub.map((i) => i[0]);
       const panel = lively.identity.AmbientPresencePanel && lively.identity.AmbientPresencePanel._panel;
-      return { loggedIn: did.isLoggedIn(), label: did.handleLabel(), entryText: entry && entry.textString, items, ambient: !!(panel && panel.world && panel.world()), local: did.currentUser() && did.currentUser().local };
+      return { loggedIn: did.isLoggedIn(), label: did.handleLabel(), entryText: entry && entry.textString, items, subItems, avatar: !!(entry && entry._avatarHandle), avatarSeed: entry && entry._avatarHandle, ambient: !!(panel && panel.world && panel.world()), local: did.currentUser() && did.currentUser().local };
     });
     check('menu bar: the world knows it is signed in, and shows the label (not a handle, not the DID)', menu.loggedIn && menu.local && menu.label === 'Maya' && menu.entryText === 'Maya', menu);
-    check('menu bar: the menu has a short DID line, Copy DID, My homestar, Rename, Sign out', menu.items && /^keo:.{4}….{4}/.test(menu.items[0]) && menu.items.includes('Copy DID') && menu.items.includes('My homestar') && menu.items.includes('Sign out'), menu.items);
+    check('menu bar: the top level is short (My homestar, Identity, Sign out); the DID line, Copy DID and Rename are under Identity', JSON.stringify(menu.items) === JSON.stringify(['My homestar', 'Identity', 'Sign out']) && menu.subItems && /^keo:.{4}….{4}/.test(menu.subItems[0]) && menu.subItems.includes('Copy DID') && menu.subItems.some((l) => /^Rename/.test(l)), menu);
+    check('menu bar: the avatar is seeded by the DID (so a rename keeps it)', menu.avatarSeed === did, menu.avatarSeed);
     check('ambient panel: it is open for the signed-in identity', menu.ambient === true, menu);
-    await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'chrome-extension://' + ID }).catch(() => {});
-    const copied = await frame.evaluate(() => new Promise((res) => lively.identity.localIdentity.copyText(lively.identity.did.currentUser().did, res)));
-    const clip = await page.evaluate(() => navigator.clipboard.readText().catch((e) => 'ERR ' + e.message));
-    check('copy DID: the full DID is on the clipboard', copied === true && clip === did, { copied, clip: String(clip).slice(0, 80) });
+    // The clipboard is not read back: reading it from an extension page raises a permission prompt that only a person can answer
+    // (and the browser cannot grant it to this origin), so a run would hang or depend on someone's click. What is checked is
+    // what the world asks the browser to copy, whichever of the two write paths copyText takes.
+    const asked = await frame.evaluate(() => new Promise((res) => {
+      var seen = [], cb = navigator.clipboard, write = cb && cb.writeText, exec = document.execCommand;
+      if (cb) cb.writeText = function (t) { seen.push(t); return write.apply(cb, arguments); };
+      document.execCommand = function (c) { var ta = document.body.lastElementChild; if (c === 'copy' && ta && ta.tagName === 'TEXTAREA') seen.push(ta.value); return exec.apply(document, arguments); };
+      lively.identity.localIdentity.copyText(lively.identity.did.currentUser().did, function (ok) {
+        if (cb) cb.writeText = write; document.execCommand = exec;
+        res({ ok: ok, seen: seen });
+      });
+    }));
+    check('copy DID: the world asks the browser to copy the full DID, and the browser accepts', asked.ok === true && asked.seen.length >= 1 && asked.seen.every((t) => t === did), asked);
     const text = await frame.evaluate(() => { const out = []; (function walk(m) { if (m.textString) out.push(String(m.textString)); (m.submorphs || []).forEach(walk); })($world); return out.join(' | '); });
     check('new identity: the home page shows the label', /Maya/.test(text), text.slice(0, 300));
     await page.screenshot({ path: path.join(WORK, 'session-homestar.png') });
@@ -167,16 +181,16 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     check('refresh: what is kept for it is one non-extractable key, seen recently', rec.length === 1 && rec[0].extractable === false && rec[0].seenAgo < 60000, rec);
     await page.screenshot({ path: path.join(WORK, 'session-returning.png') });
     const other = await ctx.newPage();
-    await other.goto('chrome-extension://' + ID + '/start.html#html');
-    await sleep(1500);
-    check('another tab does not pick the session up: it shows the sign-in screen', await other.evaluate(() => !document.getElementById('gate').classList.contains('hidden') && /Maya/.test(document.getElementById('idlist').textContent)));
+    await other.goto('chrome-extension://' + ID + '/start.html');
+    await waitForWorld(other, 'gate');
+    check('another tab does not pick the session up: it starts as the sign-in, and the identity is on the device', await other.evaluate(async () => (await window.keoIdentity.current()) === null && (await window.keoIdentity.list()).map((i) => i.label).join() === 'Maya'));
     await other.close();
     await page.bringToFront();
 
     // ---- 8. sign out
     await frame.evaluate(() => { lively.identity.localIdentity.signOut(function () {}); });
-    await sleep(2500);
-    check('sign out (asked by the world): back at the gate with no session and no world', await page.evaluate(async () => !document.getElementById('gate').classList.contains('hidden') && (await window.keoIdentity.current()) === null) && !worldFrame(page));
+    frame = await waitForWorld(page, 'gate');
+    check('sign out (asked by the world): back at the sign-in with no session', (await page.evaluate(() => window.keoIdentity.current())) === null);
 
     // ---- 9. a broken record must not lock the person out
     await page.evaluate(async () => {
@@ -185,7 +199,8 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
         g.onsuccess = () => { const r = g.result[0]; const ct = new Uint8Array(r.ct); ct[100] ^= 1; r.ct = ct; s.put(r); }; t.oncomplete = res; });
       db.close();
     });
-    await page.click('#idlist button');
+    await page.evaluate(async () => window.keoIdentity.signIn({ did: (await window.keoIdentity.list())[0].did }));
+    await keoCall(frame, 'world.go', { kind: 'enter' }).catch(() => {});
     frame = await waitForWorld(page, 'homestar');
     const st3 = await frame.evaluate(() => window.keo.init.startup);
     check('tamper: a changed body is refused, the person lands on the home page with a warning', st3.kind === 'homestar' && /could not be opened/.test(st3.warning || ''), st3.warning);
@@ -208,7 +223,9 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     });
     check('remove: the identity and its saved worlds are gone', rm.ok && left.bodies === 0 && left.index === 0, { rm, left });
 
-    check('no page errors', errors.length === 0, errors.slice(0, 5));
+    // A package with a landing page starts it as the sign-in: it is the user's own world and embeds a video player and a map that want location (the extension's policy blocks it).
+    const mine = errors.filter((e) => !/youtube\.com|Geolocation access/.test(e));
+    check('no page errors', mine.length === 0, mine.slice(0, 5));
   } catch (e) {
     console.log('FAIL test aborted: ' + (e && e.stack || e));
     console.log('errors seen: ' + JSON.stringify(errors.filter((x) => !/ERR_FILE_NOT_FOUND/.test(x)).slice(-8)));

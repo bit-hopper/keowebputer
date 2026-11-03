@@ -8,42 +8,8 @@
   #vault { position: fixed; left: 0; top: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
   #vault.shown { left: 50%; top: 50%; width: 320px; height: 96px; transform: translate(-50%, -50%); opacity: 1; pointer-events: auto;
                  z-index: 2147483647; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,.35); }
-  /* The sign-in screen: this page's own, so the passkey prompts and the choice of identity never run inside the world. */
-  #gate { position: absolute; left: 0; right: 0; top: 0; bottom: 0; overflow: auto; background: #fafafa; display: flex; justify-content: center; }
-  #gate.hidden { display: none; }
-  #card { width: min(26rem, 100%); box-sizing: border-box; padding: 2rem 1.25rem; }
-  #card h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
-  #card p { color: #555; margin: .25rem 0 1rem; }
-  #card h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: #777; margin: 1.5rem 0 .5rem; }
-  #card button, #card input { font: inherit; box-sizing: border-box; }
-  #idlist button { display: block; width: 100%; text-align: left; padding: .6rem .75rem; margin: 0 0 .5rem; cursor: pointer; background: #fff; border: 1px solid #ccc; border-radius: 6px; }
-  #idlist button small { display: block; color: #777; margin-top: .15rem; }
-  #newrow { display: flex; gap: .5rem; }
-  #label { flex: 1; min-width: 0; padding: .5rem .6rem; border: 1px solid #ccc; border-radius: 6px; }
-  #create { padding: .5rem .9rem; cursor: pointer; }
-  #guest { background: none; border: 0; padding: 0; margin-top: 1.5rem; color: #36c; cursor: pointer; text-decoration: underline; }
-  #msg { min-height: 1.4em; margin-top: 1rem; color: #555; }
-  #msg.err { color: #b00020; }
-  code { background: #eee; padding: 0 .25rem; }
 </style>
-<div id="gate" class="hidden">
-  <div id="card">
-    <h1>keo</h1>
-    <p>Your identity lives on this device, behind a passkey. Nothing leaves it.</p>
-    <div id="signinbox" hidden>
-      <h2>Sign in</h2>
-      <div id="idlist"></div>
-    </div>
-    <h2>New identity</h2>
-    <div id="newrow">
-      <input id="label" type="text" maxlength="64" placeholder="Your name for it, e.g. My name" autocomplete="off">
-      <button id="create">Create</button>
-    </div>
-    <button id="guest">Continue without an identity</button>
-    <div id="msg" role="status"></div>
-  </div>
-</div>
-<!-- Both frames get their src from shell.js, after its message listener exists (the world's only once the gate lets it start). -->
+<!-- Both frames get their src from shell.js, after its message listener exists (the world's only once keo-gate.js has decided how it starts). -->
 <iframe id="world"></iframe>
 <iframe id="vault" title="Identity vault" allow="publickey-credentials-get; publickey-credentials-create" tabindex="-1" aria-hidden="true"></iframe>
 <script src="shell-store.js"></script>

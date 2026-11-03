@@ -38,6 +38,7 @@ module("lively.identity.LoginDialog")
     "lively.identity.DID",
     "lively.identity.WebAuthn",
     "lively.identity.LocalIdentity",
+    "lively.identity.PostCardUtils",
     "lively.identity.ObjectStore",
     "lively.identity.PasskeyPrimingDialog",
     "lively.persistence.BuildSpec",
@@ -231,6 +232,7 @@ module("lively.identity.LoginDialog")
         var pad = 14;
         var y = pad;
         var w = 394 - pad * 2;
+        var ROW_H = 38, AV = 28;
 
         function addLabel(text) {
           var lbl = new lively.morphic.Text(lively.rect(pad, y, w, 16), text);
@@ -274,7 +276,7 @@ module("lively.identity.LoginDialog")
           list.forEach(function (id) { labels[id.label] = (labels[id.label] || 0) + 1; });
           list.forEach(function (id) {
             var text = labels[id.label] > 1 ? id.label + "  (" + lively.identity.localIdentity.shortDid(id.did) + ")" : id.label;
-            var btn = new lively.morphic.Button(lively.rect(pad, y, w, 28), text);
+            var btn = new lively.morphic.Button(lively.rect(pad, y, w, ROW_H), text);
             btn.name = "identityBtn";
             btn.did = id.did;
             content.addMorph(btn);
@@ -282,7 +284,15 @@ module("lively.identity.LoginDialog")
             lively.bindings.connect(btn, "fire", self, "signInLocal", {
               converter: function () { return this.sourceObj.did; },
             });
-            y += 34;
+            // The same identicon the menu bar and the home page show for this identity: seeded by the DID, not the label,
+            // so renaming does not change it. It sits over the button's left edge and lets clicks through to the button.
+            var av = new lively.morphic.Image(lively.rect(pad + 8, y + (ROW_H - AV) / 2, AV, AV));
+            av.name = "identityAvatar";
+            av.applyStyle({ borderRadius: AV / 2, borderWidth: 0, clipMode: "hidden" });
+            av.setImageURL(lively.identity.postCardUtils.identiconDataUrl(id.did, AV));
+            av.ignoreEvents();
+            content.addMorph(av);
+            y += ROW_H + 6;
           });
         }
 

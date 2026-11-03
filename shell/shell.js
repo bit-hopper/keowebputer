@@ -1,4 +1,4 @@
-// keo shell page logic: the other end of the world bridge. The world is started by the sign-in screen (keo-gate.js).
+// keo shell page logic: the other end of the world bridge. The world is started by keo-gate.js, once it knows how.
 //
 // The world runs in a sandboxed iframe (world.html): opaque origin, no storage, no passkeys. This page is the extension's
 // own origin and has them all, so it serves the world's requests:
@@ -120,8 +120,8 @@
     }
   });
 
-  // The vault starts now, with the listener in place. The world starts only when the sign-in screen (keo-gate.js) calls
-  // start(), so its first request cannot arrive unheard and cannot arrive before someone chose how to enter.
+  // The vault starts now, with the listener in place. The world starts only when keo-gate.js calls
+  // start(), so its first request cannot arrive unheard and cannot arrive before it is known how to enter.
   vault.src = 'vault.html';
   // Where a signed-in identity lands on entering: the world it saved last, else (a new identity, or nothing saved) its home page.
   // A last world that cannot be read does not lock the person out: they land on the home page with a warning.
@@ -140,8 +140,8 @@
     return window.keoIdentity.current().then(function (session) {
       if (!session) throw new Error('Sign in to move between pages.');
       var kind = String(a.kind);
-      // 'enter': what the sign-in screen does after a sign-in or a create. A world that is the sign-in screen (the morphic one)
-      // asks for it once its identity dialog has a session; the choice of page stays with this page.
+      // 'enter': what the sign-in dialog does after a sign-in or a create. The world asks for it once the dialog has a
+      // session; the choice of page stays with this page.
       if (kind === 'enter') return landing(session);
       if (kind === 'homestar' || kind === 'blank') return { kind: kind, session: session };
       if (kind !== 'world') throw new Error('Unknown page kind.');
