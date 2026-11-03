@@ -1095,9 +1095,9 @@
       // if urlString points to a relative resource then prepend the
       // current protocol, port, path to it to make it absolute
       urlString = this.removeQueries(urlString);
-      // a URL on a browser-extension origin (chrome-extension:) is absolute too, so a copy of the runtime
+      // a URL on a browser-extension origin (chrome-extension:, moz-extension:) is absolute too, so a copy of the runtime
       // packaged as an extension does not get the current directory prepended to its own URLs
-      if (!urlString.match(/^http|^file|^chrome-extension:|^\/\//)) {
+      if (!urlString.match(/^http|^file|^chrome-extension:|^moz-extension:|^\/\//)) {
         // make absolute
         urlString = this.currentDir() + urlString;
       }

@@ -508,7 +508,7 @@ module("lively.Network")
       },
 
       ensureAbsoluteURL: function (urlString) {
-        return /^(http|file|chrome-extension).*/.test(urlString)
+        return /^(http|file|chrome-extension|moz-extension).*/.test(urlString)
           ? new URL(urlString)
           : URL.source
               .notSvnVersioned()
@@ -516,12 +516,12 @@ module("lively.Network")
               .withRelativePath(urlString);
       },
       ensureAbsoluteCodeBaseURL: function (urlString) {
-        return /^(http|file|chrome-extension).*/.test(urlString)
+        return /^(http|file|chrome-extension|moz-extension).*/.test(urlString)
           ? new URL(urlString)
           : URL.codeBase.withRelativePath(urlString);
       },
       ensureAbsoluteRootPathURL: function (urlString) {
-        return /^(http|file|chrome-extension).*/.test(urlString)
+        return /^(http|file|chrome-extension|moz-extension).*/.test(urlString)
           ? new URL(urlString)
           : new URL(Config.rootPath).withRelativePath(urlString);
       },
@@ -570,7 +570,7 @@ module("lively.Network")
       isURL: function (obj) {
         if (!obj) return false;
         if (obj.isURL) return true;
-        return /^(http|file|chrome-extension).*/.test(String(obj));
+        return /^(http|file|chrome-extension|moz-extension).*/.test(String(obj));
       },
     });
 
