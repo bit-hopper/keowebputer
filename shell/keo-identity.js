@@ -14,7 +14,9 @@
 //   7. `accountSecret` is wrapped under the PRF-derived key and everything is written to IndexedDB. The secret itself is
 //      then dropped; it exists unwrapped only inside this function.
 // Two passkey prompts happen (create, then sign H(e)); the second is unavoidable, since the passkey's public key only
-// exists after the first and the inception has to contain it.
+// exists after the first and the inception has to contain it. That is all creating costs: the device key is listed in the
+// inception (state.devices), so the signature that makes the identity also delegates this device, and the new identity's
+// first session needs no third prompt (see "sign-in and the session").
 //
 // `next` is null: a first-run account is allowed to have no pre-committed next key and is flagged notRecoverable until a
 // second credential on another rpId is enrolled. Nothing here enrols one.
@@ -159,6 +161,8 @@
     var inception = { v: 1, type: 'inception', seq: 0, prev: null, time: now, state: {
       authority: { threshold: 1, keys: [{ id: credentialId, jwk: authJwk, rpId: rpId, kind: attachment === 'cross-platform' ? 'security-key' : 'platform', addedAt: now }] },
       next: null,
+      // The device key this identity was made on. Listing it here is what lets the inception signature delegate it.
+      devices: [{ id: kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson(deviceJwk)))), jwk: deviceJwk, addedAt: now }],
       recovery: { guardians: [], threshold: 2, delayDays: 3 },
       discovery: { key: disc.publicZ32, version: 1 },
       services: [], claims: { handles: [] }, revoked: [] } };
@@ -190,7 +194,19 @@
       discoveryKey: disc.privateKey
     };
     await dbPut(rec);
+    // Signing in as the identity just made: the secret is in hand, and the inception's own authority signature is the
+    // delegation of this device (cert.via = 'inception': a verifier checks the device key against the verified inception's
+    // state.devices). Only when nobody is signed in: the world can ask for an identity to be made, and that must not swap
+    // the session a person is using.
+    if (!session) {
+      await startSession(rec, secret, await worldKeyFrom(secret), {
+        v: 1, via: 'inception', did: did, devicePubKeyJwk: deviceJwk, authorityKeyId: credentialId,
+        issuedAt: now, exp: new Date(Date.parse(now) + SESSION_MS).toISOString(), aud: location.origin, scope: SESSION_SCOPE.slice(),
+        assertion: { authenticatorData: sigs.authority[0].authenticatorData, clientDataJSON: sigs.authority[0].clientDataJSON, signature: sigs.authority[0].signature }
+      });
+    }
     var out = summary(rec);
+    out.session = sessionInfo();
     out.prfAtCreate = !!prfAtCreate;
     out.authenticatorAttachment = attachment;
     // what kind of authenticator answered (not part of the log): e.g. ["internal"] for a built-in platform authenticator,
@@ -223,23 +239,115 @@
   //     its own (registering with a host, a later step).
   //   - scope names what the session is for. The strings are this prototype's own and nothing enforces them yet.
   //   - exp: SESSION_MS after sign-in. A session that has expired is ended; it is never renewed without a prompt.
-  // The session lives ONLY in this page's memory (a reload of this page, or closing the browser, ends it) and so does the key
-  // that encrypts saved worlds. The world can read the public part (session.current) and can neither start, extend nor end
-  // it, and never receives a key.
+  // The session is held in this page's memory. The world can read the public part (session.current) and can neither start,
+  // extend nor swap it, and never receives a key. Ending it is open to the world (it only lowers privilege).
+  //
+  // SURVIVING A REFRESH. A refresh of the tab destroys this page's memory, and a passkey prompt on every refresh made the
+  // app unusable, so the session is also kept in IndexedDB (keo-session: the public part and the world key, a NON-extractable
+  // key) and found again by an id in this tab's sessionStorage. What that costs: while the record exists, anyone who can read
+  // this browser profile's files can use the world key without the passkey (the identity's own secret stays wrapped under
+  // the passkey either way). So the record is short-lived: the live tab refreshes its 'seen' time every HEARTBEAT_MS, a
+  // record is resumed only if it was seen within RESUME_WINDOW_MS, and a record not seen for longer is deleted by the next
+  // page that loads. A tab closed for longer than that, or a browser restart, needs the passkey again. sessionStorage is
+  // per tab, so another tab never picks up this one's session.
   var SESSION_MS = 12 * 60 * 60 * 1000;
   var SESSION_SCOPE = ['world:read', 'world:write', 'sign'];
-  var session = null;      // { info, worldKey, timer }
+  var HEARTBEAT_MS = 20 * 1000, RESUME_WINDOW_MS = 2 * 60 * 1000;
+  var SESSION_DB = 'keo-session', SESSION_STORE = 's', TAB_KEY = 'keo.session';
+  var session = null;      // { id, info, worldKey, timer, beat }
+
+  function sessionDb() {
+    return new Promise(function (res, rej) {
+      var q = indexedDB.open(SESSION_DB, 1);
+      q.onupgradeneeded = function () { q.result.createObjectStore(SESSION_STORE, { keyPath: 'id' }); };
+      q.onsuccess = function () { res(q.result); };
+      q.onerror = function () { rej(q.error); };
+    });
+  }
+  function sessionTx(mode, fn) {
+    return sessionDb().then(function (db) {
+      return new Promise(function (res, rej) {
+        var t = db.transaction(SESSION_STORE, mode), out;
+        try { out = fn(t.objectStore(SESSION_STORE)); } catch (e) { db.close(); return rej(e); }
+        t.oncomplete = function () { db.close(); res(out && 'result' in out ? out.result : undefined); };
+        t.onabort = t.onerror = function () { db.close(); rej(t.error || new Error('session store transaction failed')); };
+      });
+    });
+  }
+  function tabId(set) {
+    try { if (set === null) sessionStorage.removeItem(TAB_KEY); else if (set) sessionStorage.setItem(TAB_KEY, set); else return sessionStorage.getItem(TAB_KEY); } catch (e) {}
+    return null;
+  }
+  function saveSession() {
+    if (!session) return Promise.resolve();
+    return sessionTx('readwrite', function (st) { return st.put({ id: session.id, info: session.info, worldKey: session.worldKey, seen: Date.now() }); }).catch(function () {});
+  }
+  // Records nobody has touched within the window belong to a tab that is gone (or a browser that was closed).
+  function purgeStale() {
+    return sessionTx('readwrite', function (st) {
+      var c = st.openCursor();
+      c.onsuccess = function () { var cur = c.result; if (!cur) return; if (Date.now() - cur.value.seen > RESUME_WINDOW_MS) cur.delete(); cur.continue(); };
+    }).catch(function () {});
+  }
 
   function endSession() {
-    if (session && session.timer) clearTimeout(session.timer);
-    session = null;
+    if (session) {
+      if (session.timer) clearTimeout(session.timer);
+      if (session.beat) clearInterval(session.beat);
+      var id = session.id;
+      session = null;
+      tabId(null);
+      return sessionTx('readwrite', function (st) { return st.delete(id); }).catch(function () {});
+    }
+    return Promise.resolve();
   }
   // Public view of the session: plain data, safe to hand to the world. The certificate is a public document.
-  function current() { return Promise.resolve(session ? session.info : null); }
-  function signOut() { endSession(); return Promise.resolve(true); }
+  function sessionInfo() { return session ? session.info : null; }
+  function current() { return Promise.resolve(sessionInfo()); }
+  function signOut() { return endSession().then(function () { return true; }); }
   // For code in THIS page only (the saved-worlds store). Never put it behind a bridge op: it is the key that decrypts
   // everything the identity has saved. Null when nobody is signed in.
   function sessionWorldKey() { return session ? { did: session.info.did, key: session.worldKey } : null; }
+
+  function armSession(id, info, worldKey) {
+    var left = Date.parse(info.exp) - Date.now();
+    var timer = setTimeout(function () { if (session && session.info === info) endSession(); }, Math.max(0, left));
+    var beat = setInterval(function () { if (session && session.id === id) saveSession(); }, HEARTBEAT_MS);
+    session = { id: id, info: info, worldKey: worldKey, timer: timer, beat: beat };
+  }
+  // The key for saved worlds: one HMAC output of the secret under its own label, kept as a non-extractable AES-GCM key. The
+  // label is all that separates it from the discovery seed and the check value, so it is never reused.
+  async function worldKeyFrom(secret) {
+    var wk = new Uint8Array(await crypto.subtle.sign('HMAC', secret, enc.encode('keo/worlds/v1')));
+    var key = await crypto.subtle.importKey('raw', wk, 'AES-GCM', false, ['encrypt', 'decrypt']);
+    wk.fill(0);
+    return key;
+  }
+  // Starts the session for an identity whose secret was just unlocked (or just made). cert carries its own assertion.
+  async function startSession(rec, secret, worldKey, cert) {
+    await endSession();
+    var id = kd.b64u(rnd(16));
+    var info = { did: rec.did, label: rec.label, issuedAt: cert.issuedAt, exp: cert.exp, cert: cert };
+    armSession(id, info, worldKey);
+    tabId(id);
+    await saveSession();
+    return info;
+  }
+
+  // Called once when a page loads, before anything is shown: picks this tab's session up again after a refresh. Null when
+  // there is none, it has expired, or it was not seen within the window (the tab was closed for a while).
+  async function resume() {
+    await purgeStale();
+    var id = tabId();
+    if (!id || session) return sessionInfo();
+    var rec = await sessionTx('readonly', function (st) { return st.get(id); }).catch(function () { return null; });
+    if (!rec || Date.now() - rec.seen > RESUME_WINDOW_MS || Date.parse(rec.info.exp) <= Date.now()) { tabId(null); return null; }
+    var ident = await dbGet(rec.info.did);
+    if (!ident) { tabId(null); return null; }
+    armSession(rec.id, rec.info, rec.worldKey);
+    await saveSession();
+    return sessionInfo();
+  }
 
   // Unlock and delegate with one passkey prompt, check the answer against the authority key in the identity's own log, unwrap
   // the account secret non-extractable and compare it with its stored check value, and start the session. Returns plain data.
@@ -263,17 +371,8 @@
     if (kd.b64u(await crypto.subtle.sign('HMAC', secret, enc.encode('keo/check'))) !== rec.check) throw new Error('The account secret did not unlock.');
     var msg = rnd(16), dsig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, rec.deviceKey.privateKey, msg);
     if (!(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, rec.deviceKey.publicKey, dsig, msg))) throw new Error('The device key did not verify.');
-    // The key for saved worlds: one HMAC output of the secret under its own label, kept as a non-extractable AES-GCM key.
-    // The label is all that separates it from the discovery seed and the check value, so it is never reused.
-    var wk = new Uint8Array(await crypto.subtle.sign('HMAC', secret, enc.encode('keo/worlds/v1')));
-    var worldKey = await crypto.subtle.importKey('raw', wk, 'AES-GCM', false, ['encrypt', 'decrypt']);
-    wk.fill(0);
-
-    endSession();
-    var info = { did: rec.did, label: rec.label, issuedAt: cert.issuedAt, exp: cert.exp,
-      cert: Object.assign({}, cert, { assertion: { authenticatorData: sig.authenticatorData, clientDataJSON: sig.clientDataJSON, signature: sig.signature } }) };
-    var timer = setTimeout(function () { if (session && session.info === info) endSession(); }, SESSION_MS);
-    session = { info: info, worldKey: worldKey, timer: timer };
+    var info = await startSession(rec, secret, await worldKeyFrom(secret),
+      Object.assign({}, cert, { assertion: { authenticatorData: sig.authenticatorData, clientDataJSON: sig.clientDataJSON, signature: sig.signature } }));
 
     var out = summary(rec);
     out.assertionOrigin = JSON.parse(new TextDecoder().decode(a.response.clientDataJSON)).origin;
@@ -284,5 +383,5 @@
   }
 
   window.keoIdentity = { create: create, list: list, rename: rename, remove: remove, signIn: signIn, current: current,
-    signOut: signOut, sessionWorldKey: sessionWorldKey };
+    signOut: signOut, resume: resume, sessionWorldKey: sessionWorldKey };
 })();

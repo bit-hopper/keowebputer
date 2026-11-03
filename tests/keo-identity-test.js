@@ -52,6 +52,8 @@ async function waitForWorld(page) {
     check('create: the world sees the shell (isAvailable)', created.available === true, created);
     check('create: succeeds', !created.err && created.r && created.r.did, created);
     const A = created.r || {};
+    check('create: signs the new identity in (no third prompt)', !!(A.session && A.session.did === A.did && A.session.cert && A.session.cert.via === 'inception'), A.session);
+    await page.evaluate(() => window.keoIdentity.signOut());
     check('create: the DID is did:keo:<52 z32>:<43 b64url>', /^did:keo:[ybndrfg8ejkmcpqxot1uwisza345h769]{52}:[A-Za-z0-9_-]{43}$/.test(A.did), A.did);
     check('create: label, rpId and the not-recoverable flag', A.label === 'Alice laptop' && A.rpId === 'chrome-extension://' + ID && A.notRecoverable === true && A.authorityKeys === 1, A);
     check('create: PRF output came back at creation (virtual authenticator)', A.prfAtCreate === true, A);
@@ -105,6 +107,7 @@ async function waitForWorld(page) {
     check('signIn: assertion origin is the extension, secret unlocks non-extractable', !si.err && si.assertionOrigin === 'chrome-extension://' + ID && si.secretNonExtractable === true && si.label === 'Work laptop', si);
 
     // ---- the same after a page reload (storage lives in the shell, not the page)
+    await page.evaluate(() => window.keoIdentity.signOut());     // a refresh keeps a session, so end it to see sign-in from scratch
     await page.reload();
     frame = await waitForWorld(page);
     await frame.evaluate(() => new Promise((res) => lively.require('lively.identity.LocalIdentity').toRun(res)));

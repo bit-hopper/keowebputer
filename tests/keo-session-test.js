@@ -1,9 +1,9 @@
 // End-to-end test of the sign-in screen, the session and saved worlds in the built keo extension.
 // Usage: node keo-session-test.js <repo root> <extension folder> <work dir>
 // A headed browser with the extension loaded, `localhost` unresolvable, and a CDP virtual authenticator with PRF. It drives the
-// real sign-in screen: create an identity (lands on the home page), start a blank world, save it, reload the page (the shell
-// forgets the session, the storage stays), sign in again (lands on the saved world), look at what is stored on disk, sign
-// out, and break a saved record on purpose.
+// real sign-in screen: create an identity (two passkey prompts, lands on the home page), check the menu bar and the ambient panel
+// see the session, start a blank world and save it, refresh the tab (the session comes back with no prompt), look at what is
+// stored on disk, sign out from the world, sign in again (lands on the saved world), and break a saved record on purpose.
 // NOT covered: a browser RESTART (a virtual authenticator does not survive one, so its passkey is gone), and a real
 // authenticator. Those need keo-identity-real.js-style runs by a person.
 const fs = require('fs');
@@ -43,6 +43,7 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--host-resolver-rules=MAP localhost ~NOTFOUND, MAP 127.0.0.1 ~NOTFOUND'] });
   await sleep(2500);
   try {
+    await ctx.addInitScript(() => { if (location.protocol === 'chrome-extension:' && /start\.html/.test(location.pathname) && navigator.credentials) { window.__cred = { create: 0, get: 0 }; for (const k of ['create', 'get']) { const o = navigator.credentials[k].bind(navigator.credentials); navigator.credentials[k] = function () { window.__cred[k]++; return o.apply(null, arguments); }; } } });
     const page = await ctx.newPage();
     page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message.slice(0, 200)));
     page.on('console', (m) => { if (m.type() === 'error' && !/compute-pressure|ERR_FILE_NOT_FOUND/.test(m.text())) errors.push('console: ' + m.text().slice(0, 200)); });
@@ -65,7 +66,21 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     const st = await frame.evaluate(() => window.keo.init.startup);
     check('new identity: the world starts as the home page', st.kind === 'homestar' && st.session && st.session.label === 'Maya', st);
     const did = st.session.did;
-    check('new identity: the gate is gone and the bar says who is signed in', await page.evaluate(() => document.getElementById('gate').classList.contains('hidden') && /Maya/.test(document.getElementById('status').textContent)));
+    check('new identity: two passkey prompts (create, sign the inception), not three', JSON.stringify(await page.evaluate(() => window.__cred)) === '{"create":1,"get":1}', await page.evaluate(() => window.__cred));
+    check('new identity: the gate is gone and there is no top bar (the world has the whole page)', await page.evaluate(() => document.getElementById('gate').classList.contains('hidden') && !document.getElementById('bar') && document.getElementById('world').getBoundingClientRect().height >= innerHeight - 1));
+    const menu = await frame.evaluate(() => {
+      const did = lively.identity.did, bar = $world.get(/MenuBar/), entry = $world.get('IdentityMenuBarEntry') || (bar && bar.submorphs.filter((m) => m.name === 'IdentityMenuBarEntry')[0]);
+      const items = entry ? entry.morphMenuItems().map((i) => i[0]) : null;
+      const panel = lively.identity.AmbientPresencePanel && lively.identity.AmbientPresencePanel._panel;
+      return { loggedIn: did.isLoggedIn(), label: did.handleLabel(), entryText: entry && entry.textString, items, ambient: !!(panel && panel.world && panel.world()), local: did.currentUser() && did.currentUser().local };
+    });
+    check('menu bar: the world knows it is signed in, and shows the label (not a handle, not the DID)', menu.loggedIn && menu.local && menu.label === 'Maya' && menu.entryText === 'Maya', menu);
+    check('menu bar: the menu has a short DID line, Copy DID, My homestar, Rename, Sign out', menu.items && /^keo:.{4}….{4}/.test(menu.items[0]) && menu.items.includes('Copy DID') && menu.items.includes('My homestar') && menu.items.includes('Sign out'), menu.items);
+    check('ambient panel: it is open for the signed-in identity', menu.ambient === true, menu);
+    await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'chrome-extension://' + ID }).catch(() => {});
+    const copied = await frame.evaluate(() => new Promise((res) => lively.identity.localIdentity.copyText(lively.identity.did.currentUser().did, res)));
+    const clip = await page.evaluate(() => navigator.clipboard.readText().catch((e) => 'ERR ' + e.message));
+    check('copy DID: the full DID is on the clipboard', copied === true && clip === did, { copied, clip: String(clip).slice(0, 80) });
     const text = await frame.evaluate(() => { const out = []; (function walk(m) { if (m.textString) out.push(String(m.textString)); (m.submorphs || []).forEach(walk); })($world); return out.join(' | '); });
     check('new identity: the home page shows the label', /Maya/.test(text), text.slice(0, 300));
     await page.screenshot({ path: path.join(WORK, 'session-homestar.png') });
@@ -78,9 +93,13 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
       const rec = await new Promise((res, rej) => { const q = indexedDB.open('keo-identities'); q.onsuccess = () => { const r = q.result.transaction('identities').objectStore('identities').get(s.did); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }; q.onerror = () => rej(q.error); });
       const cert = Object.assign({}, s.cert); const assertion = cert.assertion; delete cert.assertion;
       const key = rec.inception.state.authority.keys.filter((k) => k.id === cert.authorityKeyId)[0];
-      const H = await window.keoDid.eventHash(cert);
+      // A session made by creating the identity is delegated by the inception itself: the device key must be listed in the
+      // verified inception, and the assertion is the authority's signature over H(inception). A later sign-in signs H(cert).
+      const viaInception = cert.via === 'inception';
+      const H = await window.keoDid.eventHash(viaInception ? rec.inception : cert);
+      const listed = !viaInception || rec.inception.state.devices.some((d) => JSON.stringify(d.jwk) === JSON.stringify({ kty: cert.devicePubKeyJwk.kty, crv: cert.devicePubKeyJwk.crv, x: cert.devicePubKeyJwk.x, y: cert.devicePubKeyJwk.y }));
       return { verifies: await window.keoDid.verifyAssertion({ keyId: cert.authorityKeyId, authenticatorData: assertion.authenticatorData, clientDataJSON: assertion.clientDataJSON, signature: assertion.signature }, key.jwk, H),
-        deviceKeyIsOurs: JSON.stringify(cert.devicePubKeyJwk) === JSON.stringify(rec.deviceKey.publicJwk), exp: Date.parse(cert.exp) > Date.now() };
+        deviceKeyIsOurs: JSON.stringify(cert.devicePubKeyJwk) === JSON.stringify(rec.deviceKey.publicJwk) && listed, via: cert.via || 'cert', exp: Date.parse(cert.exp) > Date.now() };
     });
     check('session: the delegation certificate is signed by the identity\'s own passkey over H(cert)', certOk.verifies && certOk.deviceKeyIsOurs && certOk.exp, certOk);
     const swap = await keoCall(frame, 'identity.signIn', { did });
@@ -92,6 +111,22 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     const homeSave = await frame.evaluate(() => new Promise((res) => $world.saveWorldAs(URL.root.withFilename('home.html'), false, undefined, (e) => res(e ? e.message : 'saved'))));
     check('save: the home page refuses to be saved', /home page/.test(homeSave), homeSave);
     check('save: nothing was stored', (await keoCall(frame, 'world.list')).r.length === 0);
+
+    // ---- 4b. a theme chosen on the home page (world menu > Preferences > Themes) is kept for the identity
+    await frame.evaluate(() => new Promise((res) => lively.require('lively.morphic.Themes').toRun(() => { lively.morphic.Themes.apply('savanna', $world); res(); })));
+    await sleep(1500);
+    check('home theme: the world menu offers the themes', await frame.evaluate(() => { const items = $world.morphMenuItems(); const find = (l) => { for (const i of l) { if (Array.isArray(i[1]) && /Preferences/.test(i[0])) return i[1]; } return null; }; const prefs = find(items); return !!prefs && prefs.some((i) => i[0] === 'Themes'); }));
+    await page.reload();
+    frame = await waitForWorld(page, 'homestar');
+    await sleep(2500);
+    const th = await frame.evaluate(() => $world.themeName);
+    check('home theme: it is applied again when the home page is rebuilt after a refresh', th === 'savanna', th);
+    await frame.evaluate(() => new Promise((res) => { lively.morphic.Themes.clear($world); res(); }));
+    await sleep(1000);
+    await page.reload();
+    frame = await waitForWorld(page, 'homestar');
+    await sleep(2500);
+    check('home theme: clearing it sticks too', (await frame.evaluate(() => $world.themeName)) === undefined);
 
     // ---- 5. a blank world, saved
     const goRes = await keoCall(frame, 'world.go', { kind: 'blank' }).catch((e) => ({ navigated: e.message.slice(0, 80) }));
@@ -120,25 +155,28 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     check('disk: the saved world is ciphertext (no morph names or class names in it)', disk.bodyHasMarker === false && disk.bodySize > 1000, disk);
     check('disk: the world\'s name is not readable either', disk.indexHasName === false, disk);
 
-    // ---- 7. reload the page: the session is gone, the storage is not; sign in lands on the saved world
+    // ---- 7. refresh the tab: the session comes back with no prompt, on the world saved last
     await page.reload();
-    await sleep(1500);
-    check('reload: back at the gate, no session', await page.evaluate(async () => !document.getElementById('gate').classList.contains('hidden') && (await window.keoIdentity.current()) === null));
-    check('reload: the identity is offered by its label', await page.evaluate(() => /Maya/.test(document.getElementById('idlist').textContent)));
-    const locked = await page.evaluate(() => window.keoWorlds.list().then(() => 'listed', (e) => e.message));
-    check('reload: saved worlds cannot be read while signed out', /Sign in/.test(locked), locked);
-    await page.click('#idlist button');
     frame = await waitForWorld(page, 'world');
     const st2 = await frame.evaluate(() => window.keo.init.startup);
-    check('returning: the world starts as the last saved one', st2.kind === 'world' && st2.name === 'mine', { kind: st2.kind, name: st2.name });
+    check('refresh: the session survives, with no passkey prompt', JSON.stringify(await page.evaluate(() => window.__cred)) === '{"create":0,"get":0}' && st2.session && st2.session.did === did, await page.evaluate(() => window.__cred));
+    check('refresh: it lands on the world saved last', st2.kind === 'world' && st2.name === 'mine', { kind: st2.kind, name: st2.name });
     const marker = await frame.evaluate(() => { const m = $world.get('keo-marker-secret'); return m ? { x: m.getPosition().x, y: m.getPosition().y } : null; });
-    check('returning: the morph is there, where the second save left it', marker && Math.round(marker.x) === 300 && Math.round(marker.y) === 200, marker);
+    check('refresh: the morph is there, where the second save left it', marker && Math.round(marker.x) === 300 && Math.round(marker.y) === 200, marker);
+    const rec = await page.evaluate(async () => { const db = await new Promise((res, rej) => { const q = indexedDB.open('keo-session'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); const r = await new Promise((res) => { const g = db.transaction('s').objectStore('s').getAll(); g.onsuccess = () => res(g.result); }); db.close(); return r.map((x) => ({ extractable: x.worldKey && x.worldKey.extractable, seenAgo: Date.now() - x.seen })); });
+    check('refresh: what is kept for it is one non-extractable key, seen recently', rec.length === 1 && rec[0].extractable === false && rec[0].seenAgo < 60000, rec);
     await page.screenshot({ path: path.join(WORK, 'session-returning.png') });
+    const other = await ctx.newPage();
+    await other.goto('chrome-extension://' + ID + '/start.html');
+    await sleep(1500);
+    check('another tab does not pick the session up: it shows the sign-in screen', await other.evaluate(() => !document.getElementById('gate').classList.contains('hidden') && /Maya/.test(document.getElementById('idlist').textContent)));
+    await other.close();
+    await page.bringToFront();
 
     // ---- 8. sign out
-    await page.click('#signout');
-    await sleep(1500);
-    check('sign out: back at the gate with no session and no world', await page.evaluate(async () => !document.getElementById('gate').classList.contains('hidden') && (await window.keoIdentity.current()) === null) && !worldFrame(page));
+    await frame.evaluate(() => { lively.identity.localIdentity.signOut(function () {}); });
+    await sleep(2500);
+    check('sign out (asked by the world): back at the gate with no session and no world', await page.evaluate(async () => !document.getElementById('gate').classList.contains('hidden') && (await window.keoIdentity.current()) === null) && !worldFrame(page));
 
     // ---- 9. a broken record must not lock the person out
     await page.evaluate(async () => {

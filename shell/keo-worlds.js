@@ -6,7 +6,8 @@
 //   - `bodies`: one record per saved world, { id, did, iv, ct }. ct is AES-GCM of the world's document (the whole saved page), with the
 //     identity and the record id as additional data, so a body cannot be moved to another identity or another slot.
 //   - `index`: one record per identity, { did, iv, ct }. Its plaintext is { worlds: { <name>: { id, savedAt, bytes } },
-//     last: <name or null> }. The NAMES of worlds are inside the encryption too, and so is which one was saved last, so what
+//     last: <name or null>, prefs: { <key>: <value> } }. `prefs` is the identity's own small settings (see PREF_KEYS): they are
+//     kept here because this record is already encrypted under the signed-in identity's key. The NAMES of worlds are inside the encryption too, and so is which one was saved last, so what
 //     is readable without the key is only the identity's DID, record ids, ciphertext sizes and the order of writes.
 // The key comes from the identity module (sessionWorldKey): an HMAC output of the account secret, held non-extractable in
 // memory while signed in. Nothing here works without a session, and nothing here may hand the key to the world.
@@ -17,7 +18,11 @@
   var enc = new TextEncoder(), dec = new TextDecoder();
   var kd = window.keoDid;
   var DB_NAME = 'keo-worlds';
-  var MAX_BYTES = 64 * 1024 * 1024;           // one serialized world; a guard against a runaway save, not a quota
+  var MAX_BYTES = 64 * 1024 * 1024;
+  // The settings an identity may keep, and what a value may be. The world asks to set them, so nothing else gets in.
+  //   homeTheme  the name of the theme of the home page (the home page is rebuilt on every visit, so a theme applied to it
+  //              would otherwise be lost), or null for none
+  var PREF_KEYS = { homeTheme: function (v) { return v === null || (typeof v === 'string' && /^[A-Za-z0-9 _-]{1,64}$/.test(v)); } };           // one serialized world; a guard against a runaway save, not a quota
 
   function openDb() {
     return new Promise(function (res, rej) {
@@ -138,6 +143,21 @@
       return true;
     });
   }
+  function prefsGet() {
+    return serial(async function () { return (await readIndex(session())).prefs || {}; });
+  }
+  function prefsSet(args) {
+    return serial(async function () {
+      var s = session(), key = String(args.key);
+      if (!Object.prototype.hasOwnProperty.call(PREF_KEYS, key) || !PREF_KEYS[key](args.value)) throw new Error('Not a setting that can be kept: ' + key);
+      var index = await readIndex(s);
+      index.prefs = index.prefs || {};
+      index.prefs[key] = args.value;
+      var idx = await seal(s.key, enc.encode(JSON.stringify(index)), indexAad(s.did));
+      await tx(['index'], 'readwrite', function (t) { t.objectStore('index').put({ did: s.did, iv: idx.iv, ct: idx.ct }); });
+      return index.prefs;
+    });
+  }
   function remove(args) {
     return serial(async function () {
       var s = session(), index = await readIndex(s), name = cleanName(args.name), w = index.worlds[name];
@@ -167,5 +187,5 @@
     });
   }
 
-  window.keoWorlds = { save: save, list: list, load: load, last: last, setLast: setLast, remove: remove, purge: purge };
+  window.keoWorlds = { save: save, list: list, load: load, last: last, setLast: setLast, remove: remove, purge: purge, prefsGet: prefsGet, prefsSet: prefsSet };
 })();

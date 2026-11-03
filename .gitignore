@@ -11,3 +11,6 @@ research/
 
 # cache of a snapshot refresh (transpiled kernel files, linked kernel root); a package build does not write it
 .cache/
+
+# work in progress that a local build copies into the package but that is not committed (see extension/build.js)
+extension/local/

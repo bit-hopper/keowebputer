@@ -3,16 +3,13 @@
 <title>keo</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; font: 14px system-ui, sans-serif; color: #222; }
-  #bar { height: 32px; box-sizing: border-box; display: flex; align-items: center; gap: .75rem; padding: 0 .75rem; background: #f4f4f4; border-bottom: 1px solid #ddd; }
-  #bar b { font-weight: 600; }
-  #bar button { font: inherit; padding: .1rem .6rem; cursor: pointer; }
-  #world { display: block; border: 0; width: 100%; height: calc(100% - 32px); }
+  #world { display: block; border: 0; width: 100%; height: 100%; }
   /* The identity vault page: hidden (1px, transparent, not clickable) until the world asks for its unlock button. */
   #vault { position: fixed; left: 0; top: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
   #vault.shown { left: 50%; top: 50%; width: 320px; height: 96px; transform: translate(-50%, -50%); opacity: 1; pointer-events: auto;
                  z-index: 2147483647; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,.35); }
   /* The sign-in screen: this page's own, so the passkey prompts and the choice of identity never run inside the world. */
-  #gate { position: absolute; left: 0; right: 0; top: 33px; bottom: 0; overflow: auto; background: #fafafa; display: flex; justify-content: center; }
+  #gate { position: absolute; left: 0; right: 0; top: 0; bottom: 0; overflow: auto; background: #fafafa; display: flex; justify-content: center; }
   #gate.hidden { display: none; }
   #card { width: min(26rem, 100%); box-sizing: border-box; padding: 2rem 1.25rem; }
   #card h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
@@ -29,12 +26,6 @@
   #msg.err { color: #b00020; }
   code { background: #eee; padding: 0 .25rem; }
 </style>
-<div id="bar">
-  <b>keo</b>
-  <span id="status"></span>
-  <span style="flex:1"></span>
-  <button id="signout" hidden>Sign out</button>
-</div>
 <div id="gate">
   <div id="card">
     <h1>keo</h1>

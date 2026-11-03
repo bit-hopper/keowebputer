@@ -164,6 +164,25 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
     kernel: { commit: SNAPSHOT.commit }
   }, null, 2) + '\n');
 
+  // 5b. Work in progress that is not committed: whatever is under extension/local/ (gitignored) is copied into the package at the
+  //     same path. It is for a LOCAL build (the landing page the world starts from while it is unfinished, and the pictures it
+  //     shows); a CI build has no such folder and ships none of it. It may add files, never replace one the build wrote.
+  const LOCAL = path.join(__dirname, 'local');
+  if (fs.existsSync(LOCAL)) {
+    const walk = (dir, rel) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const r = rel ? rel + '/' + e.name : e.name;
+        if (e.isDirectory()) walk(path.join(dir, e.name), r);
+        else {
+          if (fs.existsSync(path.join(OUT, r))) throw new Error('extension/local/' + r + ' would replace a file the build wrote');
+          put(r, fs.readFileSync(path.join(dir, e.name)));
+        }
+      }
+    };
+    walk(LOCAL, '');
+    console.warn('extension/local/ is present: its files are in this package (not a committed build)');
+  }
+
   // 6. every file with its hash, written last. It is the baseline an update is diffed against (what the package has), not a
   //    security statement: whatever an update downloads is checked against the signed release, never against this.
   put('keo-files.json', JSON.stringify({ v: 1, files: listPackage(OUT) }) + '\n');

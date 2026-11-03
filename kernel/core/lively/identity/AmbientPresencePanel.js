@@ -556,7 +556,7 @@ module("lively.identity.AmbientPresencePanel")
       update: function update() {
         if (!lively.identity.did || !lively.identity.did.isLoggedIn()) return;
         var handle = lively.identity.did.currentUser().handle;
-        this._nameMorph.textString = "@" + lively.identity.did.displayHandle();
+        this._nameMorph.textString = lively.identity.did.handleLabel();
         this._updateControls();
         this._updateStatus();
 

@@ -57,6 +57,40 @@ module("lively.identity.LocalIdentity")
         this._run("identity.signIn", { did: did }, CEREMONY_TIMEOUT_MS, thenDo);
       },
 
+      // The public part of the shell's session { did, label, issuedAt, exp, cert }, or null when nobody is signed in.
+      session: function session(thenDo) {
+        this._run("session.current", {}, 30000, thenDo);
+      },
+
+      // Ends the session. The shell then shows its sign-in screen again, so the world does not outlive the call.
+      signOut: function signOut(thenDo) {
+        this._run("session.signOut", {}, 30000, thenDo);
+      },
+
+      // Moves to another page for the signed-in identity: "homestar", "blank", or "world" with a saved world's name.
+      go: function go(kind, name, thenDo) {
+        this._run("world.go", { kind: kind, name: name }, 120000, thenDo || function () {});
+      },
+
+      // Puts text on the clipboard from inside the sandboxed world, where the clipboard API is not allowed: tries it, then
+      // the old way (a selected text field and a copy command, which a click in this page permits). thenDo(true|false).
+      copyText: function copyText(text, thenDo) {
+        function legacy() {
+          var ok = false, ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+          document.body.appendChild(ta);
+          ta.select();
+          try { ok = document.execCommand("copy"); } catch (e) {}
+          document.body.removeChild(ta);
+          thenDo(ok);
+        }
+        try {
+          navigator.clipboard.writeText(text).then(function () { thenDo(true); }, legacy);
+        } catch (e) { legacy(); }
+      },
+
       // A short form of a DID for places a name is not available: the first and last four characters of the HASH part,
       // the part bound to the authority set (the first part is only a lookup hint), e.g. "keo:7Q2F…xK9A". Anything that
       // is not a did:keo comes back unchanged.

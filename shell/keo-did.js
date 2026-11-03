@@ -157,6 +157,14 @@
     if (!disc || typeof disc.key !== 'string' || !auth || !Array.isArray(auth.keys) || typeof auth.threshold !== 'number' || auth.threshold < 1) {
       return Promise.resolve(fail('state is missing discovery or authority'));
     }
+    // devices is optional (a log may delegate no device in its inception); when present it must be well formed: each entry names an
+    // ECDSA P-256 public key, because a session's certificate is checked against this list.
+    if (st.devices !== undefined) {
+      var devOk = Array.isArray(st.devices) && st.devices.every(function (d) {
+        return d && typeof d.id === 'string' && d.jwk && d.jwk.kty === 'EC' && d.jwk.crv === 'P-256' && typeof d.jwk.x === 'string' && typeof d.jwk.y === 'string' && d.jwk.d === undefined;
+      });
+      if (!devOk) return Promise.resolve(fail('state.devices is malformed'));
+    }
     var dkBytes;
     try { dkBytes = z32decode(disc.key); } catch (err) { return Promise.resolve(fail('discovery key is not z-base-32')); }
     if (dkBytes.length !== 32 || z32encode(dkBytes) !== disc.key) return Promise.resolve(fail('discovery key is not 32 bytes'));

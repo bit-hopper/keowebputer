@@ -105,6 +105,12 @@ module("lively.identity.MenuBarEntry")
         var self = this;
         var did = lively.identity.did;
         var user = did.currentUser();
+        // A local identity: the shell ends its session and shows the sign-in screen again.
+        if (user.local) {
+          return $world.confirm("Sign out " + user.displayLabel + "?", function (ok) {
+            if (ok) lively.identity.localIdentity.signOut(function () {});
+          });
+        }
         $world.confirm(
           "Sign out as @" + user.handle + "?",
           function (ok) {
@@ -176,6 +182,16 @@ module("lively.identity.MenuBarEntry")
               ["Create identity", function () { self.openRegisterDialog(); }],
             ];
           }
+          if (lively.identity.did.currentUser().local) {
+            var did = lively.identity.did.currentUser().did;
+            return [
+              [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
+              ["Copy DID",           function () { self.copyDid(); }],
+              ["My homestar",        function () { self.openMyHomestar(); }],
+              ["Rename this identity ...", function () { self.renameLocal(); }],
+              ["Sign out",           function () { self.signOut(); }],
+            ];
+          }
           return [
             ["My homestar",        function () { self.openMyHomestar(); }],
             ["Compose",            function () { self.newPostcard(); }],
@@ -212,6 +228,26 @@ module("lively.identity.MenuBarEntry")
 
         signOut: function signOut() {
           lively.identity.MenuBarEntry.signOut();
+        },
+
+        // A local identity: the full DID to the clipboard (the menu shows only its short form).
+        copyDid: function copyDid() {
+          var did = lively.identity.did.currentUser().did;
+          lively.identity.localIdentity.copyText(did, function (ok) {
+            $world.setStatusMessage(ok ? "Copied " + lively.identity.localIdentity.shortDid(did) : "Could not copy the DID", ok ? Color.green : Color.red, 3);
+          });
+        },
+
+        renameLocal: function renameLocal() {
+          var u = lively.identity.did.currentUser();
+          $world.prompt("Your name for this identity on this device:", function (name) {
+            if (!name || !name.trim()) return;
+            lively.identity.localIdentity.rename(u.did, name, function (err, id) {
+              if (err) return $world.inform("Could not rename: " + (err.message || err));
+              u.displayLabel = u.displayName = id.label;
+              lively.bindings.signal(lively.identity.did, "identityChanged", u);
+            });
+          }, u.displayLabel);
         },
 
         openMyWorlds: function openMyWorlds() {
@@ -273,6 +309,7 @@ module("lively.identity.MenuBarEntry")
         },
 
         openMyHomestar: function openMyHomestar() {
+          if (lively.identity.did.currentUser().local) return lively.identity.localIdentity.go("homestar");
           window.location.href = "/@" + encodeURIComponent(lively.identity.did.currentUser().handle);
         },
 
@@ -297,8 +334,8 @@ module("lively.identity.MenuBarEntry")
           if (!lively.identity || !lively.identity.did) return;
           var loggedIn = lively.identity.did.isLoggedIn();
           var user = loggedIn && lively.identity.did.currentUser();
-          this.textString = loggedIn ? "@" + lively.identity.did.displayHandle() : "sign in";
-          this.updateAvatar(loggedIn ? user.handle : null);
+          this.textString = loggedIn ? lively.identity.did.handleLabel() : "sign in";
+          this.updateAvatar(loggedIn ? (user.local ? user.displayLabel : user.handle) : null);
           this.fitWidth();
           this.placeUnreadDot();
           if (loggedIn) lively.identity.MenuBarEntry.startUnreadPolling(this);

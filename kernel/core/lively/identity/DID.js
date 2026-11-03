@@ -438,7 +438,30 @@ module("lively.identity.DID")
         // else keyed on the registered handle.
         displayHandle: function () {
           var u = this._currentUser;
-          return u ? (u.domainHandle || u.handle) : null;
+          return u ? (u.displayLabel || u.domainHandle || u.handle) : null;
+        },
+
+        // How to write the signed-in account's name in the UI: "@handle" for a server account, the person's own label (no
+        // "@", it is not a handle) for a local one.
+        handleLabel: function () {
+          var u = this._currentUser;
+          if (!u) return null;
+          return u.local ? u.displayLabel : "@" + (u.domainHandle || u.handle);
+        },
+
+        // Mirrors a signed-in LOCAL identity (keo: made on this device, held by the shell, no server and no handle) into the
+        // world. The world never starts such a session; the shell does, and LocalIdentity.js reads it from there.
+        //   did           the full did:keo:...
+        //   handle        the DID too, so code that builds /@<handle>/... paths gets an address the shell can answer; it is
+        //                 NOT shown (a host may grant a real handle later)
+        //   displayLabel  the person's own name for it on this device: what to show
+        //   local         true: server-only features (mailbox, files, ...) have nothing to talk to
+        setLocalSession: function (info) {
+          var u = { did: info.did, handle: info.did, displayName: info.label, displayLabel: info.label, local: true, exp: info.exp };
+          this._currentUser = u;
+          lively.Config.set("UserName", info.label);
+          lively.bindings.signal(lively.identity.did, "identityChanged", u);
+          return u;
         },
 
         // Fetch the account's verified domain handle (if any) into

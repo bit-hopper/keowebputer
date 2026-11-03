@@ -17,30 +17,29 @@
 
   function begin(startup) {
     $('gate').classList.add('hidden');
-    if (startup.session) {
-      $('status').textContent = 'Signed in as ' + startup.session.label;
-      $('signout').hidden = false;
-    } else {
-      $('status').textContent = 'No identity';
-    }
     window.keoShell.start(startup);
   }
 
-  // One passkey prompt, then whatever the identity saved last.
+  // Where a signed-in identity lands: the world it saved last, else (a new identity, or nothing saved) its home page.
+  async function landing(session) {
+    var startup = { kind: 'homestar', session: session };
+    try {
+      var last = await window.keoWorlds.last();
+      if (last) startup = { kind: 'world', session: session, name: last.name, doc: last.doc };
+    } catch (e) {
+      startup.warning = 'Your last saved world could not be opened: ' + (e && e.message || e);
+    }
+    return startup;
+  }
+
+  // One passkey prompt, then wherever the identity lands.
   async function enter(did) {
     if (busy) return;
     busy = true;
     try {
       msg('Waiting for your passkey…');
       var r = await window.keoIdentity.signIn({ did: did });
-      var startup = { kind: 'homestar', session: r.session };
-      try {
-        var last = await window.keoWorlds.last();
-        if (last) startup = { kind: 'world', session: r.session, name: last.name, doc: last.doc };
-      } catch (e) {
-        startup.warning = 'Your last saved world could not be opened: ' + (e && e.message || e);
-      }
-      begin(startup);
+      begin(await landing(r.session));
     } catch (e) {
       busy = false;
       msg((e && e.message) || String(e), true);
@@ -53,9 +52,8 @@
     busy = true;
     try {
       msg('Waiting for your passkey (two prompts)…');
-      var id = await window.keoIdentity.create({ label: label });
-      busy = false;
-      await enter(id.did);      // a third prompt: the certificate that signs this device in is made under its own assertion
+      var id = await window.keoIdentity.create({ label: label });      // starts the session: no third prompt
+      begin(await landing(id.session));
     } catch (e) {
       busy = false;
       msg((e && e.message) || String(e), true);
@@ -80,10 +78,12 @@
   $('create').onclick = createAndEnter;
   $('label').onkeydown = function (ev) { if (ev.key === 'Enter') createAndEnter(); };
   $('guest').onclick = function () { begin({ kind: 'guest' }); };
-  $('signout').onclick = function () {
-    window.keoIdentity.signOut().then(function () { location.reload(); });
-  };
 
   if (location.hash === '#guest') return begin({ kind: 'guest' });
-  window.keoIdentity.list().then(showIdentities, function (e) { msg('Could not read the identities on this device: ' + e.message, true); });
+  if (location.hash === '#gate') return begin({ kind: 'gate' });      // preview of the landing page in the world
+  // A refresh of this tab keeps the session (see keo-identity.js): go straight back in, with no prompt.
+  window.keoIdentity.resume().then(function (session) {
+    if (session) return landing(session).then(begin);
+    return window.keoIdentity.list().then(showIdentities, function (e) { msg('Could not read the identities on this device: ' + e.message, true); });
+  }, function (e) { msg('Could not restore the session: ' + e.message, true); });
 })();

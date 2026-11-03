@@ -66,6 +66,21 @@ async function makeAssertion(privateKey, challengeBytes, type) {
   ok('parseDid rejects the draft form and junk', kd.parseDid('did:keo-draft:abc') === null && kd.parseDid('did:keo:short:x') === null && kd.parseDid(null) === null);
   ok('"sigs" never enters the hash', kd.b64u(await kd.eventHash(Object.assign({}, inception, { sigs: { x: 1 } }))) === kd.b64u(H));
 
+  // ---- the device list in the inception (optional, validated when present)
+  const withDevices = async (devices) => {
+    const e = JSON.parse(JSON.stringify(inception)); e.state.devices = devices;
+    const He = await kd.eventHash(e);
+    return { inception: e, sigs: { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, He)),
+      authority: [Object.assign({ keyId }, await makeAssertion(authPair.privateKey, He))] } };
+  };
+  const devPair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const devJwk = await subtle.exportKey('jwk', devPair.publicKey), devPrivJwk = await subtle.exportKey('jwk', devPair.privateKey);
+  const devEntry = { id: kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson({ kty: devJwk.kty, crv: devJwk.crv, x: devJwk.x, y: devJwk.y })))), jwk: { kty: devJwk.kty, crv: devJwk.crv, x: devJwk.x, y: devJwk.y }, addedAt: new Date().toISOString() };
+  ok('an inception that lists a device key verifies', (await kd.verifyInception(await withDevices([devEntry]))).ok === true);
+  ok('a device list that is not an array is rejected', (await kd.verifyInception(await withDevices('x'))).ok === false);
+  ok('a device entry with a private member is rejected', (await kd.verifyInception(await withDevices([{ id: 'a', jwk: devPrivJwk, addedAt: 'x' }]))).ok === false);
+  ok('a device entry that is not a P-256 key is rejected', (await kd.verifyInception(await withDevices([{ id: 'a', jwk: { kty: 'OKP', crv: 'Ed25519', x: 'aa' }, addedAt: 'x' }]))).ok === false);
+
   // ---- things that must NOT verify
   const clone = () => JSON.parse(JSON.stringify(good));
   let t = clone(); t.inception.state.services = [{ id: 'x', type: 'https', endpoint: 'https://evil.example' }];

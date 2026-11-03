@@ -391,7 +391,9 @@ module("lively.identity.SignedSerializer")
                 // including when a session hasn't been restored yet.
                 var isIdentityUrl = url && /^\/@[^/]+\/[^/]/.test(url);
 
-                if (!lively.identity.did.isLoggedIn()) {
+                // A local identity (keo: held by the shell, no server account) has no DID document and nowhere to
+                // PUT an envelope: its saves are the plain save, which the keo package routes to the device.
+                if (!lively.identity.did.isLoggedIn() || lively.identity.did.currentUser().local) {
                   if (isIdentityUrl) {
                     // Session not yet restored; skip silently — the next auto-save
                     // will succeed once the session is available.

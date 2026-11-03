@@ -79,6 +79,8 @@
     },
     // The public part of the session (DID, label, expiry, the delegation certificate), or null.
     'session.current': function () { return window.keoIdentity.current(); },
+    // Ends the session and shows the sign-in screen again. The world may ask: it only lowers what the world can do.
+    'session.signOut': function () { return window.keoIdentity.signOut().then(function () { setTimeout(function () { location.reload(); }, 0); return true; }); },
     // Saved worlds, encrypted under the signed-in identity (keo-worlds.js). `doc` is the whole saved page as text.
     'world.save': function (a) { return window.keoWorlds.save({ name: a.name, doc: a.doc }); },
     'world.list': function () { return window.keoWorlds.list(); },
@@ -86,6 +88,9 @@
     'world.last': function () { return window.keoWorlds.last(); },
     'world.setLast': function (a) { return window.keoWorlds.setLast({ name: a.name }); },
     'world.remove': function (a) { return window.keoWorlds.remove({ name: a.name }); },
+    // The identity's own small settings (encrypted with its worlds): only the names keo-worlds.js allows.
+    'prefs.get': function () { return window.keoWorlds.prefsGet(); },
+    'prefs.set': function (a) { return window.keoWorlds.prefsSet({ key: a.key, value: a.value }); },
     // Move to another page: the home page, a blank world, or a saved world by name. The world frame is restarted with a new
     // startup; the session stays. This is all a link would do, so the world may ask for it, but only for the signed-in identity.
     'world.go': function (a) { return go(a); },
