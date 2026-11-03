@@ -56,10 +56,13 @@ The browser tests drive a headed browser through `playwright-core` with the exte
 ```
 npm run test:did                                     # no browser: DID, inception and verifier
 npm run test:release                                 # no browser: release signing and verification
+npm run test:hello                                   # no browser: the short connection code and the signed peer proof
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator
 node tests/keo-session-test.js  . dist <work dir>    # the session, encrypted saved worlds, menu bar
 node tests/keo-gate-test.js     . dist <work dir>    # sign-in dialog inside the world, what starts when nobody is signed in
 node tests/keo-bridge-test.js   . dist <work dir>    # the shell <-> world bridge
+node tests/keo-p2p-test.js      . dist <work dir>    # two browsers: a direct connection by swapping two short codes, and file sharing
+node tests/keo-peer-dialog-test.js . dist <work dir> # two browsers: the "Connect a device" dialog, by real clicks, a real paste and a real download
 node tests/keo-identity-real.js . dist <work dir>    # a REAL authenticator: you approve four OS prompts
 ```
 

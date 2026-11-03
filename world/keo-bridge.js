@@ -59,9 +59,21 @@
     });
   }
 
+  // Events the shell pushes without being asked ({keo:1, event, data}): window.keo.on(name, fn) -> a function that stops listening.
+  // Not queued: one sent before a listener exists is lost, so a listener asks for the current state when it registers.
+  var listeners = {};
+  function on(name, fn) {
+    (listeners[name] = listeners[name] || []).push(fn);
+    return function () { listeners[name] = (listeners[name] || []).filter(function (f) { return f !== fn; }); };
+  }
+
   window.addEventListener('message', function (ev) {
     if (ev.source !== parentWin || ev.origin !== SHELL_ORIGIN) return;
     var m = ev.data;
+    if (m && m.keo === 1 && typeof m.event === 'string') {
+      (listeners[m.event] || []).slice().forEach(function (f) { try { f(m.data); } catch (e) { console.warn('keo bridge: a ' + m.event + ' listener threw: ' + e.message); } });
+      return;
+    }
     if (!m || m.keo !== 1 || m.id === undefined) return;
     var p = pending[m.id];
     if (!p) return;
@@ -179,5 +191,5 @@
     return init;
   });
 
-  window.keo = { call: call, ready: ready, shellOrigin: SHELL_ORIGIN, makeStorage: makeStorage };
+  window.keo = { call: call, on: on, ready: ready, shellOrigin: SHELL_ORIGIN, makeStorage: makeStorage };
 })();

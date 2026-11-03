@@ -80,7 +80,7 @@
     // The public part of the session (DID, label, expiry, the delegation certificate), or null.
     'session.current': function () { return window.keoIdentity.current(); },
     // Ends the session and shows the sign-in screen again. The world may ask: it only lowers what the world can do.
-    'session.signOut': function () { return window.keoIdentity.signOut().then(function () { setTimeout(function () { location.reload(); }, 0); return true; }); },
+    'session.signOut': function () { window.keoP2p.closeAll(); return window.keoIdentity.signOut().then(function () { setTimeout(function () { location.reload(); }, 0); return true; }); },
     // Saved worlds, encrypted under the signed-in identity (keo-worlds.js). `doc` is the whole saved page as text.
     'world.save': function (a) { return window.keoWorlds.save({ name: a.name, doc: a.doc }); },
     'world.list': function () { return window.keoWorlds.list(); },
@@ -94,9 +94,25 @@
     // Move to another page: the home page, a blank world, or a saved world by name. The world frame is restarted with a new
     // startup; the session stays. This is all a link would do, so the world may ask for it, but only for the signed-in identity.
     'world.go': function (a) { return go(a); },
+    // Direct connections to another device and file sharing (keo-p2p.js). The connections live in this page; the world drives
+    // them and gets plain-data events back (see the listener below). Received bytes never reach the world: p2p.save hands a
+    // received file to the browser's download. All of it needs a signed-in identity (the invitation is signed with its device).
+    'p2p.offer': function (a) { return window.keoP2p.offer({ name: a.name }); },
+    'p2p.answer': function (a) { return window.keoP2p.answer({ code: a.code, name: a.name }); },
+    'p2p.finish': function (a) { return window.keoP2p.finish({ id: a.id, code: a.code }); },
+    'p2p.send': function (a) { return window.keoP2p.send({ id: a.id, file: a.file, name: a.name }); },
+    'p2p.respond': function (a) { return window.keoP2p.respond({ id: a.id, fid: a.fid, accept: a.accept }); },
+    'p2p.cancel': function (a) { return window.keoP2p.cancel({ id: a.id, fid: a.fid }); },
+    'p2p.save': function (a) { return window.keoP2p.save({ id: a.id, fid: a.fid }); },
+    'p2p.close': function (a) { return window.keoP2p.close({ id: a.id }); },
+    'p2p.list': function () { return window.keoP2p.list(); },
     // The vault asked to be shown (its "Unlock with passkey" button needs a click inside its own frame), or hidden again.
     'vault.frame': function (a) { vault.classList.toggle('shown', !!a.shown); return true; }
   };
+
+  // Events from the connections go to the world as {keo:1, event:'p2p', data}. They are not queued: a world that is not up yet (or
+  // is restarting) misses them, and asks p2p.list for the current state when it starts.
+  window.keoP2p.onEvent(function (data) { toWorld({ keo: 1, event: 'p2p', data: data }); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;

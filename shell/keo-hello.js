@@ -1,0 +1,235 @@
+// keo connection codes and peer proofs. No storage, no WebRTC, no DOM: pure functions over WebCrypto, so a Node test can check
+// them. Two things live here because they belong together:
+//
+// 1. THE CODE two devices swap (paste, or a QR) to open a direct connection: "keo2." + base64url of a small binary record, about
+//    130 characters. It carries only what the other side needs to reach this one: the ICE user fragment and password, the DTLS
+//    certificate fingerprint, the host addresses (IPv4 or IPv6 and port), and when it was made. An answer also carries a short
+//    tag of the invitation it answers, so an answer for another invitation is refused at once instead of failing to connect
+//    later. A 3-byte checksum catches a mistyped or cut-off code. The session description (SDP) is rebuilt from a template on
+//    the other side (codeSdp): a data channel needs nothing else.
+//    The code is NOT signed and says nothing about who made it. Anyone who holds it can use it to try to connect, and anyone who
+//    can alter it on the way can point it at a different endpoint. Both are handled by 2.
+//
+// 2. THE PEER PROOF each side sends over the channel as soon as it opens, before anything else is accepted. It is signed by the
+//    device key of the sender's signed-in identity over BOTH DTLS fingerprints (the offerer's, then the answerer's), so it only
+//    verifies for the very connection it was made for: a code pointed at a different endpoint, or a proof relayed from another
+//    connection, fails because the fingerprints do not match what this side negotiated. The proof carries what a stranger needs
+//    to check it with no server (keo-did.js verifyInception): the inception event with its signatures and the delegation
+//    certificate of the device key (7.6). The certificate is either the inception itself (cert.via = 'inception': the device is
+//    listed in the inception's devices) or a sign-in certificate whose passkey assertion covers H(cert).
+//    `name` is optional and only what the sender chose to show; the identity's label stays on its device unless passed in.
+// What a valid proof says: someone holding this identity's passkey-delegated device key is at the other end of THIS connection
+// right now. It does not say that the person is the one you meant to reach: compare the DID (or what a contact list knows
+// about it) by other means.
+(function (root, factory) {
+  var kd = typeof module === 'object' && module.exports ? require('./keo-did.js') : root.keoDid;
+  var api = factory(kd);
+  if (typeof module === 'object' && module.exports) module.exports = api; else root.keoHello = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (kd) {
+  'use strict';
+
+  var subtle = globalThis.crypto && globalThis.crypto.subtle;
+  var enc = new TextEncoder();
+  var PREFIX = 'keo2.', FORMAT = 2, PURPOSE = 'keo-p2p-channel';
+  var MAX_CODE = 1024, MAX_CANDS = 8, MAX_NAME = 64, TAG_BYTES = 6, SUM_BYTES = 3;
+  var MAX_AGE_MS = 15 * 60 * 1000, SKEW_MS = 2 * 60 * 1000;
+
+  // ---- addresses and fingerprints -------------------------------------------------------------------------------------
+  function ipv4ToBytes(s) {
+    var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+    if (!m) return null;
+    var out = new Uint8Array(4);
+    for (var i = 0; i < 4; i++) { var v = +m[i + 1]; if (v > 255) return null; out[i] = v; }
+    return out;
+  }
+  function ipv6ToBytes(s) {
+    if (!/^[0-9a-fA-F:]+$/.test(s) || s.indexOf(':::') >= 0) return null;
+    var parts = s.split('::');
+    if (parts.length > 2) return null;
+    var head = parts[0] ? parts[0].split(':') : [], tail = parts.length === 2 && parts[1] ? parts[1].split(':') : [];
+    var missing = 8 - head.length - tail.length;
+    if (parts.length === 1 ? head.length !== 8 : missing < 1) return null;      // "::" stands for at least one group
+    var groups = head.concat(parts.length === 2 ? new Array(missing).fill('0') : [], tail), out = new Uint8Array(16);
+    for (var i = 0; i < 8; i++) {
+      if (!/^[0-9a-fA-F]{1,4}$/.test(groups[i])) return null;
+      var v = parseInt(groups[i], 16); out[i * 2] = v >> 8; out[i * 2 + 1] = v & 255;
+    }
+    return out;
+  }
+  function bytesToIpv4(b) { return b[0] + '.' + b[1] + '.' + b[2] + '.' + b[3]; }
+  function bytesToIpv6(b) { var g = []; for (var i = 0; i < 16; i += 2) g.push(((b[i] << 8) | b[i + 1]).toString(16)); return g.join(':'); }
+  // An address that cannot work as the other side's way in: this machine itself, "any", or a link-local IPv6 address (needs a
+  // zone this record does not carry). mDNS names (".local") never reach here: they are not literals.
+  function usable(bytes) {
+    if (bytes.length === 4) return bytes[0] !== 0 && bytes[0] !== 127 && bytes[0] < 224;
+    var allZero = true, i;
+    for (i = 0; i < 16; i++) if (bytes[i]) allZero = false;
+    if (allZero || (bytes.slice(0, 15).every(function (x) { return x === 0; }) && bytes[15] === 1)) return false;   // :: and ::1
+    return !(bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) && bytes[0] !== 0xff;
+  }
+  function fpToBytes(f) {
+    if (!/^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/.test(f)) return null;
+    return Uint8Array.from(f.split(':').map(function (h) { return parseInt(h, 16); }));
+  }
+  function bytesToFp(b) { return Array.prototype.map.call(b, function (x) { return (x < 16 ? '0' : '') + x.toString(16).toUpperCase(); }).join(':'); }
+
+  // ---- the code ---------------------------------------------------------------------------------------------------------
+  // From the local description the browser made. Only what a data channel needs: the first component's UDP host candidates.
+  // Throws an Error with a sentence for a person when the description is unusable (no address: not online).
+  function fromSdp(sdp, role, opts) {
+    opts = opts || {};
+    var g = function (re) { var m = re.exec(sdp); return m && m[1]; };
+    var u = g(/^a=ice-ufrag:(\S+)/m), p = g(/^a=ice-pwd:(\S+)/m), f = g(/^a=fingerprint:sha-256 (\S+)/mi);
+    if (!u || !p || !f || !fpToBytes(f)) throw new Error('This device could not make a connection description.');
+    var cands = [], seen = {};
+    sdp.split(/\r?\n/).forEach(function (l) {
+      var m = /^a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ host(?: |$)/.exec(l);
+      if (!m) return;
+      var port = +m[2], b = ipv4ToBytes(m[1]) || ipv6ToBytes(m[1]);
+      if (!b || !usable(b) || port < 1 || port > 65535 || seen[m[1] + '/' + port] || cands.length >= MAX_CANDS) return;
+      seen[m[1] + '/' + port] = 1;
+      cands.push([b.length === 4 ? bytesToIpv4(b) : bytesToIpv6(b), port]);
+    });
+    if (!cands.length) throw new Error('This device has no network address to connect with. Is it online?');
+    return { role: role, time: opts.now || Date.now(), u: u, p: p, f: f.toUpperCase(), c: cands, tag: opts.tag || null };
+  }
+
+  // A data-channel-only session description from a code. role is the role of the device the code came from: an offer is
+  // "actpass", the answer to it is "active" (the DTLS role a browser's answerer takes; checked 2026-11-03 by rebuilding both sides in one browser).
+  function codeSdp(c) {
+    var first = c.c[0], v6 = first[0].indexOf(':') >= 0;
+    var lines = ['v=0', 'o=- 4611731400430051336 2 IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE 0',
+      'm=application ' + first[1] + ' UDP/DTLS/SCTP webrtc-datachannel', 'c=IN ' + (v6 ? 'IP6 ' : 'IP4 ') + first[0]];
+    c.c.forEach(function (x, i) { lines.push('a=candidate:' + (1000 + i) + ' 1 udp ' + (2122260223 - i * 1000) + ' ' + x[0] + ' ' + x[1] + ' typ host generation 0'); });
+    lines.push('a=ice-ufrag:' + c.u, 'a=ice-pwd:' + c.p, 'a=fingerprint:sha-256 ' + c.f, 'a=setup:' + (c.role === 'offer' ? 'actpass' : 'active'),
+      'a=mid:0', 'a=sctp-port:5000', 'a=max-message-size:262144');
+    return lines.join('\r\n') + '\r\n';
+  }
+
+  // Names the invitation an answer belongs to: the first bytes of SHA-256 over the offer's credentials and fingerprint.
+  function offerTag(c) { return kd.sha256(enc.encode(c.u + '|' + c.p + '|' + c.f)).then(function (h) { return kd.b64u(h.slice(0, TAG_BYTES)); }); }
+
+  async function encodeCode(c) {
+    var u = enc.encode(c.u), p = enc.encode(c.p), parts = [], n = 0;
+    function put(arr) { parts.push(Uint8Array.from(arr)); n += arr.length; }
+    var secs = Math.floor(c.time / 1000);
+    put([FORMAT, c.role === 'answer' ? 1 : 0, (secs >>> 24) & 255, (secs >>> 16) & 255, (secs >>> 8) & 255, secs & 255, u.length]); put(u);
+    put([p.length]); put(p); put(fpToBytes(c.f)); put([c.c.length]);
+    c.c.forEach(function (x) { var b = ipv4ToBytes(x[0]) || ipv6ToBytes(x[0]); put([b.length === 4 ? 4 : 6]); put(b); put([x[1] >> 8, x[1] & 255]); });
+    if (c.role === 'answer') put(kd.unb64u(c.tag));
+    var body = new Uint8Array(n), off = 0;
+    parts.forEach(function (a) { body.set(a, off); off += a.length; });
+    var sum = (await kd.sha256(body)).slice(0, SUM_BYTES), all = new Uint8Array(n + SUM_BYTES);
+    all.set(body); all.set(sum, n);
+    return PREFIX + kd.b64u(all);
+  }
+
+  // Throws an Error whose message can be shown to a person. opts: { now, role } (role: 'offer' or 'answer', what is wanted).
+  async function decodeCode(text, opts) {
+    opts = opts || {};
+    var now = opts.now || Date.now();
+    text = String(text == null ? '' : text).replace(/\s+/g, '');
+    if (text.indexOf(PREFIX) !== 0) throw new Error('This is not a keo connection code.');
+    if (text.length > MAX_CODE || !/^[A-Za-z0-9_-]+$/.test(text.slice(PREFIX.length))) throw new Error('This connection code is damaged.');
+    var all;
+    try { all = kd.unb64u(text.slice(PREFIX.length)); } catch (e) { throw new Error('This connection code is damaged.'); }
+    var damaged = new Error('This connection code is damaged.');
+    if (all.length < 8 + SUM_BYTES) throw damaged;
+    var body = all.slice(0, all.length - SUM_BYTES), sum = all.slice(all.length - SUM_BYTES), want = (await kd.sha256(body)).slice(0, SUM_BYTES);
+    for (var i = 0; i < SUM_BYTES; i++) if (sum[i] !== want[i]) throw damaged;
+    var pos = 0;
+    function take(k) { if (pos + k > body.length) throw damaged; var s = body.slice(pos, pos + k); pos += k; return s; }
+    if (take(1)[0] !== FORMAT) throw new Error('This connection code is from a different version of keo.');
+    var role = take(1)[0] === 1 ? 'answer' : 'offer', t = take(4);
+    var secs = ((t[0] << 24) | (t[1] << 16) | (t[2] << 8) | t[3]) >>> 0;
+    var ul = take(1)[0], u = String.fromCharCode.apply(null, take(ul)), pl = take(1)[0], p = String.fromCharCode.apply(null, take(pl));
+    if (!/^[A-Za-z0-9+\/]{4,64}$/.test(u) || !/^[A-Za-z0-9+\/]{22,64}$/.test(p)) throw damaged;
+    var f = bytesToFp(take(32)), nc = take(1)[0];
+    if (nc < 1 || nc > MAX_CANDS) throw damaged;
+    var cands = [];
+    for (var k = 0; k < nc; k++) {
+      var fam = take(1)[0];
+      if (fam !== 4 && fam !== 6) throw damaged;
+      var a = take(fam === 4 ? 4 : 16), pt = take(2), port = (pt[0] << 8) | pt[1];
+      if (!usable(a) || port < 1) throw damaged;
+      cands.push([fam === 4 ? bytesToIpv4(a) : bytesToIpv6(a), port]);
+    }
+    var tag = role === 'answer' ? kd.b64u(take(TAG_BYTES)) : null;
+    if (pos !== body.length) throw damaged;
+    if (opts.role && role !== opts.role) throw new Error(role === 'offer' ? 'This is an invitation. An answer is needed here.' : 'This is an answer. An invitation is needed here.');
+    var time = secs * 1000;
+    if (time < now - MAX_AGE_MS) throw new Error('This connection code is too old. Ask for a new one.');
+    if (time > now + SKEW_MS) throw new Error('This connection code is dated in the future (check the clock).');
+    return { role: role, time: time, u: u, p: p, f: f, c: cands, tag: tag };
+  }
+
+  // ---- the peer proof ---------------------------------------------------------------------------------------------------
+  function plainJwk(j) { return { kty: j.kty, crv: j.crv, x: j.x, y: j.y }; }
+  function signedBytes(hello) { return enc.encode(kd.canonicalJson(hello)); }
+
+  // fps: [the offerer's fingerprint, the answerer's fingerprint] as the codes carry them. `proof` is { did, inception, sigs, cert }
+  // as keo-identity.js deviceProof returns it; the caller signs signedBytes(result) with signWithDevice.
+  function proofBuild(role, fps, proof, opts) {
+    opts = opts || {};
+    var h = { v: 1, purpose: PURPOSE, role: role, fps: fps.slice(), time: new Date(opts.now || Date.now()).toISOString(),
+      did: proof.did, inception: proof.inception, inceptionSigs: proof.sigs, cert: proof.cert };
+    if (opts.name) h.name = String(opts.name).replace(/\s+/g, ' ').trim().slice(0, MAX_NAME);
+    return h;
+  }
+
+  // null when the certificate is good, else a sentence saying what is wrong.
+  async function certError(cert, inception, did, now, audience) {
+    if (!cert || typeof cert !== 'object' || cert.v !== 1 || cert.did !== did) return 'the delegation is not for this identity';
+    var exp = Date.parse(cert.exp), iat = Date.parse(cert.issuedAt);
+    if (!(exp > now)) return 'the delegation has expired';
+    if (!(iat <= now + SKEW_MS)) return 'the delegation is dated in the future';
+    if (audience && cert.aud !== audience) return 'the delegation is for another app';
+    if (!Array.isArray(cert.scope) || cert.scope.indexOf('sign') < 0) return 'the delegation does not allow signing';
+    var dj = cert.devicePubKeyJwk;
+    if (!dj || dj.kty !== 'EC' || dj.crv !== 'P-256' || typeof dj.x !== 'string' || typeof dj.y !== 'string' || dj.d !== undefined) return 'the device key is malformed';
+    var key = inception.state.authority.keys.filter(function (k) { return k.id === cert.authorityKeyId; })[0];
+    if (!key) return 'the delegation names an authority key the identity does not have';
+    if (cert.via === 'inception') {
+      var want = kd.canonicalJson(plainJwk(dj));
+      var listed = (inception.state.devices || []).some(function (d) { return kd.canonicalJson(plainJwk(d.jwk)) === want; });
+      return listed ? null : 'the device is not listed in the identity\'s inception';
+    }
+    if (cert.via !== undefined) return 'the delegation is of an unknown kind';
+    // a sign-in certificate: the passkey signed H(cert as it was before the assertion was added)
+    var bare = {};
+    Object.keys(cert).forEach(function (k) { if (k !== 'assertion') bare[k] = cert[k]; });
+    var ok = cert.assertion && await kd.verifyAssertion(cert.assertion, key.jwk, await kd.eventHash(bare), 'webauthn.get');
+    return ok ? null : 'the delegation\'s passkey signature does not verify';
+  }
+
+  // Checks a proof received over the channel: msg = { hello, sig }. opts: { role (the role the SENDER must have), fps (what THIS
+  // side negotiated: it must equal what the sender signed), now, audience (the origin the certificate must be for) }.
+  // Resolves { ok, error } or { ok, did, name }.
+  async function verifyProof(msg, opts) {
+    opts = opts || {};
+    var now = opts.now || Date.now(), h = msg && msg.hello;
+    function fail(m) { return { ok: false, error: m }; }
+    try {
+      if (!h || typeof h !== 'object' || typeof msg.sig !== 'string' || h.v !== 1 || h.purpose !== PURPOSE) return fail('The other side sent something that is not a keo proof.');
+      if (h.role !== opts.role) return fail('The other side\'s proof is for the wrong end of the connection.');
+      if (!Array.isArray(h.fps) || h.fps.length !== 2 || !opts.fps || h.fps[0] !== opts.fps[0] || h.fps[1] !== opts.fps[1]) return fail('The other side\'s proof is for a different connection.');
+      var t = Date.parse(h.time);
+      if (!(t > now - MAX_AGE_MS)) return fail('The other side\'s proof is too old.');
+      if (t > now + SKEW_MS) return fail('The other side\'s proof is dated in the future (check the clock).');
+      if (h.name !== undefined && (typeof h.name !== 'string' || h.name.length > MAX_NAME)) return fail('The other side sent a bad name.');
+      var v = await kd.verifyInception({ inception: h.inception, sigs: h.inceptionSigs });
+      if (!v.ok) return fail('The identity does not verify: ' + v.error);
+      if (v.did !== h.did) return fail('The identity does not match its proof.');
+      var ce = await certError(h.cert, h.inception, h.did, now, opts.audience);
+      if (ce) return fail('The other side\'s device is not vouched for: ' + ce + '.');
+      var devKey = await subtle.importKey('jwk', plainJwk(h.cert.devicePubKeyJwk), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+      if (!(await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, devKey, kd.unb64u(msg.sig), signedBytes(h)))) return fail('The other side\'s signature does not match.');
+      return { ok: true, did: h.did, name: h.name || null };
+    } catch (e) {
+      return fail('The other side\'s proof could not be checked.');
+    }
+  }
+
+  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
+    proofBuild: proofBuild, signedBytes: signedBytes, verifyProof: verifyProof };
+});

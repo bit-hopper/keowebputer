@@ -79,7 +79,7 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
       return { loggedIn: did.isLoggedIn(), label: did.handleLabel(), entryText: entry && entry.textString, items, subItems, avatar: !!(entry && entry._avatarHandle), avatarSeed: entry && entry._avatarHandle, ambient: !!(panel && panel.world && panel.world()), local: did.currentUser() && did.currentUser().local };
     });
     check('menu bar: the world knows it is signed in, and shows the label (not a handle, not the DID)', menu.loggedIn && menu.local && menu.label === 'Maya' && menu.entryText === 'Maya', menu);
-    check('menu bar: the top level is short (My homestar, Identity, Sign out); the DID line, Copy DID and Rename are under Identity', JSON.stringify(menu.items) === JSON.stringify(['My homestar', 'Identity', 'Sign out']) && menu.subItems && /^keo:.{4}….{4}/.test(menu.subItems[0]) && menu.subItems.includes('Copy DID') && menu.subItems.some((l) => /^Rename/.test(l)), menu);
+    check('menu bar: the top level is short (My homestar, Connect a device, Identity, Sign out); the DID line, Copy DID and Rename are under Identity', JSON.stringify(menu.items) === JSON.stringify(['My homestar', 'Connect a device ...', 'Identity', 'Sign out']) && menu.subItems && /^keo:.{4}….{4}/.test(menu.subItems[0]) && menu.subItems.includes('Copy DID') && menu.subItems.some((l) => /^Rename/.test(l)), menu);
     check('menu bar: the avatar is seeded by the DID (so a rename keeps it)', menu.avatarSeed === did, menu.avatarSeed);
     check('ambient panel: it is open for the signed-in identity', menu.ambient === true, menu);
     // The clipboard is not read back: reading it from an extension page raises a permission prompt that only a person can answer

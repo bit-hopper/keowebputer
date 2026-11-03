@@ -188,6 +188,7 @@ module("lively.identity.MenuBarEntry")
             // is what a person reaches for: their page, and signing out.
             return [
               ["My homestar",        function () { self.openMyHomestar(); }],
+              ["Connect a device ...", function () { self.openPeerDialog(); }],
               ["Identity", [
                 [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
                 ["Copy DID",           function () { self.copyDid(); }],
@@ -220,6 +221,13 @@ module("lively.identity.MenuBarEntry")
           lively.require("lively.identity.LoginDialog").toRun(function () {
             lively.BuildSpec("lively.identity.LoginDialog")
               .createMorph().openInWorldCenter();
+          });
+        },
+
+        // A direct connection to another device, and file sharing over it (inside keo only: the connection lives in its shell).
+        openPeerDialog: function openPeerDialog() {
+          lively.require("lively.identity.PeerDialog").toRun(function () {
+            lively.BuildSpec("lively.identity.PeerDialog").createMorph().openInWorldCenter();
           });
         },
 

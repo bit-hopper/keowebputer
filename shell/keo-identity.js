@@ -382,6 +382,27 @@
     return out;
   }
 
+  // For code in THIS page only (the peer handshake, keo-p2p.js): what a stranger needs to check a signature of the signed-in
+  // identity's device key (keo-hello.js): the inception with its signatures and the session's delegation certificate. Public
+  // documents all of them, but kept off the bridge so the world is not handed more than session.current gives it.
+  async function deviceProof() {
+    if (!session) throw new Error('Sign in first.');
+    var info = session.info, rec = await dbGet(info.did);
+    if (!rec) throw new Error('This identity is no longer on this device.');
+    return { did: rec.did, inception: rec.inception, sigs: rec.sigs, cert: info.cert };
+  }
+  // Signs `bytes` with the device key of the identity `did`, which must still be the one signed in. Never put it behind a
+  // bridge op: it signs whatever it is given, so the world could make this device vouch for anything. Callers decide what is
+  // signed. No passkey prompt: the device key is what the session's certificate delegates, for as long as the session lasts.
+  // Resolves to the raw ECDSA signature (base64url).
+  async function signWithDevice(bytes, did) {
+    if (!session || session.info.did !== did) throw new Error('The signed-in identity changed.');
+    var rec = await dbGet(did);
+    if (!rec) throw new Error('This identity is no longer on this device.');
+    if (!session || session.info.did !== did) throw new Error('The signed-in identity changed.');
+    return kd.b64u(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, rec.deviceKey.privateKey, bytes));
+  }
+
   window.keoIdentity = { create: create, list: list, rename: rename, remove: remove, signIn: signIn, current: current,
-    signOut: signOut, resume: resume, sessionWorldKey: sessionWorldKey };
+    signOut: signOut, resume: resume, sessionWorldKey: sessionWorldKey, deviceProof: deviceProof, signWithDevice: signWithDevice };
 })();
