@@ -16,6 +16,7 @@ module("lively.identity.AuthChoiceDialog")
       _BorderRadius: 7,
       _Extent: lively.pt(320, 120),
       _Fill: Color.rgb(255, 16, 144),
+      _ZIndex: 1000,      // above every other morph, as in LoginDialog
       className: "lively.morphic.Window",
       contentOffset: lively.pt(3, 22),
       draggingEnabled: true,

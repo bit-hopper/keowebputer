@@ -37,6 +37,7 @@ module("lively.identity.PasskeyPrimingDialog")
       _BorderRadius: 7,
       _Extent: lively.pt(380, 210),
       _Fill: Color.rgb(255, 16, 144),
+      _ZIndex: 1000,      // above every other morph, as in LoginDialog
       className: "lively.morphic.Window",
       contentOffset: lively.pt(3, 22),
       draggingEnabled: true,

@@ -49,6 +49,9 @@ module("lively.identity.LoginDialog")
       _BorderRadius: 7,
       _Extent: lively.pt(400, 174),
       _Fill: Color.rgb(255, 16, 144),
+      // Above every other morph: a world may give its own morphs an explicit z-index (a morph with one is drawn over any
+      // later morph that has none), and a sign-in dialog must never end up under the page it was opened on.
+      _ZIndex: 1000,
       className: "lively.morphic.Window",
       contentOffset: lively.pt(3, 22),
       draggingEnabled: true,

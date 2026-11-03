@@ -202,6 +202,15 @@ const delta = (a, b) => JSON.stringify({ create: b.create - a.create, get: b.get
     if (gateWorld) await openLogin(frame);
     st = await waitDialog(frame, 3);
     check('start page: the dialog lists the three identities', st && st.buttons.slice().sort().join() === 'Maya,Noor,Ola', st);
+    // The landing page gives two of its pictures an explicit z-index, which a morph opened later does not have: the dialog must
+    // still be drawn over them, with nothing covering any part of it (seen as the Close button half hidden by a picture).
+    const cover = await frame.evaluate(() => {
+      const found = []; (function walk(m) { if (m.name === 'IdentityLoginDialog') found.push(m); (m.submorphs || []).forEach(walk); })($world);
+      const node = found[0].renderContext().morphNode, box = found[0].renderContext().shapeNode.getBoundingClientRect();
+      const hidden = [[.08, .12], [.92, .12], [.08, .92], [.92, .92], [.5, .5]].filter(([fx, fy]) => { const el = document.elementFromPoint(box.left + box.width * fx, box.top + box.height * fy); return !(el && node.contains(el)); });
+      return { z: getComputedStyle(node).zIndex, hiddenPoints: hidden.length };
+    });
+    check('start page: the dialog is drawn above the page\'s own pictures, nothing covers it', Number(cover.z) >= 1000 && cover.hiddenPoints === 0, cover);
     await page.screenshot({ path: path.join(WORK, 'gate-landing.png') });
     const c4 = await creds(page);
     await clickNamed(frame, 'identityBtn', st.buttons.indexOf('Noor'));
