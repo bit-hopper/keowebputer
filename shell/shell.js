@@ -1,4 +1,4 @@
-// keo shell page logic: the other end of the world bridge, plus the account-panel toggle.
+// keo shell page logic: the other end of the world bridge. The world is started by the sign-in screen (keo-gate.js).
 //
 // The world runs in a sandboxed iframe (world.html): opaque origin, no storage, no passkeys. This page is the extension's
 // own origin and has them all, so it serves the world's requests:
@@ -15,7 +15,9 @@
   var vault = document.getElementById('vault');
   var EXT_ORIGIN = location.origin;
 
-  document.getElementById('toggle').onclick = function () { document.getElementById('acct').classList.toggle('open'); };
+  // How the world was asked to start (keo-gate.js decides, see there). The world gets it in the handshake and can read the
+  // public part of the session again with session.current; it cannot change either.
+  var startup = null;
 
   function toWorld(msg) { try { world.contentWindow.postMessage(msg, '*'); } catch (e) {} }   // '*': the world's origin is opaque
   function replyOk(id, result) { toWorld({ keo: 1, id: id, ok: true, result: result }); }
@@ -45,7 +47,7 @@
       // The overlay is read-only for the world: this is the only way it gets one, and no op writes it. If it cannot be read the
       // world starts from the package alone.
       return Promise.all([window.keoStore.lsAll(), window.keoOverlay.all().catch(function () { return {}; })]).then(function (r) {
-        return { localStorage: r[0], overlay: r[1], extensionId: location.hostname, origin: EXT_ORIGIN };
+        return { localStorage: r[0], overlay: r[1], extensionId: location.hostname, origin: EXT_ORIGIN, startup: startup };
       });
     },
     'ls.apply': function (a) { return window.keoStore.lsApply(a); },
@@ -64,8 +66,29 @@
     'identity.create': function (a) { return window.keoIdentity.create({ label: a.label }); },
     'identity.list': function () { return window.keoIdentity.list(); },
     'identity.rename': function (a) { return window.keoIdentity.rename({ did: a.did, label: a.label }); },
-    'identity.remove': function (a) { return window.keoIdentity.remove({ did: a.did }); },
-    'identity.signIn': function (a) { return window.keoIdentity.signIn({ did: a.did }); },
+    // Removing an identity also drops what it saved: without its record the key is gone for good.
+    'identity.remove': function (a) {
+      return window.keoIdentity.remove({ did: a.did }).then(function () { return window.keoWorlds.purge(String(a.did)); }).then(function () { return true; });
+    },
+    // The world may sign in only while nobody is: it cannot swap the identity a person chose on the sign-in screen.
+    'identity.signIn': function (a) {
+      return window.keoIdentity.current().then(function (s) {
+        if (s) throw new Error('Already signed in as ' + s.label + '. Sign out first.');
+        return window.keoIdentity.signIn({ did: a.did });
+      });
+    },
+    // The public part of the session (DID, label, expiry, the delegation certificate), or null.
+    'session.current': function () { return window.keoIdentity.current(); },
+    // Saved worlds, encrypted under the signed-in identity (keo-worlds.js). `doc` is the whole saved page as text.
+    'world.save': function (a) { return window.keoWorlds.save({ name: a.name, doc: a.doc }); },
+    'world.list': function () { return window.keoWorlds.list(); },
+    'world.load': function (a) { return window.keoWorlds.load({ name: a.name }); },
+    'world.last': function () { return window.keoWorlds.last(); },
+    'world.setLast': function (a) { return window.keoWorlds.setLast({ name: a.name }); },
+    'world.remove': function (a) { return window.keoWorlds.remove({ name: a.name }); },
+    // Move to another page: the home page, a blank world, or a saved world by name. The world frame is restarted with a new
+    // startup; the session stays. This is all a link would do, so the world may ask for it, but only for the signed-in identity.
+    'world.go': function (a) { return go(a); },
     // The vault asked to be shown (its "Unlock with passkey" button needs a click inside its own frame), or hidden again.
     'vault.frame': function (a) { vault.classList.toggle('shown', !!a.shown); return true; }
   };
@@ -92,7 +115,31 @@
     }
   });
 
-  // Start the frames only now, with the listener in place, so the world's first request cannot arrive unheard.
+  // The vault starts now, with the listener in place. The world starts only when the sign-in screen (keo-gate.js) calls
+  // start(), so its first request cannot arrive unheard and cannot arrive before someone chose how to enter.
   vault.src = 'vault.html';
-  world.src = 'world.html';
+  function go(a) {
+    return window.keoIdentity.current().then(function (session) {
+      if (!session) throw new Error('Sign in to move between pages.');
+      var kind = String(a.kind);
+      if (kind === 'homestar' || kind === 'blank') return { kind: kind, session: session };
+      if (kind !== 'world') throw new Error('Unknown page kind.');
+      return window.keoWorlds.load({ name: a.name }).then(function (w) {
+        if (!w) throw new Error('No such saved world.');
+        return window.keoWorlds.setLast({ name: w.name }).then(function () { return { kind: 'world', session: session, name: w.name, doc: w.doc }; });
+      });
+    }).then(function (next) {
+      startup = next;
+      world.src = 'about:blank';
+      setTimeout(function () { world.src = 'world.html'; }, 0);
+      return true;
+    });
+  }
+  window.keoShell = {
+    start: function (s) {
+      if (startup) return;           // once per page: another identity means signing out, which reloads this page
+      startup = s;
+      world.src = 'world.html';
+    }
+  };
 })();

@@ -44,7 +44,7 @@ const asResult = (e, r) => (e ? { err: e.name + ': ' + e.message } : { r });
     const errors = [];
     page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message.slice(0, 200)));
     page.on('console', (m) => { if (m.type() === 'error' && !/compute-pressure/.test(m.text())) errors.push('console: ' + m.text().slice(0, 200)); });
-    await page.goto(`chrome-extension://${ID}/start.html`);
+    await page.goto(`chrome-extension://${ID}/start.html#guest`);
     let frame = await waitForWorld(page);
     const env = await page.evaluate(() => ({ ua: navigator.userAgent, uvpaa: null, caps: null }));
     env.uvpaa = await page.evaluate(() => PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable());

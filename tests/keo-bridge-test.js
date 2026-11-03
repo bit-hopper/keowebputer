@@ -216,7 +216,7 @@ async function openShell(ctx, withAuthenticator) {
     await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
       hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
   }
-  await page.goto(`chrome-extension://${ID}/start.html`);
+  await page.goto(`chrome-extension://${ID}/start.html#guest`);
   let frame = null;
   for (let i = 0; i < 100 && !frame; i++) { frame = page.frames().find((f) => /world\.html$/.test(f.url())); if (!frame) await sleep(200); }
   for (let i = 0; i < 150; i++) { try { if (await frame.evaluate(() => !!(window.$world && window.$world.submorphs))) break; } catch (e) {} await sleep(300); }

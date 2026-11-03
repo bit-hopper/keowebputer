@@ -35,7 +35,7 @@ const FUNC = () => {
     page.on('requestfailed', (rq) => failed.push(rq.method() + ' ' + rq.url().replace('chrome-extension://' + ID, '') + ' ' + (rq.failure() && rq.failure().errorText)));
     page.on('request', (rq) => requested.push(rq.url()));
     const t0 = Date.now();
-    await page.goto(`chrome-extension://${ID}/start.html`, { timeout: 10000 });
+    await page.goto(`chrome-extension://${ID}/start.html#guest`, { timeout: 10000 });
     out.shellTitle = await page.title();
     let frame = null;
     for (let i = 0; i < 160 && !frame; i++) { frame = page.frames().find((f) => /world\.html$/.test(f.url())); if (!frame) await new Promise((r) => setTimeout(r, 250)); }

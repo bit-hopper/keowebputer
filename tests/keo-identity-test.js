@@ -40,7 +40,7 @@ async function waitForWorld(page) {
     await cdp.send('WebAuthn.enable', { enableUI: false });
     await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
       hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
-    await page.goto(`chrome-extension://${ID}/start.html`);
+    await page.goto(`chrome-extension://${ID}/start.html#guest`);
     let frame = await waitForWorld(page);
 
     // ---- create through the bridge, from the world (the module loads on demand, as RegisterDialog's requires would)
@@ -99,10 +99,10 @@ async function waitForWorld(page) {
     check('list: one identity, same DID', Array.isArray(l1) && l1.length === 1 && l1[0].did === A.did, l1);
     const ren = await frame.evaluate((did) => new Promise((res) => lively.identity.localIdentity.rename(did, '  Work   laptop  ', (e, r) => res(e ? { err: e.message } : r))), A.did);
     check('rename: the label is the user\'s to change (whitespace tidied), the DID is not', ren.label === 'Work laptop' && ren.did === A.did, ren);
-    const si = await frame.evaluate((did) => new Promise((res) => lively.identity.localIdentity.signIn(did, (e, r) => res(e ? { err: e.name + ': ' + e.message } : r))), A.did);
-    check('signIn: assertion origin is the extension, secret unlocks non-extractable', !si.err && si.assertionOrigin === 'chrome-extension://' + ID && si.secretNonExtractable === true && si.label === 'Work laptop', si);
     const noSuch = await frame.evaluate(() => new Promise((res) => lively.identity.localIdentity.signIn('did:keo:nope', (e, r) => res(e ? e.message : 'no error'))));
     check('signIn: an unknown DID is an error, not a ceremony', /No such identity/.test(noSuch), noSuch);
+    const si = await frame.evaluate((did) => new Promise((res) => lively.identity.localIdentity.signIn(did, (e, r) => res(e ? { err: e.name + ': ' + e.message } : r))), A.did);
+    check('signIn: assertion origin is the extension, secret unlocks non-extractable', !si.err && si.assertionOrigin === 'chrome-extension://' + ID && si.secretNonExtractable === true && si.label === 'Work laptop', si);
 
     // ---- the same after a page reload (storage lives in the shell, not the page)
     await page.reload();

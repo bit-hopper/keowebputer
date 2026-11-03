@@ -15,7 +15,7 @@ function check(name, ok, detail) { results.push(ok); console.log((ok ? 'PASS ' :
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error' && !/compute-pressure/.test(m.text())) errors.push(m.text().slice(0, 300) + ' @' + ((m.location() || {}).url || '')); });
   page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message.slice(0, 300)));
-  await page.goto(`chrome-extension://${ID}/start.html`);
+  await page.goto(`chrome-extension://${ID}/start.html#guest`);
   let frame; for (let i = 0; i < 100 && !frame; i++) { frame = page.frames().find((f) => /world\.html$/.test(f.url())); await sleep(200); }
   for (let i = 0; i < 150; i++) { try { if (await frame.evaluate(() => !!(window.$world && window.$world.submorphs))) break; } catch (e) {} await sleep(300); }
   await sleep(1500);

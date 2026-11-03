@@ -26,7 +26,8 @@ const rd = (rel) => fs.readFileSync(path.join(EXT, rel), 'utf8');
   page.on('console', (m) => { if (m.type() === 'error' && !/compute-pressure/.test(m.text())) errors.push(m.text().slice(0, 300) + ' @' + ((m.location() || {}).url || '')); });
   page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message.slice(0, 300)));
   async function start() {
-    await page.goto(`chrome-extension://${ID}/start.html`);
+    // a second goto to the same address with a fragment is NOT a reload, so restart the page itself when it is already open
+    if (/^chrome-extension:/.test(page.url())) await page.reload(); else await page.goto(`chrome-extension://${ID}/start.html#guest`);
     let frame; for (let i = 0; i < 100 && !frame; i++) { frame = page.frames().find((f) => /world\.html$/.test(f.url())); await sleep(200); }
     for (let i = 0; i < 150; i++) { try { if (await frame.evaluate(() => !!(window.$world && window.$world.submorphs))) break; } catch (e) {} await sleep(300); }
     await sleep(1000);

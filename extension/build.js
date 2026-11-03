@@ -99,6 +99,9 @@ lively.Config.set('moduleLoadTestTimeout', false);
 // The per-user config module (users/<name>/config.js) is a server-era hook; the package has no users/ folder, so do not
 // request one.
 lively.Config.set('loadUserConfig', false);
+// Who may save a world is decided by the shell (keo-worlds.js saves only under the signed-in identity). The runtime's own
+// check asks a server for the user and, finding none, stops the save on a "log in now?" dialog that cannot succeed here.
+lively.Config.set('checkWriteAuthorizationOfUsers', false);
 `);
   // 2. the directory listings the kernel's server would answer (a PROPFIND answer for a folder with no subfolders, same shape
   //    the server gives); the boot bundle they sit beside is already in the snapshot
@@ -124,8 +127,7 @@ lively.Config.set('loadUserConfig', false);
 
   // 4. shell page, the vault page and the manifest
   put('start.html', fs.readFileSync(path.join(SHELL, 'start.html')));
-  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-identity.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
-  put('start.js', fs.readFileSync(path.join(__dirname, 'panel.js')));   // the account panel in the shell bar; the package calls it start.js
+  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-identity.js', 'keo-worlds.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
   // The vault page as the server builds it (IdentityServer.js buildIdentityVaultPage), with the shell's origin as the one
   // app origin it will answer. Relative script paths: this page lives at the package root.
   put('vault.html', '<!DOCTYPE html><html><head><meta charset="utf-8">' +

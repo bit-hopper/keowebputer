@@ -29,7 +29,7 @@ if (process.env.KEO_SNIPPET) FEATURES.custom = require('fs').readFileSync(proces
   // KEO_BASELINE=<url>: run against the normal server instead (the world is the page itself), to tell what is specific to the package
   let frame;
   if (process.env.KEO_BASELINE) { await page.goto(process.env.KEO_BASELINE); frame = page.mainFrame(); }
-  else { await page.goto(`chrome-extension://${ID}/start.html`);
+  else { await page.goto(`chrome-extension://${ID}/start.html#guest`);
   for (let i = 0; i < 100 && !frame; i++) { frame = page.frames().find((f) => /world\.html$/.test(f.url())); await sleep(200); } }
   for (let i = 0; i < 150; i++) { try { if (await frame.evaluate(() => !!(window.$world && window.$world.submorphs))) break; } catch (e) {} await sleep(300); }
   await sleep(1500);

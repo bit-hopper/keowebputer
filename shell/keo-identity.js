@@ -20,7 +20,7 @@
 // second credential on another rpId is enrolled. Nothing here enrols one.
 // The label is the user's own name for the identity on this device. It is never part of the log and never leaves the
 // device; it is also written into the passkey's user name, so the authenticator's own picker shows it.
-// Not here (later steps of 9.4l): a session, export/import, registering to a host.
+// Not here (later steps of 9.4l): export/import, registering to a host.
 (function () {
   'use strict';
   var kd = window.keoDid;
@@ -215,31 +215,74 @@
   // without the record its wrapped secret is gone.
   function remove(args) { return dbDelete(String(args.did)).then(function () { return true; }); }
 
-  // Unlock: a passkey assertion (with PRF) over a fresh challenge, checked against the authority key in the identity's own
-  // log; the account secret is unwrapped non-extractable and compared with its stored check value; the device key signs a
-  // test message. Returns plain data only. A session is a later step.
+  // ---- sign-in and the session ----------------------------------------------------------------------------------------
+  // Signing in is ONE passkey prompt that does two things: it unlocks the account secret (PRF) and it delegates the device
+  // key (7.6). The assertion's challenge is H(cert) where cert = { v, did, devicePubKeyJwk, issuedAt, exp, aud, scope,
+  // authorityKeyId }, so the same authority key that signed the inception vouches for this device for a limited time.
+  //   - aud is this extension's origin: the certificate is for this shell and its world, not for a host. A host will want
+  //     its own (registering with a host, a later step).
+  //   - scope names what the session is for. The strings are this prototype's own and nothing enforces them yet.
+  //   - exp: SESSION_MS after sign-in. A session that has expired is ended; it is never renewed without a prompt.
+  // The session lives ONLY in this page's memory (a reload of this page, or closing the browser, ends it) and so does the key
+  // that encrypts saved worlds. The world can read the public part (session.current) and can neither start, extend nor end
+  // it, and never receives a key.
+  var SESSION_MS = 12 * 60 * 60 * 1000;
+  var SESSION_SCOPE = ['world:read', 'world:write', 'sign'];
+  var session = null;      // { info, worldKey, timer }
+
+  function endSession() {
+    if (session && session.timer) clearTimeout(session.timer);
+    session = null;
+  }
+  // Public view of the session: plain data, safe to hand to the world. The certificate is a public document.
+  function current() { return Promise.resolve(session ? session.info : null); }
+  function signOut() { endSession(); return Promise.resolve(true); }
+  // For code in THIS page only (the saved-worlds store). Never put it behind a bridge op: it is the key that decrypts
+  // everything the identity has saved. Null when nobody is signed in.
+  function sessionWorldKey() { return session ? { did: session.info.did, key: session.worldKey } : null; }
+
+  // Unlock and delegate with one passkey prompt, check the answer against the authority key in the identity's own log, unwrap
+  // the account secret non-extractable and compare it with its stored check value, and start the session. Returns plain data.
   async function signIn(args) {
     var rec = await dbGet(String(args.did));
     if (!rec) throw new Error('No such identity on this device.');
-    var challenge = rnd(32), diag = [];
+    var now = Date.now(), diag = [];
+    var cert = { v: 1, did: rec.did, devicePubKeyJwk: rec.deviceKey.publicJwk, issuedAt: new Date(now).toISOString(),
+      exp: new Date(now + SESSION_MS).toISOString(), aud: location.origin, scope: SESSION_SCOPE.slice(), authorityKeyId: rec.credentialId };
+    var challenge = await kd.eventHash(cert);
     var a = await ceremony(diag, 'unlocking with the passkey', function () { return navigator.credentials.get({ publicKey: {
       challenge: challenge, allowCredentials: [{ type: 'public-key', id: kd.unb64u(rec.credentialId) }], userVerification: 'required',
       extensions: { prf: { eval: { first: SALT } } } } }); });
     var key = rec.inception.state.authority.keys.filter(function (k) { return k.id === rec.credentialId; })[0];
-    if (!key || !(await kd.verifyAssertion(assertionSig(rec.credentialId, a), key.jwk, challenge))) throw new Error('The passkey assertion did not verify.');
+    var sig = assertionSig(rec.credentialId, a);
+    if (!key || !(await kd.verifyAssertion(sig, key.jwk, challenge))) throw new Error('The passkey assertion did not verify.');
     var prf = prfOf(a);
     if (!prf) throw new Error('No PRF output on sign-in.');
     var secret = await crypto.subtle.unwrapKey('raw', kd.unb64u(rec.wrappedAccountSecret), await prfKek(prf), 'AES-KW',
       { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     if (kd.b64u(await crypto.subtle.sign('HMAC', secret, enc.encode('keo/check'))) !== rec.check) throw new Error('The account secret did not unlock.');
-    var msg = rnd(16), sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, rec.deviceKey.privateKey, msg);
-    if (!(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, rec.deviceKey.publicKey, sig, msg))) throw new Error('The device key did not verify.');
+    var msg = rnd(16), dsig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, rec.deviceKey.privateKey, msg);
+    if (!(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, rec.deviceKey.publicKey, dsig, msg))) throw new Error('The device key did not verify.');
+    // The key for saved worlds: one HMAC output of the secret under its own label, kept as a non-extractable AES-GCM key.
+    // The label is all that separates it from the discovery seed and the check value, so it is never reused.
+    var wk = new Uint8Array(await crypto.subtle.sign('HMAC', secret, enc.encode('keo/worlds/v1')));
+    var worldKey = await crypto.subtle.importKey('raw', wk, 'AES-GCM', false, ['encrypt', 'decrypt']);
+    wk.fill(0);
+
+    endSession();
+    var info = { did: rec.did, label: rec.label, issuedAt: cert.issuedAt, exp: cert.exp,
+      cert: Object.assign({}, cert, { assertion: { authenticatorData: sig.authenticatorData, clientDataJSON: sig.clientDataJSON, signature: sig.signature } }) };
+    var timer = setTimeout(function () { if (session && session.info === info) endSession(); }, SESSION_MS);
+    session = { info: info, worldKey: worldKey, timer: timer };
+
     var out = summary(rec);
     out.assertionOrigin = JSON.parse(new TextDecoder().decode(a.response.clientDataJSON)).origin;
     out.secretNonExtractable = secret.extractable === false;
+    out.session = info;
     out.diag = diag;
     return out;
   }
 
-  window.keoIdentity = { create: create, list: list, rename: rename, remove: remove, signIn: signIn };
+  window.keoIdentity = { create: create, list: list, rename: rename, remove: remove, signIn: signIn, current: current,
+    signOut: signOut, sessionWorldKey: sessionWorldKey };
 })();
