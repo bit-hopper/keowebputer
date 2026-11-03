@@ -157,13 +157,6 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
   // snapshot to the package root.
   for (const [from, to] of [['LICENSE', 'LICENSE-lively-kernel'], ['AUTHORS', 'AUTHORS-lively-kernel']]) put(to, fs.readFileSync(path.join(KERNEL, from)));
 
-  // 5. where this package came from: the kernel commit the snapshot in kernel/ was taken from (the snapshot is verbatim, so
-  //    the commit says what the runtime's files are)
-  put('keo-build.json', JSON.stringify({
-    builtAt: new Date().toISOString(), version: VERSION, extensionId: id, bundleHash: hash,
-    kernel: { commit: SNAPSHOT.commit }
-  }, null, 2) + '\n');
-
   // 5b. Work in progress that is not committed: whatever is under extension/local/ (gitignored) is copied into the package at the
   //     same path. It is for a LOCAL build (the landing page the world starts from while it is unfinished, and the pictures it
   //     shows); a CI build has no such folder and ships none of it. It may add files, never replace one the build wrote.
@@ -182,6 +175,14 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
     walk(LOCAL, '');
     console.warn('extension/local/ is present: its files are in this package (not a committed build)');
   }
+
+  // 5. where this package came from: the kernel commit the snapshot in kernel/ was taken from (the snapshot is verbatim, so
+  //    the commit says what the runtime's files are). gateWorld says the package carries a landing page for the world to start
+  //    from (see 5b), which the shell then uses as its sign-in screen instead of its own HTML one. Written after 5b for that.
+  put('keo-build.json', JSON.stringify({
+    builtAt: new Date().toISOString(), version: VERSION, extensionId: id, bundleHash: hash,
+    kernel: { commit: SNAPSHOT.commit }, gateWorld: fs.existsSync(path.join(OUT, 'gate-world.html'))
+  }, null, 2) + '\n');
 
   // 6. every file with its hash, written last. It is the baseline an update is diffed against (what the package has), not a
   //    security statement: whatever an update downloads is checked against the signed release, never against this.

@@ -403,11 +403,13 @@ module("lively.identity.RegisterDialog")
       // ─── local creation (keo app) ───────────────────────────────────────────────
 
       // Asks the shell to make the identity (two passkey prompts: create the
-      // passkey, then sign the inception with it). Ends with the identity
-      // existing on this device and the dialog saying so. Signing in with it
-      // and giving the world a session come in a later step, so nothing else
-      // happens yet; the button stays off so a second click cannot create a
-      // second identity.
+      // passkey, then sign the inception with it). When nobody was signed in,
+      // the shell starts the session for the new identity itself, and the
+      // dialog then asks the shell to open its landing page (a new identity
+      // has no saved world, so its home page). When someone IS signed in (the
+      // account dialog offers this too) the session stays theirs and the
+      // dialog only says what was made. The button stays off so a second
+      // click cannot create a second identity.
       _createLocal: function _createLocal() {
         var self = this;
         var btn = this.get("registerBtn");
@@ -424,6 +426,12 @@ module("lively.identity.RegisterDialog")
               "Created " + id.label + " (" + lively.identity.localIdentity.shortDid(id.did) + ") on this device." +
               (id.notRecoverable ? " Not recoverable yet: add a second passkey later." : "")
             );
+            // the session returned is whoever is signed in now: only enter when that is the identity just made
+            if (id.session && id.session.did === id.did) {
+              lively.identity.localIdentity.go("enter", undefined, function (goErr) {
+                if (goErr) self.setStatus("Created, but could not open the page: " + (goErr.message || goErr), true);
+              });
+            }
           });
         });
       },

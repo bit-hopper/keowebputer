@@ -67,7 +67,8 @@ module("lively.identity.LocalIdentity")
         this._run("session.signOut", {}, 30000, thenDo);
       },
 
-      // Moves to another page for the signed-in identity: "homestar", "blank", or "world" with a saved world's name.
+      // Moves to another page for the signed-in identity: "homestar", "blank", or "world" with a saved world's name. "enter" lets
+      // the shell choose, as it does after a sign-in: the world saved last, else the home page.
       go: function go(kind, name, thenDo) {
         this._run("world.go", { kind: kind, name: name }, 120000, thenDo || function () {});
       },

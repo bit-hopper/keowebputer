@@ -123,10 +123,26 @@
   // The vault starts now, with the listener in place. The world starts only when the sign-in screen (keo-gate.js) calls
   // start(), so its first request cannot arrive unheard and cannot arrive before someone chose how to enter.
   vault.src = 'vault.html';
+  // Where a signed-in identity lands on entering: the world it saved last, else (a new identity, or nothing saved) its home page.
+  // A last world that cannot be read does not lock the person out: they land on the home page with a warning.
+  function landing(session) {
+    var startup = { kind: 'homestar', session: session };
+    return window.keoWorlds.last().then(function (last) {
+      if (last) startup = { kind: 'world', session: session, name: last.name, doc: last.doc };
+      return startup;
+    }, function (e) {
+      startup.warning = 'Your last saved world could not be opened: ' + (e && e.message || e);
+      return startup;
+    });
+  }
+
   function go(a) {
     return window.keoIdentity.current().then(function (session) {
       if (!session) throw new Error('Sign in to move between pages.');
       var kind = String(a.kind);
+      // 'enter': what the sign-in screen does after a sign-in or a create. A world that is the sign-in screen (the morphic one)
+      // asks for it once its identity dialog has a session; the choice of page stays with this page.
+      if (kind === 'enter') return landing(session);
       if (kind === 'homestar' || kind === 'blank') return { kind: kind, session: session };
       if (kind !== 'world') throw new Error('Unknown page kind.');
       return window.keoWorlds.load({ name: a.name }).then(function (w) {
@@ -141,6 +157,7 @@
     });
   }
   window.keoShell = {
+    landing: landing,
     start: function (s) {
       if (startup) return;           // once per page: another identity means signing out, which reloads this page
       startup = s;

@@ -1,7 +1,7 @@
 // End-to-end test of the sign-in screen, the session and saved worlds in the built keo extension.
 // Usage: node keo-session-test.js <repo root> <extension folder> <work dir>
 // A headed browser with the extension loaded, `localhost` unresolvable, and a CDP virtual authenticator with PRF. It drives the
-// real sign-in screen: create an identity (two passkey prompts, lands on the home page), check the menu bar and the ambient panel
+// real sign-in screen (the shell's own HTML one, start.html#html; the world's landing page is keo-gate-test.js): create an identity (two passkey prompts, lands on the home page), check the menu bar and the ambient panel
 // see the session, start a blank world and save it, refresh the tab (the session comes back with no prompt), look at what is
 // stored on disk, sign out from the world, sign in again (lands on the saved world), and break a saved record on purpose.
 // NOT covered: a browser RESTART (a virtual authenticator does not survive one, so its passkey is gone), and a real
@@ -53,7 +53,7 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
       hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
 
     // ---- 1. the gate: nothing runs until someone chooses
-    await page.goto(`chrome-extension://${ID}/start.html`);
+    await page.goto(`chrome-extension://${ID}/start.html#html`);
     await sleep(1500);
     check('gate: the sign-in screen is showing', await page.evaluate(() => !document.getElementById('gate').classList.contains('hidden')));
     check('gate: no world has been started', !worldFrame(page));
@@ -167,7 +167,7 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     check('refresh: what is kept for it is one non-extractable key, seen recently', rec.length === 1 && rec[0].extractable === false && rec[0].seenAgo < 60000, rec);
     await page.screenshot({ path: path.join(WORK, 'session-returning.png') });
     const other = await ctx.newPage();
-    await other.goto('chrome-extension://' + ID + '/start.html');
+    await other.goto('chrome-extension://' + ID + '/start.html#html');
     await sleep(1500);
     check('another tab does not pick the session up: it shows the sign-in screen', await other.evaluate(() => !document.getElementById('gate').classList.contains('hidden') && /Maya/.test(document.getElementById('idlist').textContent)));
     await other.close();

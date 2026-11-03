@@ -19,6 +19,11 @@
  *     verifies the assertion, and the DID document is fetched from /@handle
  *     and saved to local lively.IndexedDB before completeAuthentication runs.
  *
+ * Inside the keo app (lively.identity.localIdentity.isAvailable()) there is no server and no handle: the dialog lists the
+ * identities made on this device by their label, and a click unlocks that one with its passkey (one prompt). The shell then
+ * holds the session and decides the landing page (the world saved last, else the identity's home page); the dialog asks for it
+ * with localIdentity.go("enter"). "New identity" leads to the local form of RegisterDialog. The server flow below is untouched.
+ *
  * Async convention: thenDo(err, result) throughout.
  *
  * Dependencies:
@@ -32,6 +37,7 @@ module("lively.identity.LoginDialog")
   .requires(
     "lively.identity.DID",
     "lively.identity.WebAuthn",
+    "lively.identity.LocalIdentity",
     "lively.identity.ObjectStore",
     "lively.identity.PasskeyPrimingDialog",
     "lively.persistence.BuildSpec",
@@ -103,6 +109,9 @@ module("lively.identity.LoginDialog")
         var content = this.get("loginContent");
         if (!content) return;
         content.removeAllMorphs();
+
+        // Inside the keo app there is no server to sign in to: pick one of the identities on this device.
+        if (lively.identity.localIdentity.isAvailable()) return this.buildLocalForm(content);
 
         var pad = 14;
         var y = pad;
@@ -199,6 +208,138 @@ module("lively.identity.LoginDialog")
         content.addMorph(cancelBtn);
         paintButton(cancelBtn, "rgb(214,214,214)", 1, 5, null);
         lively.bindings.connect(cancelBtn, "fire", self, "goBack");
+      },
+
+      // ─── local sign-in (keo app) ────────────────────────────────────────────────
+
+      // The list comes from the shell, so the form is drawn when it answers (the window is closed by then, or not: check).
+      buildLocalForm: function buildLocalForm(content) {
+        var self = this;
+        this._localBusy = false;
+        this.layoutLocal(content, null, null);
+        lively.identity.localIdentity.list(function (err, list) {
+          if (!self.world()) return;
+          self.layoutLocal(self.get("loginContent"), err, list || []);
+        });
+      },
+
+      // list === null: still asking. Otherwise one button per identity, named by its label (with the short DID added when two
+      // share a label, so they can be told apart), then "New identity" and a way out. The window is sized to fit the list.
+      layoutLocal: function layoutLocal(content, err, list) {
+        var self = this;
+        content.removeAllMorphs();
+        var pad = 14;
+        var y = pad;
+        var w = 394 - pad * 2;
+
+        function addLabel(text) {
+          var lbl = new lively.morphic.Text(lively.rect(pad, y, w, 16), text);
+          lbl.applyStyle({
+            allowInput: false,
+            fontFamily: "Arial, sans-serif",
+            fontSize: 11,
+            textColor: Color.rgb(70, 70, 70),
+            padding: lively.rect(4, 3, 0, 0),
+            fill: null,
+            borderWidth: 0,
+            borderColor: null,
+          });
+          content.addMorph(lbl);
+          y += 22;
+        }
+
+        function paintButton(btn, borderColor, borderWidth, borderRadius, fill) {
+          // see the identical helper in buildForm for why the DOM is written too
+          btn.applyStyle({ borderColor: borderColor, borderWidth: borderWidth, borderRadius: borderRadius, fill: fill });
+          (function () {
+            var node = btn.renderContext && btn.renderContext().shapeNode;
+            if (node) {
+              node.style.borderColor = borderColor;
+              node.style.borderWidth = borderWidth + "px";
+              node.style.borderRadius = borderRadius + "px";
+              node.style.background = fill || "";
+            }
+          }).delay(0);
+        }
+
+        if (list === null) {
+          addLabel("Looking for identities on this device…");
+        } else if (err) {
+          addLabel("Could not read the identities on this device.");
+        } else if (list.length === 0) {
+          addLabel("There is no identity on this device yet.");
+        } else {
+          addLabel("Sign in as:");
+          var labels = {};
+          list.forEach(function (id) { labels[id.label] = (labels[id.label] || 0) + 1; });
+          list.forEach(function (id) {
+            var text = labels[id.label] > 1 ? id.label + "  (" + lively.identity.localIdentity.shortDid(id.did) + ")" : id.label;
+            var btn = new lively.morphic.Button(lively.rect(pad, y, w, 28), text);
+            btn.name = "identityBtn";
+            btn.did = id.did;
+            content.addMorph(btn);
+            paintButton(btn, "rgb(240,190,210)", 1.184, 5.2, "rgb(255,240,247)");
+            lively.bindings.connect(btn, "fire", self, "signInLocal", {
+              converter: function () { return this.sourceObj.did; },
+            });
+            y += 34;
+          });
+        }
+
+        y += 2;
+        // room for two lines: an error from the shell can wrap
+        var statusText = new lively.morphic.Text(lively.rect(pad, y, w, 2 * 18 + 8), "");
+        statusText.name = "statusText";
+        statusText.applyStyle({ allowInput: false, fontSize: 11, fill: null, borderWidth: 0, borderColor: null });
+        content.addMorph(statusText);
+        y += 2 * 18 + 16;
+        if (err) this.setStatus(err.message || String(err), true);
+
+        var newBtn = new lively.morphic.Button(lively.rect(pad + w - 120, y, 120, 24), "New identity");
+        newBtn.name = "newIdentityBtn";
+        content.addMorph(newBtn);
+        paintButton(newBtn, "rgb(214,214,214)", 1, 5, null);
+        lively.bindings.connect(newBtn, "fire", self, "openRegister");
+
+        var closeBtn = new lively.morphic.Button(lively.rect(pad, y, 80, 24), "Close");
+        closeBtn.name = "closeBtn";
+        content.addMorph(closeBtn);
+        paintButton(closeBtn, "rgb(214,214,214)", 1, 5, null);
+        lively.bindings.connect(closeBtn, "fire", self, "remove");
+
+        // the window frame is 28px taller than its content (title bar and borders). The window's own layout stretches the
+        // content by the change of its height, so the content's size is set last, to what it should be.
+        var contentH = y + 24 + pad;
+        this.setExtent(lively.pt(400, contentH + 28));
+        content.setExtent(lively.pt(394, contentH));
+      },
+
+      // One passkey prompt: unlock the identity, which also starts the session. Then the shell chooses where to land and
+      // restarts the world there, so this window goes away with it.
+      signInLocal: function signInLocal(did) {
+        var self = this;
+        if (this._localBusy) return;
+        this._localBusy = true;
+        this.get("loginContent").submorphs.forEach(function (m) { if (m.setActive) m.setActive(false); });
+        this.setStatus("Waiting for your passkey…");
+        lively.identity.localIdentity.signIn(did, function (err) {
+          if (err) {
+            self._localBusy = false;
+            self.get("loginContent").submorphs.forEach(function (m) { if (m.setActive) m.setActive(true); });
+            return self.setStatus("Could not sign in: " + (err.message || err), true);
+          }
+          self.setStatus("Signed in. Opening…");
+          lively.identity.localIdentity.go("enter", undefined, function (goErr) {
+            if (goErr) self.setStatus("Signed in, but could not open the page: " + (goErr.message || goErr), true);
+          });
+        });
+      },
+
+      openRegister: function openRegister() {
+        this.remove();
+        lively.require("lively.identity.RegisterDialog").toRun(function () {
+          lively.BuildSpec("lively.identity.RegisterDialog").createMorph().openInWorldCenter();
+        });
       },
 
       // ─── navigation ─────────────────────────────────────────────────────────────

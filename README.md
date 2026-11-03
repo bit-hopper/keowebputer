@@ -58,6 +58,7 @@ npm run test:did                                     # no browser: DID, inceptio
 npm run test:release                                 # no browser: release signing and verification
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator
 node tests/keo-session-test.js  . dist <work dir>    # sign-in, the session, encrypted saved worlds, menu bar
+node tests/keo-gate-test.js     . dist <work dir>    # sign-in dialog inside the world, landing page, which screen starts
 node tests/keo-bridge-test.js   . dist <work dir>    # the shell <-> world bridge
 node tests/keo-identity-real.js . dist <work dir>    # a REAL authenticator: you approve four OS prompts
 ```
