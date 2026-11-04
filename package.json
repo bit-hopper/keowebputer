@@ -9,6 +9,7 @@
     "test:did": "node tests/keo-did-test.js",
     "test:release": "node tests/keo-release-test.js",
     "test:hello": "node tests/keo-hello-test.js",
+    "test:callsdp": "node tests/keo-callsdp-test.js",
     "refresh-kernel": "node extension/refresh-kernel.js"
   },
   "devDependencies": {

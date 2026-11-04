@@ -57,6 +57,7 @@ module('lively.identity.DMChat')
     'lively.identity.DID',
     'lively.identity.WebAuthn',
     'lively.identity.PostCardUtils',
+    'lively.identity.LocalIdentity',
     'lively.persistence.BuildSpec',
   )
   .toRun(function () {
@@ -132,6 +133,7 @@ module('lively.identity.DMChat')
       // f.handle and f.did); later opens of the same handle reuse whatever
       // window already exists.
       open: function (peerHandle, peerDid) {
+        if (this.isLocal()) return this.openLocal(peerHandle, peerDid);
         var existing = this._windows[peerHandle];
         if (existing && existing.world()) {
           existing.getWindow().comeForward();
@@ -227,11 +229,13 @@ module('lively.identity.DMChat')
           if (err) return thenDo(err);
           var store = db.transaction('messages', 'readonly').objectStore('messages');
           var byThread = {};
+          var me = lively.identity.DMChat._localMe();          // inside keo: only this identity's own threads (see "local mode")
           var req = store.openCursor();
           req.onsuccess = function (evt) {
             var cursor = evt.target.result;
             if (cursor) {
               var row = cursor.value;
+              if (me && row.myDid !== me) { cursor.continue(); return; }
               var existing = byThread[row.threadId];
               if (!existing || row.sentAt > existing.lastSentAt) {
                 byThread[row.threadId] = {
@@ -256,6 +260,175 @@ module('lively.identity.DMChat')
         var bytes = new Uint8Array(16);
         crypto.getRandomValues(bytes);
         return lively.identity.crypto.base64urlEncode(bytes);
+      },
+
+      // ─── local mode: inside keo, with no host ───────────────────────────
+      // A local identity has no handle and there is no server, so none of the delivery above applies. Messages go over the
+      // direct connection to the other device (Connect a device ...; shell/keo-dm.js): the connection is already encrypted and
+      // the peer already proved which DID it is, so there is no sealed box, no signature and no mailbox, and a message can only
+      // be sent while the two devices are connected. Threads are keyed by the peer's DID (the "handle" slot holds a display
+      // label: the name the peer chose to show, else its short DID), and history is kept in the same IndexedDB store as above.
+      // KNOWN GAPS: that store lives in the world's storage, which is shared by every identity on this device and is not
+      // encrypted (the list is filtered to the signed-in identity, which hides the others' threads but does not protect the
+      // data); there are no delivery receipts, no unread marks, and a message that arrives while the world is not running
+      // waits in the shell only until that page is closed. A call is started from a chat window's button; the shell draws and
+      // answers it (shell/keo-call.js), this window only asks.
+
+      isLocal: function () {
+        var li = lively.identity.localIdentity;
+        return !!(li && li.isAvailable());
+      },
+
+      // This identity's DID in local mode, else null (the server mode never filters by it).
+      _localMe: function () {
+        if (!this.isLocal() || !lively.identity.did.isLoggedIn()) return null;
+        var u = lively.identity.did.currentUser();
+        return u && u.local ? u.did : null;
+      },
+
+      _conns: {},              // peer DID -> id of the ready connection to it
+      _localStarted: false,
+      _pulling: false,
+      _again: false,
+
+      // Listens for the shell's events and takes what is waiting. Safe to call again.
+      startLocal: function () {
+        if (this._localStarted || !this.isLocal()) return;
+        this._localStarted = true;
+        var self = this, li = lively.identity.localIdentity;
+        li.onPeerEvent(function (ev) { self._onLocalPeerEvent(ev); });
+        li.onDmEvent(function () { self.pullLocal(); });
+        li.peerList(function (err, list) {
+          if (err) return;
+          (list || []).forEach(function (c) { if (c.state === 'ready' && c.peer) self._conns[c.peer.did] = c.id; });
+          self._refreshLocalWindows();
+        });
+        this.pullLocal();
+      },
+
+      _onLocalPeerEvent: function (ev) {
+        if (ev.type !== 'state') return;
+        var self = this;
+        if (ev.state === 'ready' && ev.peer) this._conns[ev.peer.did] = ev.id;
+        else if (ev.state === 'closed') Object.keys(this._conns).forEach(function (d) { if (self._conns[d] === ev.id) delete self._conns[d]; });
+        else return;
+        this._refreshLocalWindows();
+      },
+
+      _refreshLocalWindows: function () {
+        var self = this;
+        Object.keys(this._windows).forEach(function (k) {
+          var w = self._windows[k];
+          if (w && w._local && w.world() && w.updateLink) w.updateLink();
+        });
+      },
+
+      localLabel: function (peer) {
+        return (peer && peer.name) || lively.identity.localIdentity.shortDid(peer && peer.did);
+      },
+
+      // Takes what the shell holds, saves each message, and only then tells the shell it may forget it. A message that could not be
+      // saved stays there and is tried again.
+      pullLocal: function () {
+        var self = this, li = lively.identity.localIdentity, me = this._localMe();
+        if (!me) return;
+        if (this._pulling) { this._again = true; return; }
+        this._pulling = true;
+        function finished() {
+          self._pulling = false;
+          if (self._again) { self._again = false; self.pullLocal(); }
+        }
+        li.dmTake(function (err, msgs) {
+          if (err || !msgs || !msgs.length) return finished();
+          var left = msgs.length, done = [];
+          msgs.forEach(function (m) {
+            var row = {
+              // keyed by the peer as well: the peer chooses `mid`, and must not be able to overwrite one of our own rows
+              msgId: 'in:' + m.peer.did + ':' + m.mid, threadId: self.threadId(me, m.peer.did),
+              peerHandle: self.localLabel(m.peer), peerDid: m.peer.did, myDid: me, text: m.text,
+              sentAt: new Date(m.at).toISOString(), direction: 'in',
+            };
+            self.saveLocalMessage(row, function (err) {
+              if (!err) { done.push(m.mid); self._showIncoming(row); }
+              if (--left) return;
+              if (done.length) li.dmDone(done);
+              if (done.length < msgs.length) setTimeout(function () { self.pullLocal(); }, 3000);
+              finished();
+            });
+          });
+        });
+      },
+
+      _showIncoming: function (row) {
+        var win = this._windows[row.peerDid];
+        if (win && win.world()) win.appendMessage(row.text, false, row.sentAt, row.msgId);
+        else this.openLocal(row.peerHandle, row.peerDid);       // its history, read from the store, already holds this message
+        if (this._inboxWindow && this._inboxWindow.world()) this._inboxWindow.refresh();
+      },
+
+      openLocal: function (label, peerDid) {
+        this.startLocal();
+        var existing = this._windows[peerDid];
+        if (existing && existing.world()) {
+          existing.getWindow().comeForward();
+          return existing;
+        }
+        var win = lively.BuildSpec('lively.identity.DMChatWindow').createMorph();
+        var content = win.targetMorph || win.get('DMChatWindow');
+        content._peerHandle = label;
+        content._peerDid = peerDid;
+        content._local = true;
+        this._windows[peerDid] = content;
+        win.setTitle(label + '   ' + lively.identity.localIdentity.shortDid(peerDid));
+        $world.addMorph(win);
+        this.applyAccentChrome(win);
+        win.setPosition($world.visibleBounds().center().subPt(win.getExtent().scaleBy(0.5)));
+        win.comeForward();
+        content.startChat();
+        content.setUpLocal();
+        return content;
+      },
+
+      sendLocal: function (label, peerDid, text, thenDo) {
+        var self = this, me = this._localMe(), id = this._conns[peerDid];
+        if (!me) return thenDo(new Error('Not signed in'));
+        if (!id) return thenDo(new Error('Not connected to this device. Messages need a connection: menu, Connect a device.'));
+        lively.identity.localIdentity.dmSend(id, text, function (err, r) {
+          if (err) return thenDo(err);
+          var row = {
+            msgId: 'out:' + r.mid, threadId: self.threadId(me, peerDid), peerHandle: label, peerDid: peerDid, myDid: me,
+            text: text, sentAt: new Date(r.at).toISOString(), direction: 'out',
+          };
+          self.saveLocalMessage(row, function (err) { thenDo(err || null, row); });
+        });
+      },
+
+      // Asks the shell to put the call prompt up (it draws it, outside this frame, and starts nothing until it is clicked).
+      callPeer: function (peerDid) {
+        var id = this._conns[peerDid];
+        if (!id) return $world.setStatusMessage('Not connected to this device. Calls need a connection: menu, Connect a device.', Color.red, 5);
+        lively.identity.localIdentity.callStart(id, function (err) {
+          if (err) return $world.setStatusMessage('Could not start a call: ' + (err.message || err), Color.red, 5);
+          $world.setStatusMessage('Choose how to call in the call panel at the lower right.', Color.gray, 5);
+        });
+      },
+
+      // The thread list for the inbox window: the saved threads and, inside keo, the devices connected right now that have none yet.
+      listThreadsForUi: function (thenDo) {
+        var self = this;
+        this.listThreads(function (err, threads) {
+          if (err || !self.isLocal()) return thenDo(err, threads);
+          lively.identity.localIdentity.peerList(function (err2, conns) {
+            if (err2) return thenDo(null, threads);
+            var known = {};
+            threads.forEach(function (t) { known[t.peerDid] = true; });
+            (conns || []).forEach(function (c) {
+              if (c.state !== 'ready' || !c.peer || known[c.peer.did]) return;
+              threads.push({ threadId: null, peerHandle: self.localLabel(c.peer), peerDid: c.peer.did, lastText: 'Connected. Say hello.', lastSentAt: '' });
+            });
+            thenDo(null, threads);
+          });
+        });
       },
 
       // ─── crypto/network helpers ─────────────────────────────────────────
@@ -467,6 +640,7 @@ module('lively.identity.DMChat')
       },
 
       ensurePolling: function () {
+        if (this.isLocal()) return this.startLocal();            // no mailbox and no signaling inside keo
         if (this._pollTimerId) return;
         var self = this;
         this._pollTimerId = setInterval(function () { self.pollOnce(); }, 4000);
@@ -1055,7 +1229,8 @@ module('lively.identity.DMChat')
         row.addMorph(divider);
 
         var avatarImg = new lively.morphic.Image(lively.rect(10, 10, AVSZ, AVSZ));
-        avatarImg.setImageURL(lively.identity.postCardUtils.identiconDataUrl(thread.peerHandle, AVSZ));
+        avatarImg.setImageURL(lively.identity.postCardUtils.identiconDataUrl(
+          lively.identity.DMChat.isLocal() ? thread.peerDid : thread.peerHandle, AVSZ));
         avatarImg.applyStyle({ borderRadius: AVSZ / 2, borderWidth: 0, clipMode: 'hidden' });
         avatarImg.draggingEnabled = false; avatarImg.droppingEnabled = false; avatarImg.grabbingEnabled = false;
         avatarImg.eventsAreIgnored = true;
@@ -1074,7 +1249,8 @@ module('lively.identity.DMChat')
         // box's own clipped bottom edge until nothing overshot — not
         // computed from the nominal pt/px ratio, which doesn't account
         // for real line-height metrics on top of the glyph size itself.
-        var nameM = new lively.morphic.Text(lively.rect(60, 8, width - 72, 23), '@' + thread.peerHandle);
+        var nameM = new lively.morphic.Text(lively.rect(60, 8, width - 72, 23),
+          (lively.identity.DMChat.isLocal() ? '' : '@') + thread.peerHandle);        // a local identity has no handle
         nameM.applyStyle({ allowInput: false, fontSize: 13, fontWeight: 'bold',
           fill: null, borderWidth: 0, textColor: Color.rgb(30, 30, 30),
           // Single-line label — without this, a long handle can wrap onto
@@ -1330,9 +1506,11 @@ module('lively.identity.DMChat')
 
         startChat: function startChat() {
           var self = this;
+          // Inside keo the picture is the identicon of the peer's DID (the one the call panel and the connect dialog show), and
+          // there is no profile to fetch.
           this.get('PeerAvatar').setImageURL(
-            lively.identity.postCardUtils.identiconDataUrl(this._peerHandle, 28));
-          lively.identity.DMChat.fetchPeerProfile(this._peerHandle, function (err, peer) {
+            lively.identity.postCardUtils.identiconDataUrl(this._local ? this._peerDid : this._peerHandle, 28));
+          if (!this._local) lively.identity.DMChat.fetchPeerProfile(this._peerHandle, function (err, peer) {
             if (err || !self.world()) return;
             if (peer.avatarUrl) self.get('PeerAvatar').setImageURL(peer.avatarUrl);
             if (peer.did && !self._peerDid) self._peerDid = peer.did;
@@ -1342,11 +1520,46 @@ module('lively.identity.DMChat')
           var threadId = lively.identity.DMChat.threadId(user.did, this._peerDid);
           lively.identity.DMChat.listThreadMessages(threadId, function (err, rows) {
             if (err || !rows || !self.world()) return;
-            rows.forEach(function (row) { self.appendMessage(row.text, row.direction === 'out', row.sentAt); });
+            rows.forEach(function (row) { self.appendMessage(row.text, row.direction === 'out', row.sentAt, row.msgId); });
           });
         },
 
-        appendMessage: function appendMessage(text, isOwn, sentAt) {
+        // Inside keo (see DMChat "local mode"): the strip says whether the connection is up, and a Call button asks the shell to
+        // put its prompt up. The button only asks; the shell draws and answers it.
+        setUpLocal: function setUpLocal() {
+          var btn = new lively.morphic.Text(lively.rect(300, 12, 36, 36), 'videocam');
+          btn.name = 'CallButton';
+          btn.applyStyle({
+            fontFamily: "'Material Symbols Rounded'", fontSize: 15, textColor: Color.white, align: 'center',
+            fill: Color.rgba(255, 255, 255, 0.18), borderWidth: 0, borderRadius: 18, padding: lively.rect(0, 8, 0, 0),
+            allowInput: false, selectable: false, clipMode: 'hidden', whiteSpaceHandling: 'pre', fixedWidth: true, fixedHeight: true,
+          });
+          btn.handStyle = 'pointer';
+          btn.draggingEnabled = false; btn.droppingEnabled = false; btn.grabbingEnabled = false;
+          btn._peerDid = this._peerDid;
+          btn.addScript(function onMouseUp(evt) {
+            lively.identity.DMChat.callPeer(this._peerDid);
+            evt.stop(); return true;
+          });
+          this.get('PeerInfo').addMorph(btn);
+          this.updateLink();
+        },
+
+        updateLink: function updateLink() {
+          var up = !!lively.identity.DMChat._conns[this._peerDid];
+          var cap = this.get('EncryptedCaption'), lock = this.get('EncryptedLock'), btn = this.get('CallButton');
+          if (cap) cap.setTextString(up ? 'Connected directly' : 'Not connected');
+          if (lock) lock.setTextString(up ? 'lock' : 'link_off');
+          if (btn) btn.setFill(up ? Color.rgba(255, 255, 255, 0.18) : Color.rgba(255, 255, 255, 0.06));
+        },
+
+        appendMessage: function appendMessage(text, isOwn, sentAt, msgId) {
+          // A message can reach the window twice (read from the store as the window opens, and handed over as it arrives).
+          if (msgId) {
+            this._seen = this._seen || {};
+            if (this._seen[msgId]) return;
+            this._seen[msgId] = true;
+          }
           var list = this.get('MessageList');
           // Real, confirmed-live bug fixed here: list.getExtent().x is the
           // BOX's full declared model width (352), but MessageList's own
@@ -1389,6 +1602,16 @@ module('lively.identity.DMChat')
           var text = (field.textString || '').trim();
           if (!text) return;
           field.textString = '';
+          if (this._local) {
+            return lively.identity.DMChat.sendLocal(this._peerHandle, this._peerDid, text, function (err, row) {
+              if (err) {
+                $world.setStatusMessage('Could not send: ' + err.message, Color.red);
+                field.textString = text;
+                return;
+              }
+              self.appendMessage(text, true, row.sentAt, row.msgId);
+            });
+          }
           lively.identity.DMChat.sendMessage(this._peerHandle, this._peerDid, text, function (err) {
             if (err) {
               $world.setStatusMessage('Could not send: ' + err.message, Color.red);
@@ -1448,7 +1671,7 @@ module('lively.identity.DMChat')
           var self = this;
           var list = this.get('ThreadList');
           list.removeAllMorphs();
-          lively.identity.DMChat.listThreads(function (err, threads) {
+          lively.identity.DMChat.listThreadsForUi(function (err, threads) {
             if (err || !self.world()) return;
             if (!threads.length) {
               var w = list.getExtent().x, h = list.getExtent().y;
@@ -1460,7 +1683,9 @@ module('lively.identity.DMChat')
               });
               list.addMorph(icon);
               var msg = new lively.morphic.Text(lively.rect(24, Math.round(h / 2) - 14, w - 48, 40),
-                'No conversations yet\nMessage a friend from their profile.');
+                lively.identity.DMChat.isLocal()
+                  ? 'No conversations yet\nConnect a device (menu: Connect a device), then message it from here.'
+                  : 'No conversations yet\nMessage a friend from their profile.');
               msg.applyStyle({ allowInput: false, fontSize: 12, align: 'center', fill: null, borderWidth: 0,
                 textColor: Color.rgb(140, 140, 148), lineWrapping: 'by-words' });
               if (msg.setLineWrapping) msg.setLineWrapping('by-words');

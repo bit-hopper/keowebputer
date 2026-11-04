@@ -104,6 +104,38 @@ module("lively.identity.LocalIdentity")
         return window.keo.on("p2p", fn);
       },
 
+      // ─── calls (shell/keo-call.js) ──────────────────────────────────────────────
+      // The world can only ASK. callStart puts a prompt in front of the person in the shell's own call panel (outside this frame);
+      // nothing is captured until they click it there, and there is no way from here to accept, answer, move or hide anything.
+      // The camera and microphone, and the pictures, stay in the shell: the world gets text events only.
+      //   callStart(id)  -> { cid }   `id` is a connection that is ready (peerList / the 'ready' state event); refused while a call is
+      //                               under way, and for a few seconds after the person dismissed a prompt
+      //   callEnd(id)    -> true      hangs up or withdraws the prompt
+      //   callState()    -> the call at hand or null
+      //   onCallEvent(fn): { type: "call", id, cid, state, dir, peer { did, name }, video, wantsVideo, mic, cam, remoteVideo, why }
+      //     with state confirming / starting / ringing / incoming / accepting / connecting / active / ended (why says how it ended).
+      //     Not queued: ask callState when a listener starts. Returns a function that stops listening.
+      callStart: function callStart(id, thenDo) { this._run("call.start", { id: id }, 30000, thenDo); },
+      callEnd: function callEnd(id, thenDo) { this._run("call.end", { id: id }, 30000, thenDo || function () {}); },
+      callState: function callState(thenDo) { this._run("call.state", {}, 30000, thenDo); },
+      onCallEvent: function onCallEvent(fn) {
+        if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
+        return window.keo.on("call", fn);
+      },
+
+      // ─── text messages (shell/keo-dm.js) ────────────────────────────────────────
+      // Over a ready connection, only while it is up (no host, so nowhere to leave a message for later). The world PULLS what
+      // arrived, because events are not queued: onDmEvent says something is waiting, dmTake lists the waiting messages
+      // ({ id, mid, text, at, peer { did, name } }), and dmDone(mids) drops the ones that have been saved.
+      //   dmSend(id, text) -> { mid, at, peer }       text up to 8000 characters
+      dmSend: function dmSend(id, text, thenDo) { this._run("dm.send", { id: id, text: text }, 30000, thenDo); },
+      dmTake: function dmTake(thenDo) { this._run("dm.take", {}, 30000, thenDo); },
+      dmDone: function dmDone(mids, thenDo) { this._run("dm.done", { mids: mids }, 30000, thenDo || function () {}); },
+      onDmEvent: function onDmEvent(fn) {
+        if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
+        return window.keo.on("dm", fn);
+      },
+
       // Puts text on the clipboard from inside the sandboxed world, where the clipboard API is not allowed: tries it, then
       // the old way (a selected text field and a copy command, which a click in this page permits). thenDo(true|false).
       copyText: function copyText(text, thenDo) {

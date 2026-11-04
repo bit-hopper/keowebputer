@@ -235,6 +235,7 @@ module("lively.identity.PeerDialog")
           if (this._rows.length > 6) { label("(" + (this._rows.length - 6) + " earlier transfers not shown)"); }
           y += 4;
           button("Send a file…", "sendFileBtn", pad, 120, "main", "chooseFiles");
+          button("Message…", "messageBtn", pad + 130, 100, "plain", "openChat");
           button("Disconnect", "disconnectBtn", pad + w - 100, 100, "plain", "startOver");
           y += 32;
         } else if (p.phase === "closed") {
@@ -432,6 +433,15 @@ module("lively.identity.PeerDialog")
         this._p = { phase: "start", name: p.name || p.defaultName || "", nameTouched: true, defaultName: p.defaultName, id: null, code: null, peer: null, why: null };
         this._rows = [];
         this.render();
+      },
+
+      // Messages with the connected device (and a call from there): the chat window for its DID.
+      openChat: function openChat() {
+        var peer = this._p.peer;
+        if (!peer) return;
+        lively.require("lively.identity.DMChat").toRun(function () {
+          lively.identity.DMChat.openLocal(peer.name || lively.identity.localIdentity.shortDid(peer.did), peer.did);
+        });
       },
 
       chooseFiles: function chooseFiles() {

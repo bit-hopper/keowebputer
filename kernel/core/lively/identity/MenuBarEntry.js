@@ -77,6 +77,14 @@ module("lively.identity.MenuBarEntry")
         this.setUnreadReplies(0);
       },
 
+      // A local identity (inside keo) receives messages over its direct connections. Listening starts at sign-in, not when
+      // Messages is first opened, so a message that arrives before then is taken and saved too. Safe to call again.
+      startLocalMessages: function () {
+        lively.require("lively.identity.DMChat").toRun(function () {
+          lively.identity.DMChat.startLocal();
+        });
+      },
+
       // Ends the local half of a session and leaves for the welcome page: clears
       // IndexedDB (so restoreSession() can't revive it), tells other tabs, then
       // navigates. Used by sign-out (after the server logout) and by account
@@ -188,6 +196,7 @@ module("lively.identity.MenuBarEntry")
             // is what a person reaches for: their page, and signing out.
             return [
               ["My homestar",        function () { self.openMyHomestar(); }],
+              ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
               ["Identity", [
                 [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
@@ -354,6 +363,7 @@ module("lively.identity.MenuBarEntry")
           this.placeUnreadDot();
           if (loggedIn) lively.identity.MenuBarEntry.startUnreadPolling(this);
           else lively.identity.MenuBarEntry.stopUnreadPolling();
+          if (loggedIn && user.local) lively.identity.MenuBarEntry.startLocalMessages();
         },
 
         // A small red dot on the entry's top-right corner while there are

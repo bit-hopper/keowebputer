@@ -106,6 +106,17 @@
     'p2p.save': function (a) { return window.keoP2p.save({ id: a.id, fid: a.fid }); },
     'p2p.close': function (a) { return window.keoP2p.close({ id: a.id }); },
     'p2p.list': function () { return window.keoP2p.list(); },
+    // Calls over a connection (keo-call.js). The world can only ASK: call.start puts a prompt in front of the person, in this page,
+    // and nothing is captured until they click it; there is deliberately no op to accept, answer, move or hide anything. call.end
+    // and call.state only lower or read what the world can do. The events below carry text only, never a stream.
+    'call.start': function (a) { return window.keoCall.start({ id: a.id }); },
+    'call.end': function (a) { return window.keoCall.end({ id: a.id }); },
+    'call.state': function () { return window.keoCall.state(); },
+    // Text messages over a connection (keo-dm.js). The world sends, and PULLS what arrived: dm.take lists the waiting messages,
+    // dm.done drops the ones it has saved. The events only say that something is waiting.
+    'dm.send': function (a) { return window.keoDm.send({ id: a.id, text: a.text }); },
+    'dm.take': function () { return window.keoDm.take(); },
+    'dm.done': function (a) { return window.keoDm.done({ mids: a.mids }); },
     // The vault asked to be shown (its "Unlock with passkey" button needs a click inside its own frame), or hidden again.
     'vault.frame': function (a) { vault.classList.toggle('shown', !!a.shown); return true; }
   };
@@ -113,6 +124,9 @@
   // Events from the connections go to the world as {keo:1, event:'p2p', data}. They are not queued: a world that is not up yet (or
   // is restarting) misses them, and asks p2p.list for the current state when it starts.
   window.keoP2p.onEvent(function (data) { toWorld({ keo: 1, event: 'p2p', data: data }); });
+  // Call events go the same way, as {keo:1, event:'call', data}; ask call.state for the call at hand when a listener starts.
+  window.keoCall.onEvent(function (data) { toWorld({ keo: 1, event: 'call', data: data }); });
+  window.keoDm.onEvent(function (data) { toWorld({ keo: 1, event: 'dm', data: data }); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;

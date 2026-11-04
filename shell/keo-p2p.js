@@ -23,7 +23,9 @@
 // Limits (a hostile peer is assumed): files up to MAX_FILE, at most MAX_ASKED unanswered offers from one peer, control messages
 // up to 4 KiB (the proof 24 KiB), any malformed or early message closes the connection, a peer that does not prove itself within
 // PROOF_MS is dropped.
-// Known gaps: connections are not closed when the session expires; the codes carry UDP host addresses only; nothing is retried
+// Calls (keo-call.js) and text messages (keo-dm.js) ride the same proven channel: they attach by message prefix (see attach) and
+// are handed a message only after the peer's proof has been checked; media is added to this same connection by renegotiating.
+// Known gaps: connections are not closed when the session expires (so neither is a call); the codes carry UDP host addresses only; nothing is retried
 // after a failure; one data channel, files go one at a time per direction as the sender pumps them in order.
 (function () {
   'use strict';
@@ -33,6 +35,7 @@
   var GATHER_MS = 8000, OPEN_MS = 45000, PROOF_MS = 20000, LABEL = 'keo-p2p';
   var peers = {};                 // id -> connection
   var listener = null;
+  var hooks = {};                 // message prefix -> the module that handles those messages (keo-call.js: 'call', keo-dm.js: 'dm'); see attach
 
   function emit(ev) { if (listener) { try { listener(ev); } catch (e) {} } }
   function newId() { return kd.b64u(crypto.getRandomValues(new Uint8Array(9))); }
@@ -68,6 +71,7 @@
   }
   function closeConn(c, why) {
     if (c.state === 'closed') return;
+    Object.keys(hooks).forEach(function (k) { try { hooks[k].closed(handleOf(c), why); } catch (e) {} });
     c.timers.forEach(clearTimeout);
     c.timers = [];
     try { if (c.dc) c.dc.close(); } catch (e) {}
@@ -208,6 +212,13 @@
       try { m = JSON.parse(data); } catch (e) { return violation(c, 'not JSON'); }
       if (!m || typeof m !== 'object') return violation(c, 'bad message');
       if (m.t === 'hi') return gotProof(c, m);
+      // A message of an attached module ('call.*', 'dm.*') may be longer than a file message (a call carries a session description);
+      // the overall cap above still applies. It is handed over only once the peer has proven who it is.
+      var dot = typeof m.t === 'string' ? m.t.indexOf('.') : -1;
+      if (dot > 0 && Object.prototype.hasOwnProperty.call(hooks, m.t.slice(0, dot))) {
+        if (!c.peerOk) return violation(c, 'a message before the proof');
+        return hooks[m.t.slice(0, dot)].message(handleOf(c), m);
+      }
       if (data.length > MAX_CONTROL) return violation(c, 'oversized message');
       if (!c.peerOk) return violation(c, 'a message before the proof');
       if (!Number.isSafeInteger(m.fid) || m.fid < 1 || m.fid > 0xffffffff) return violation(c, 'bad message');
@@ -372,8 +383,34 @@
   function list() { return Object.keys(peers).map(function (k) { return view(peers[k]); }); }
   function closeAll() { Object.keys(peers).forEach(function (k) { closeConn(peers[k], 'Closed here.'); }); }
 
+  // ---- for keo-call.js (this page only) -------------------------------------------------------------------------------
+  // What a call needs of a connection: the peer connection to add media to, the two DTLS fingerprints the proof was made over,
+  // the verified peer, and a way to send a message on the proven channel. It is handed out only for a connection that is
+  // `ready`, and it is NOT reachable from the world (no bridge op returns it). `peerFp` is the other side's fingerprint, the
+  // one a received session description has to carry.
+  function handleOf(c) {
+    if (!c.handle) {
+      c.handle = { id: c.id, pc: c.pc, role: c.role, fps: c.fps,
+        peerFp: c.fps ? String(c.fps[c.role === 'offerer' ? 1 : 0]).toUpperCase() : null,
+        get peer() { return c.peer; },
+        ready: function () { return c.state === 'ready'; },
+        send: function (m) { if (c.state !== 'ready') throw new Error('That connection is not ready.'); sendCtl(c, m); },
+        drop: function (why) { closeConn(c, why); } };
+    }
+    return c.handle;
+  }
+  function handle(id) { return handleOf(ready(id)); }
+  // A module takes the messages whose type starts with `<prefix>.`: attach('call', { message(handle, m), closed(handle, why) }).
+  // `message` gets each one from a peer that has proven itself; if it throws, the connection is closed like for any message that
+  // cannot be handled. `closed` is told when any connection ends. One module per prefix, and the file protocol's own types
+  // (file, go, no, done, ok, cancel) have no dot, so a module cannot take those.
+  function attach(prefix, ext) {
+    if (!/^[a-z]+$/.test(prefix) || hooks[prefix]) throw new Error('keo-p2p: bad or taken prefix ' + prefix);
+    hooks[prefix] = ext;
+  }
+
   window.keoP2p = { offer: offer, answer: answer, finish: finish, send: send, respond: respond, cancel: cancel, save: save,
-    close: close, list: list, closeAll: closeAll, cleanName: cleanName,
+    close: close, list: list, closeAll: closeAll, cleanName: cleanName, handle: handle, attach: attach,
     // one listener, for the bridge: events are plain data
     onEvent: function (fn) { listener = fn; } };
 })();
