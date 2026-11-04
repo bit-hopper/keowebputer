@@ -52,7 +52,9 @@ const SDP = [
 ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== await hello.offerTag(Object.assign({}, d, { u: 'ZZZZ' })) && tag !== await hello.offerTag(Object.assign({}, d, { f: d.f.replace('0C', '0D') })) && tag === await hello.offerTag(d));
 
   // damage: every one of these must be refused with a sentence, not accepted
-  const flip = (s, i) => s.slice(0, i) + (s[i] === 'A' ? 'B' : 'A') + s.slice(i + 1);
+  // 'A' becomes 'g' (the top bit of the six), not 'B' (the lowest): in the last character the low bits are padding that decoding
+  // ignores, so a flip there is no damage at all, and the code's last character is 'A' in about a quarter of codes.
+  const flip = (s, i) => s.slice(0, i) + (s[i] === 'A' ? 'g' : 'A') + s.slice(i + 1);
   ok('a code with one changed character is refused (the checksum)', await throwsWith(() => hello.decodeCode(flip(text, 30)), /damaged/));
   ok('every position of the code is covered by the checksum', await (async () => { for (let i = 5; i < text.length; i++) { try { await hello.decodeCode(flip(text, i)); return false; } catch (e) { if (!/damaged|different version|too old|future|invitation|answer/.test(e.message)) return false; } } return true; })());
   ok('a cut-off code is refused', await throwsWith(() => hello.decodeCode(text.slice(0, 60)), /damaged/));
