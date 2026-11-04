@@ -127,7 +127,7 @@
     // Calls over a connection (keo-call.js). The world can only ASK: call.start puts a prompt in front of the person, in this page,
     // and nothing is captured until they click it; there is deliberately no op to accept, answer, move or hide anything. call.end
     // and call.state only lower or read what the world can do. The events below carry text only, never a stream.
-    'call.start': function (a) { return window.keoCall.start({ id: a.id }); },
+    'call.start': function (a) { return window.keoCall.start({ id: a.id, audioOnly: a.audioOnly === true }); },
     'call.end': function (a) { return window.keoCall.end({ id: a.id }); },
     'call.lower': function (a) { return window.keoCall.lower({ id: a.id, what: a.what }); },
     'call.state': function () { return window.keoCall.state(); },

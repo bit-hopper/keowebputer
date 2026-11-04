@@ -268,6 +268,29 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     await click(A, 'hang');
     check('and it ends the same way', !!(await waitCall(B, 'ended', b0)) && (await liveTracks(A)) === 0 && (await liveTracks(B)) === 0);
 
+    // ---- 3b. the world can ask for a prompt with no video choice (the Messages phone button), and only that: anything else is the full prompt
+    check('audioOnly that is not the boolean true is ignored (still the full prompt)', (await call(A.frame, 'call.start', { id: k.a, audioOnly: 'true' })).ok);
+    const full = await waitPanel(A, (p) => !p.hidden && /^Call Jun\?/.test(p.status));
+    check('so a world cannot be tricked into the lesser prompt by a string, but it only ever gets less', !!full && full.acts.join() === 'go-video,go-audio,cancel', full);
+    await click(A, 'cancel');
+    await waitPanel(A, (p) => p.hidden);
+    await sleep(10500);                                           // (a dismissed prompt pauses new requests)
+    a0 = await mark(A); b0 = await mark(B);
+    const gumA = await gum(A);
+    check('the world asks for an audio-only prompt', (await call(A.frame, 'call.start', { id: k.a, audioOnly: true })).ok);
+    const lone = await waitPanel(A, (p) => !p.hidden && /^Audio call Jun\?/.test(p.status));
+    check('that prompt offers "Audio call" and Cancel, no video button', !!lone && lone.acts.join() === 'go-audio,cancel', lone);
+    await sleep(1500);
+    check('and nothing is captured until the person clicks in it', (await gum(A)) === gumA && (await liveTracks(A)) === 0);
+    await click(A, 'go-audio');
+    const inc3 = await waitPanel(B, (p) => !p.hidden && /is calling/.test(p.status));
+    check('the callee sees an audio call: Accept and Decline only', !!inc3 && !/video/.test(inc3.status) && inc3.acts.join() === 'accept,decline', inc3);
+    await click(B, 'accept');
+    check('both active, with the microphone only', !!(await waitCall(A, 'active', a0, 30000)) && !!(await waitCall(B, 'active', b0, 30000)) && (await liveTracks(A)) === 1 && (await liveTracks(B)) === 1 && (await panel(A)).acts.join() === 'mic,hang');
+    await click(A, 'hang');
+    check('and it ends the same way', !!(await waitCall(B, 'ended', b0)) && (await liveTracks(A)) === 0 && (await liveTracks(B)) === 0);
+    await sleep(5300);                                            // (B has just been rung by A: one ring per peer every 5 s)
+
     // ---- 4. declined, cancelled, busy
     a0 = await mark(A); b0 = await mark(B);
     const gumB = await gum(B);

@@ -84,7 +84,7 @@ const rows = (P, a, b) => P.frame.evaluate((y) => new Promise((res) => lively.id
 // everything the shell has written to its history store, as it is on disk
 const dump = (P) => P.page.evaluate(() => new Promise((res, rej) => { const q = indexedDB.open('keo-chat'); q.onerror = () => rej(q.error); q.onsuccess = () => { const db = q.result, out = {}; let n = 0; const t = db.transaction(['index', 'bodies'], 'readonly'); ['index', 'bodies'].forEach((st) => { const r = t.objectStore(st).getAll(); r.onsuccess = () => { out[st] = r.result.map((x) => ({ did: x.did, id: x.id, iv: x.iv, ct: Array.from(x.ct) })); if (++n === 2) { db.close(); res(out); } }; }); }; }));
 const inbox = (P) => P.frame.evaluate(() => { const w = lively.identity.DMChat._inboxWindow; if (!w || !w.world()) return null; return w.get('ThreadList').renderContext().shapeNode.innerText; });
-const panel = (P) => P.page.evaluate(() => { const r = document.getElementById('keo-call'); return r ? { hidden: r.hidden, status: r.querySelector('.status').textContent } : null; });
+const panel = (P) => P.page.evaluate(() => { const r = document.getElementById('keo-call'); return r ? { hidden: r.hidden, status: r.querySelector('.status').textContent, acts: Array.from(r.querySelectorAll('button[data-act]')).map((b) => b.getAttribute('data-act')) } : null; });
 const shot = (page, n) => process.env.SHOT_DIR ? page.screenshot({ path: path.join(process.env.SHOT_DIR, n + '.png') }) : null;
 const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).send(x), [id, m]);
 
@@ -209,7 +209,17 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     check('and nothing is captured until the person clicks in that prompt', (await A.page.evaluate(() => window.__gum)) === g0);
     await A.page.click('#keo-call button[data-act="cancel"]');
     check('Cancel there ends it', !!(await waitFor(async () => { const p = await panel(A); return p && p.hidden ? true : null; }, 8000)));
-    // the presence panel's camera button asks for a call too (after the shell's pause for a dismissed prompt)
+    // the phone button asks for an audio call: the prompt has no video choice (after the shell's pause for a dismissed prompt)
+    await sleep(10500);
+    check('there is a separate audio call button next to the video one, not covered', (await whereIn(A, B.did, 'AudioCallButton') || {}).covered === false);
+    await clickIn(A, B.did, 'AudioCallButton');
+    const prA = await waitFor(async () => { const p = await panel(A); return p && !p.hidden ? p : null; }, 10000);
+    check('the phone button makes the shell put up an audio-only prompt: "Audio call Jun?", no video button', !!prA && /^Audio call Jun\?/.test(prA.status) && prA.acts.join() === 'go-audio,cancel', prA);
+    await sleep(1500);
+    check('and nothing is captured until the person clicks in it', (await A.page.evaluate(() => window.__gum)) === g0);
+    await A.page.click('#keo-call button[data-act="cancel"]');
+    await waitFor(async () => { const p = await panel(A); return p && p.hidden ? true : null; }, 8000);
+    // the presence panel's camera button asks for a call too
     await sleep(10500);
     const cam = await A.frame.evaluate(() => { const p = lively.identity.AmbientPresencePanel._panel; if (!p) return null; const n = p._camBtn.renderContext().shapeNode, b = n.getBoundingClientRect(), x = b.left + b.width / 2, y = b.top + b.height / 2, top = document.elementFromPoint(x, y); return { x, y, covered: !(top && (n === top || n.contains(top) || top.contains(n))), icon: p._camBtn.textString }; });
     check('the presence panel has a camera button that is not covered', !!cam && cam.covered === false, cam);

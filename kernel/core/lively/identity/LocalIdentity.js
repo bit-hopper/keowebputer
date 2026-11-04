@@ -108,14 +108,15 @@ module("lively.identity.LocalIdentity")
       // The world can only ASK. callStart puts a prompt in front of the person in the shell's own call panel (outside this frame);
       // nothing is captured until they click it there, and there is no way from here to accept, answer, move or hide anything.
       // The camera and microphone, and the pictures, stay in the shell: the world gets text events only.
-      //   callStart(id)  -> { cid }   `id` is a connection that is ready (peerList / the 'ready' state event); refused while a call is
-      //                               under way, and for a few seconds after the person dismissed a prompt
+      //   callStart(id, thenDo, opts) -> { cid }   `id` is a connection that is ready (peerList / the 'ready' state event); refused
+      //                               while a call is under way, and for a few seconds after the person dismissed a prompt.
+      //                               opts.audioOnly: the prompt offers no video choice (a request can only ask for less)
       //   callEnd(id)    -> true      hangs up or withdraws the prompt
       //   callState()    -> the call at hand or null
       //   onCallEvent(fn): { type: "call", id, cid, state, dir, peer { did, name }, video, wantsVideo, mic, cam, remoteVideo, why }
       //     with state confirming / starting / ringing / incoming / accepting / connecting / active / ended (why says how it ended).
       //     Not queued: ask callState when a listener starts. Returns a function that stops listening.
-      callStart: function callStart(id, thenDo) { this._run("call.start", { id: id }, 30000, thenDo); },
+      callStart: function callStart(id, thenDo, opts) { this._run("call.start", { id: id, audioOnly: !!(opts && opts.audioOnly) }, 30000, thenDo); },
       callEnd: function callEnd(id, thenDo) { this._run("call.end", { id: id }, 30000, thenDo || function () {}); },
       // callLower(id, what) -> true   what is "mic" or "cam": mutes the microphone or switches the camera off. The world may only LOWER
       // what is captured; turning either back on is a click in the shell's call panel.

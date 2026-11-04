@@ -413,13 +413,14 @@ module('lively.identity.DMChat')
       },
 
       // Asks the shell to put the call prompt up (it draws it, outside this frame, and starts nothing until it is clicked).
-      callPeer: function (peerDid) {
+      // audioOnly: the prompt has no video choice (the phone button); without it the person picks video or audio there.
+      callPeer: function (peerDid, audioOnly) {
         var id = this._conns[peerDid];
         if (!id) return $world.setStatusMessage('Not connected to this device. Calls need a connection: menu, Connect a device.', Color.red, 5);
         lively.identity.localIdentity.callStart(id, function (err) {
           if (err) return $world.setStatusMessage('Could not start a call: ' + (err.message || err), Color.red, 5);
-          $world.setStatusMessage('Choose how to call in the call panel at the lower right.', Color.gray, 5);
-        });
+          $world.setStatusMessage(audioOnly ? 'Start the audio call in the call panel at the lower right.' : 'Choose how to call in the call panel at the lower right.', Color.gray, 5);
+        }, { audioOnly: !!audioOnly });
       },
 
       // The thread list for the inbox window: the saved threads and, inside keo, the devices connected right now that have none yet.
@@ -1542,30 +1543,42 @@ module('lively.identity.DMChat')
         // Inside keo (see DMChat "local mode"): the strip says whether the connection is up, and a Call button asks the shell to
         // put its prompt up. The button only asks; the shell draws and answers it.
         setUpLocal: function setUpLocal() {
-          var btn = new lively.morphic.Text(lively.rect(300, 12, 36, 36), 'videocam');
-          btn.name = 'CallButton';
-          btn.applyStyle({
-            fontFamily: "'Material Symbols Rounded'", fontSize: 15, textColor: Color.white, align: 'center',
-            fill: Color.rgba(255, 255, 255, 0.18), borderWidth: 0, borderRadius: 18, padding: lively.rect(0, 8, 0, 0),
-            allowInput: false, selectable: false, clipMode: 'hidden', whiteSpaceHandling: 'pre', fixedWidth: true, fixedHeight: true,
-          });
-          btn.handStyle = 'pointer';
-          btn.draggingEnabled = false; btn.droppingEnabled = false; btn.grabbingEnabled = false;
-          btn._peerDid = this._peerDid;
-          btn.addScript(function onMouseUp(evt) {
-            lively.identity.DMChat.callPeer(this._peerDid);
+          // videocam: the prompt offers video or audio. call: the prompt offers an audio call only.
+          var peerDid = this._peerDid, strip = this.get('PeerInfo');
+          function add(x, glyph, name) {
+            var btn = new lively.morphic.Text(lively.rect(x, 12, 36, 36), glyph);
+            btn.name = name;
+            btn.applyStyle({
+              fontFamily: "'Material Symbols Rounded'", fontSize: 15, textColor: Color.white, align: 'center',
+              fill: Color.rgba(255, 255, 255, 0.18), borderWidth: 0, borderRadius: 18, padding: lively.rect(0, 8, 0, 0),
+              allowInput: false, selectable: false, clipMode: 'hidden', whiteSpaceHandling: 'pre', fixedWidth: true, fixedHeight: true,
+            });
+            btn.handStyle = 'pointer';
+            btn.draggingEnabled = false; btn.droppingEnabled = false; btn.grabbingEnabled = false;
+            btn._peerDid = peerDid;
+            strip.addMorph(btn);
+            return btn;
+          }
+          add(300, 'videocam', 'CallButton').addScript(function onMouseUp(evt) {
+            lively.identity.DMChat.callPeer(this._peerDid, false);
             evt.stop(); return true;
           });
-          this.get('PeerInfo').addMorph(btn);
+          add(256, 'call', 'AudioCallButton').addScript(function onMouseUp(evt) {
+            lively.identity.DMChat.callPeer(this._peerDid, true);
+            evt.stop(); return true;
+          });
           this.updateLink();
         },
 
         updateLink: function updateLink() {
           var up = !!lively.identity.DMChat._conns[this._peerDid];
-          var cap = this.get('EncryptedCaption'), lock = this.get('EncryptedLock'), btn = this.get('CallButton');
+          var cap = this.get('EncryptedCaption'), lock = this.get('EncryptedLock');
           if (cap) cap.setTextString(up ? 'Connected directly' : 'Not connected');
           if (lock) lock.setTextString(up ? 'lock' : 'link_off');
-          if (btn) btn.setFill(up ? Color.rgba(255, 255, 255, 0.18) : Color.rgba(255, 255, 255, 0.06));
+          ['CallButton', 'AudioCallButton'].forEach(function (n) {
+            var btn = this.get(n);
+            if (btn) btn.setFill(up ? Color.rgba(255, 255, 255, 0.18) : Color.rgba(255, 255, 255, 0.06));
+          }, this);
         },
 
         appendMessage: function appendMessage(text, isOwn, sentAt, msgId) {

@@ -87,7 +87,7 @@
   var LABELS = { 'go-video': 'Video call', 'go-audio': 'Audio call', cancel: 'Cancel', accept: 'Accept', 'accept-audio': 'Audio only', decline: 'Decline',
     hang: 'Hang up', mic: 'Mute', cam: 'Camera off' };
   function buttons(c) {
-    if (c.dir === 'out' && c.state === 'confirming') return ['go-video', 'go-audio', 'cancel'];
+    if (c.dir === 'out' && c.state === 'confirming') return c.audioOnly ? ['go-audio', 'cancel'] : ['go-video', 'go-audio', 'cancel'];
     if (c.dir === 'out' && (c.state === 'starting' || c.state === 'ringing')) return ['cancel'];
     if (c.dir === 'in' && c.state === 'incoming') return c.wantsVideo ? ['accept', 'accept-audio', 'decline'] : ['accept', 'decline'];
     if (c.state === 'active') return c.video ? ['mic', 'cam', 'hang'] : ['mic', 'hang'];
@@ -95,7 +95,7 @@
   }
   function statusText(c) {
     var n = (c.h.peer && c.h.peer.name) || 'this device';
-    if (c.dir === 'out' && c.state === 'confirming') return 'Call ' + n + '?';
+    if (c.dir === 'out' && c.state === 'confirming') return (c.audioOnly ? 'Audio call ' : 'Call ') + n + '?';
     if (c.state === 'starting') return 'Starting…';
     if (c.state === 'ringing') return 'Calling…';
     if (c.state === 'incoming') return n + ' is calling' + (c.wantsVideo ? ' (video)' : '');
@@ -194,6 +194,8 @@
     }
     if (a === 'hang') return endCall(c, 'Hung up.', true);
     if (a === 'decline') { sendTo(c, { t: 'call.decline', cid: c.cid }); return endCall(c, 'Declined.', false); }
+    // A prompt the world asked to be audio only has no video button; the check keeps it that way whatever reaches act().
+    if (a === 'go-video' && c.audioOnly) return;
     if (a === 'go-video' || a === 'go-audio') return place(c, a === 'go-video');
     if (a === 'accept' || a === 'accept-audio') return take(c, a === 'accept' && c.wantsVideo);
     if (a === 'mic') { c.mic = !c.mic; if (c.local) c.local.getAudioTracks().forEach(function (t) { t.enabled = c.mic; }); render(); return emit(c); }
@@ -201,12 +203,14 @@
   }
 
   // ---- placing a call ---------------------------------------------------------------------------------------------------
-  // The world asked. This only puts the prompt up; nothing is captured until the person clicks in it.
+  // The world asked. This only puts the prompt up; nothing is captured until the person clicks in it. args.audioOnly asks for a
+  // prompt without the video choice: a request can only take capability away from the prompt, never add to it (like call.lower).
   function start(args) {
     var h = p2p.handle(args.id);
     if (call) throw new Error('A call is already in progress.');
     if (Date.now() - lastDismissed < DISMISS_MS) throw new Error('A call prompt was dismissed a moment ago.');
     var c = newCall(h, 'out');
+    c.audioOnly = args.audioOnly === true;
     c.cid = newCid();
     call = c;
     setState(c, 'confirming');
