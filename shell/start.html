@@ -49,6 +49,29 @@
   #keo-confirm button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
   #keo-confirm button:hover { background: #444a5e; }
   #keo-confirm button.yes { background: #c0392b; }
+  /* The friend dialog (keo-friend.js): drawn and placed by this page only. Like the others it stays BELOW the vault's unlock frame. */
+  #keo-friend { position: fixed; inset: 0; z-index: 2147483002; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  #keo-friend[hidden] { display: none; }
+  #keo-friend .box { width: 380px; max-width: calc(100% - 32px); box-sizing: border-box; padding: 16px; background: #1d1f27; color: #f2f3f7;
+                     border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.45); }
+  #keo-friend .title { font-weight: 600; font-size: 15px; margin-bottom: 12px; }
+  #keo-friend .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  #keo-friend .who-img { width: 40px; height: 40px; border-radius: 6px; image-rendering: pixelated; flex: none; }
+  #keo-friend .who { min-width: 0; }
+  #keo-friend .who-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #keo-friend .who-did { font: 12px ui-monospace, monospace; color: #a9adbd; }
+  #keo-friend .text { color: #d6d9e4; line-height: 1.4; margin-bottom: 12px; }
+  #keo-friend .label { display: block; font-size: 12px; color: #a9adbd; margin: 10px 0 4px; }
+  #keo-friend .words { font: 15px ui-monospace, monospace; padding: 8px 10px; background: #2a2d3a; border-radius: 8px; line-height: 1.5; word-spacing: 4px; user-select: all; }
+  #keo-friend input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font: 15px ui-monospace, monospace; padding: 8px 10px; border: 1px solid #444a5e; border-radius: 8px; background: #14161c; color: inherit; }
+  #keo-friend .hint { min-height: 18px; margin-top: 6px; font-size: 12px; color: #a9adbd; }
+  #keo-friend .hint.good { color: #6fd39a; }
+  #keo-friend .hint.bad { color: #f1948a; }
+  #keo-friend .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  #keo-friend button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
+  #keo-friend button:hover { background: #444a5e; }
+  #keo-friend button.yes { background: #2f9e5b; }
+  #keo-friend button:disabled { opacity: .4; cursor: default; }
 </style>
 <!-- Both frames get their src from shell.js, after its message listener exists (the world's only once keo-gate.js has decided how it starts). -->
 <iframe id="world"></iframe>
@@ -58,12 +81,16 @@
 <script src="keo-did.js"></script>
 <script src="keo-hello.js"></script>
 <script src="keo-identity.js"></script>
+<script src="keo-contacts.js"></script>
+<script src="keo-wordlist.js"></script>
+<script src="keo-fingerprint.js"></script>
 <script src="keo-p2p.js"></script>
 <script src="keo-callsdp.js"></script>
 <script src="keo-identicon.js"></script>
 <script src="keo-confirm.js"></script>
 <script src="keo-call.js"></script>
 <script src="keo-dm.js"></script>
+<script src="keo-friend.js"></script>
 <script src="keo-chatlog.js"></script>
 <script src="keo-worlds.js"></script>
 <script src="shell.js"></script>

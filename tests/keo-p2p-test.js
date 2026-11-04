@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { REPO, EXT, WORK } = require('./args.js')();
+const { befriend } = require('./friends-helper.js');
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -116,6 +117,7 @@ async function device(label, name) {
     check('the channel was "open" (peer unproven) before it was "ready"', (await events(A.frame)).filter((e) => e.id === cA && e.type === 'state').map((e) => e.state).join(',') === 'invited,connecting,open,ready', (await events(A.frame)).filter((e) => e.id === cA).map((e) => e.state));
     console.log('INFO ready after ' + (Date.now() - t0) + ' ms from the first invitation');
     check('p2p.list shows the ready connection with the peer\'s DID', (await call(A.frame, 'p2p.list')).r.some((c) => c.id === cA && c.state === 'ready' && c.peer.did === B.did));
+    await befriend(A, B, { a: cA, b: cB });            // files are for friends: made through the shell's dialogs
     const second = await call(B.frame, 'p2p.finish', { id: cB, code: ans.r.code });
     check('finish is only for an invitation (the answering side cannot use it)', second.ok === false, second);
 
@@ -235,6 +237,7 @@ async function device(label, name) {
     const a4 = await call(B.frame, 'p2p.answer', { code: i4.r.code });
     await call(A.frame, 'p2p.finish', { id: i4.r.id, code: a4.r.code });
     const up4 = await findEvent(B.frame, 'state', (e) => e.id === a4.r.id && e.state === 'ready');
+    await befriend(A, B, { a: i4.r.id, b: a4.r.id });
     await call(B.frame, 'dm.send', { id: a4.r.id, text: 'said before the session ended' });
     const msgWaiting = await waitFor('a message waiting on A', async () => (await A.page.evaluate(() => window.keoDm.take())).length === 1);
     check('before the expiry: A has a session, a ready connection and a message nobody has taken', !!up4 && !!msgWaiting && (await A.page.evaluate(() => window.keoIdentity.current())) !== null);

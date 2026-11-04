@@ -31,6 +31,7 @@
   // ---- what the world may ask ---------------------------------------------------------------------------------------
   function send(args) {
     var h = p2p.handle(args.id), text = args.text;
+    if (!h.friend) throw new Error('You can only message a friend.');
     if (typeof text !== 'string' || !text.length) throw new Error('There is nothing to send.');
     if (text.length > MAX_TEXT) throw new Error('That message is too long (the limit is ' + MAX_TEXT + ' characters).');
     var mid = kd.b64u(crypto.getRandomValues(new Uint8Array(9)));

@@ -20,6 +20,10 @@ keo is an unpacked browser extension with two realms:
 
 An identity is made on the device with a passkey and no server. Its DID is `did:keo:<discovery key>:<hash of the signed inception event>`: the first part is a z-base-32 Ed25519 public key (a lookup hint), the second binds the DID to the passkey that signed its inception. `shell/keo-did.js` builds and verifies these using only WebCrypto, so a verifier needs nothing but the event: no server, no DNS. `shell/keo-identity.js` runs the creation ceremony (two passkey prompts), wraps a random account secret under the passkey's PRF output, and stores everything in IndexedDB. There is no handle: a host grants one later, if the user registers with it.
 
+### Friends
+
+A connection to another device proves which identity is at the other end, not that it is the person you mean. So files, messages and calls move only between **friends**, and the only thing a device that is not one can do is say whether it has added you. Two devices become friends when each person has added the other: in a dialog drawn by `shell/` (never by the world), the person reads their own eight words to the other and types the eight words they hear back; the dialog adds the device only when those match the identity that proved itself over the connection. The words (`shell/keo-fingerprint.js`, from the English word list of the BIP 39 mnemonic specification, MIT, in `shell/keo-wordlist.js`) are 88 bits of a hash of the whole DID: the short form shown beside a name is for recognising someone and is not a check. The devices you have added are kept encrypted under your identity (`shell/keo-contacts.js`); that the other side has added you is learned afresh on each connection and never remembered. The world can only ask for the dialog.
+
 ### The pinned key
 
 `extension/extension-key.json` is the **public** key written into the extension manifest. It fixes the extension id, and the extension id is the origin and the passkey rpId on which every identity is made. Changing it orphans every passkey created under the old id, so do not regenerate it.
@@ -58,18 +62,22 @@ npm run test:did                                     # no browser: DID, inceptio
 npm run test:release                                 # no browser: release signing and verification
 npm run test:hello                                   # no browser: the short connection code and the signed peer proof
 npm run test:callsdp                                 # no browser: what a call description from the peer must look like
+npm run test:fingerprint                             # no browser: the eight words that stand for a DID
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator
 node tests/keo-session-test.js  . dist <work dir>    # the session, encrypted saved worlds, menu bar
 node tests/keo-gate-test.js     . dist <work dir>    # sign-in dialog inside the world, what starts when nobody is signed in
 node tests/keo-bridge-test.js   . dist <work dir>    # the shell <-> world bridge
 node tests/keo-p2p-test.js      . dist <work dir>    # two browsers: a direct connection by swapping two short codes, and file sharing
 node tests/keo-peer-dialog-test.js . dist <work dir> # two browsers: the "Connect a device" dialog, by real clicks, a real paste and a real download
+node tests/keo-friend-test.js . dist <work dir>      # two browsers: becoming friends through the shell's dialog, and that nothing else works before
 node tests/keo-call-test.js . dist <work dir>        # two browsers, a fake camera: calls answered by real clicks on the shell's panel, and a hostile world and peer
 node tests/keo-messages-test.js . dist <work dir>    # two browsers: Messages inside keo (real typing), and the Call button
 node tests/keo-identity-real.js . dist <work dir>    # a REAL authenticator: you approve four OS prompts
 ```
 
-**Not yet verified** (the tests above cannot show it): calls and messages have been run only between two browser profiles on one machine, with the browser's fake camera and microphone. A real camera, microphone and permission prompt, two computers on a network, whether audio is audible, other browsers, and a real authenticator have not been tried.
+**Not yet verified** (the tests above cannot show it): calls and messages have been run only between two browser profiles on one machine, with the browser's fake camera and microphone. A real camera, microphone and permission prompt, two computers on a network, whether audio is audible, other browsers, and a real authenticator have not been tried. The friend dialog has been driven by the tests (real clicks and typing between two browsers) but no person has used it to compare words with another person. In the world, "Connect a device" offers "Add as friend…" and only then files and messages, Messages and its call buttons say when a device is not a friend, and "Friends ..." in the identity menu lists who was added and removes them (the shell asks first).
+
+**Known intermittent failure, cause not found:** `keo-messages-test.js` failed once, on "A receives the reply in its open window", in roughly twenty runs, and has not failed since (a reply typed in one chat window did not show in the other within 15 s). It was not reproduced, so it is not known whether the cause is in the test or in how Messages takes what the shell holds. The check now reports what the window showed, what the shell was still holding, what had been saved and the pull state, so the next occurrence says which step failed. Do not treat the suite as reliable evidence about that step until it has been found.
 
 `<work dir>` is a scratch folder for browser profiles; keep its path short (a long profile path made browser storage fail in testing). The real-authenticator test creates passkeys that a web page cannot delete; remove them in your OS passkey settings afterwards.
 

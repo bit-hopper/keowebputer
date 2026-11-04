@@ -221,7 +221,7 @@ module("lively.identity.PeerDialog")
         } else if (p.phase === "connected") {
           this._drawPeer(content, pad, y, w);
           y += 58;
-          label("This device proved it holds this identity. Check that it is who you expect.", 36);
+          label(this.friendLine(), 36).name = "friendLine";
           this._rows.slice(-6).forEach(function (row) {
             var t = text(self.rowText(row), 22, { name: "transferLabel", w: w - 150 });
             t.rowKey = row.key;
@@ -234,8 +234,13 @@ module("lively.identity.PeerDialog")
           });
           if (this._rows.length > 6) { label("(" + (this._rows.length - 6) + " earlier transfers not shown)"); }
           y += 4;
-          button("Send a file…", "sendFileBtn", pad, 120, "main", "chooseFiles");
-          button("Message…", "messageBtn", pad + 130, 100, "plain", "openChat");
+          // Files and messages are for friends: until then the way forward is to add the device (the shell's dialog).
+          if (p.friend) {
+            button("Send a file…", "sendFileBtn", pad, 120, "main", "chooseFiles");
+            button("Message…", "messageBtn", pad + 130, 100, "plain", "openChat");
+          } else if (!p.added) {
+            button("Add as friend…", "addFriendBtn", pad, 150, "main", "addFriend");
+          }
           button("Disconnect", "disconnectBtn", pad + w - 100, 100, "plain", "startOver");
           y += 32;
         } else if (p.phase === "closed") {
@@ -253,6 +258,16 @@ module("lively.identity.PeerDialog")
         this.setExtent(lively.pt(W + 6, contentH + 28));
         content.setExtent(lively.pt(W, contentH));
         if (p.status) this.setStatus(p.status.msg, p.status.isError);
+      },
+
+      // Where the two devices stand: a valid proof says which identity is there, not that it is the one you meant, and only friends
+      // (each has added the other, after reading the other eight words) can send files, message or call.
+      friendLine: function friendLine() {
+        var p = this._p;
+        if (p.friend) return "Friends. You can send files, message and call each other.";
+        if (p.added) return "You added this device. Files, messages and calls start once it has added you too.";
+        if (p.theirs) return "This device has added you. Add it back to become friends.";
+        return "Not friends yet. To send files, message or call, add each other: you read each other eight words.";
       },
 
       // The other side: its identicon, the name it chose to show (or that it showed none), its short DID, a way to copy the DID.
@@ -334,13 +349,17 @@ module("lively.identity.PeerDialog")
         if (!p || !this.world() || !p.id || ev.id !== p.id) return;
         var row;
         if (ev.type === "state") {
-          if (ev.state === "ready") { p.phase = "connected"; p.peer = ev.peer; p.status = null; this.render(); }
+          if (ev.state === "ready") { p.phase = "connected"; p.peer = ev.peer; p.friend = !!ev.friend; p.added = !!ev.added; p.theirs = !!ev.theirs; p.status = null; this.render(); }
           else if (ev.state === "closed") {
             if (p.phase === "closed") return;
             p.phase = "closed"; p.why = ev.why || ""; p.id = null; p.status = null; this.render();
           } else if (ev.state === "connecting" || ev.state === "open") {
             this.setStatus(ev.state === "open" ? "Connected. Checking who it is…" : "Connecting…");
           }
+        } else if (ev.type === "friendship") {
+          // the other device added us, or took us out; or the person added it in the shell's dialog
+          p.friend = !!ev.friend; p.added = !!ev.added; p.theirs = !!ev.theirs;
+          if (p.phase === "connected") this.render();
         } else if (ev.type === "incoming") {
           this._row("in", ev.fid, { name: ev.name, size: ev.size, state: "asked" });
           this.render();
@@ -435,16 +454,30 @@ module("lively.identity.PeerDialog")
         this.render();
       },
 
+      // Asks the shell for its dialog (it draws it over everything and adds the device only after the words match; this window
+      // only asks and learns the result from the 'friendship' event).
+      addFriend: function addFriend() {
+        var self = this;
+        if (!this._p.id) return;
+        lively.identity.localIdentity.friendStart(this._p.id, function (err) {
+          if (!self.world()) return;
+          if (err) return self.setStatus(err.message || String(err), true);
+          self.setStatus("Read your eight words to them, and type the eight words they read to you, in the box that opened.");
+        });
+      },
+
       // Messages with the connected device (and a call from there): the chat window for its DID.
       openChat: function openChat() {
         var peer = this._p.peer;
         if (!peer) return;
+        if (!this._p.friend) return this.setStatus("Messages are for friends. Add this device first.", true);
         lively.require("lively.identity.DMChat").toRun(function () {
           lively.identity.DMChat.openLocal(peer.name || lively.identity.localIdentity.shortDid(peer.did), peer.did);
         });
       },
 
       chooseFiles: function chooseFiles() {
+        if (!this._p.friend) return this.setStatus("Files are for friends. Add this device first.", true);
         var self = this, input = document.createElement("input");
         input.type = "file";
         input.multiple = true;

@@ -12,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
+const { befriend } = require('./friends-helper.js');
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -117,7 +118,9 @@ async function connect(A, B) {
   await call(A.frame, 'p2p.finish', { id: inv.r.id, code: ans.r.code });
   const ra = await findP2p(A, 'state', (e) => e.id === inv.r.id && e.state === 'ready'), rb = await findP2p(B, 'state', (e) => e.id === ans.r.id && e.state === 'ready');
   if (!ra || !rb) throw new Error('the devices did not connect');
-  return { a: inv.r.id, b: ans.r.id };
+  const k = { a: inv.r.id, b: ans.r.id };
+  await befriend(A, B, k);            // messages, calls and file offers are for friends: the first time through the shell's dialogs, afterwards the books remember
+  return k;
 }
 const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).send(x), [id, m]);
 

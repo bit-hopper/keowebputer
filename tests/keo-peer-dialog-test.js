@@ -163,6 +163,35 @@ const adopt = (frame) => frame.evaluate(() => new Promise((res) => { let n = 0; 
     check('"Copy DID" copies the other side\'s full DID', (await A.frame.evaluate(() => window.__copied)).includes(B.did), await A.frame.evaluate(() => window.__copied));
     await shot(A.page, 'dlg-4-connected');
 
+    // ---- files and messages are for friends. Connected is not enough: the dialog says so and offers the way forward, which is the
+    // shell's own dialog (typed words, a real click), and each side sees the other's half arrive.
+    const words = async (P) => P.page.evaluate(() => window.keoFriend.myWords());
+    const line = (P) => textOf(P.frame, 'friendLine');
+    const addInShell = async (P, theirs) => {
+      await P.page.bringToFront();
+      await P.page.waitForSelector('#keo-friend:not([hidden])', { timeout: 10000 });
+      await P.page.fill('#keo-friend input', theirs.join(' '));
+      await P.page.waitForFunction(() => !document.querySelector('#keo-friend button.yes').disabled, null, { timeout: 5000 });
+      await P.page.click('#keo-friend button.yes');
+      await P.page.waitForSelector('#keo-friend', { state: 'hidden', timeout: 5000 });
+    };
+    const wA = await words(A), wB = await words(B);
+    check('connected but not friends: both dialogs say so, offer "Add as friend…", and offer no file or message button',
+      /^Not friends yet/.test(await line(A)) && /^Not friends yet/.test(await line(B)) && await has(A.frame, 'addFriendBtn') && await has(B.frame, 'addFriendBtn')
+      && !(await has(A.frame, 'sendFileBtn')) && !(await has(A.frame, 'messageBtn')) && !(await has(B.frame, 'sendFileBtn')) && !(await has(B.frame, 'messageBtn')), [await line(A), await line(B)]);
+    await shot(A.page, 'dlg-4b-not-friends');
+    await A.page.bringToFront();
+    await click(A.page, A.frame, 'addFriendBtn');
+    await addInShell(A, wB);
+    check('A adds B in the dialog of the shell; the dialog of A then says "You added this device" and has no Add button', !!(await waitFor(async () => /^You added this device/.test(await line(A)))) && !(await has(A.frame, 'addFriendBtn')), await line(A));
+    check('the dialog of B learns it by itself: "This device has added you"', !!(await waitFor(async () => /^This device has added you/.test(await line(B)))), await line(B));
+    check('and A still has no file or message button (half a friendship)', !(await has(A.frame, 'sendFileBtn')) && !(await has(A.frame, 'messageBtn')));
+    await addInShell(B, wA);                 // the shell asked B on its own when A's half arrived
+    const friendsNow = await waitFor(async () => /^Friends./.test(await line(A)) && /^Friends./.test(await line(B)));
+    check('B adds A: both dialogs say "Friends." and now offer files and messages', !!friendsNow && await has(A.frame, 'sendFileBtn') && await has(A.frame, 'messageBtn') && await has(B.frame, 'sendFileBtn') && await has(B.frame, 'messageBtn'), [await line(A), await line(B)]);
+    await shot(A.page, 'dlg-4c-friends');
+    await A.page.bringToFront();
+
     // ---- a file, through the real chooser; B accepts
     const body1 = Buffer.from('hello from the dialog, line by line\n'.repeat(900));
     const fc = A.page.waitForEvent('filechooser', { timeout: 10000 });

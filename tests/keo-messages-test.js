@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
+const { befriend } = require('./friends-helper.js');
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -60,13 +61,18 @@ async function device(label, name) {
   await frame.evaluate(() => { window.__p2p = []; window.keo.on('p2p', (e) => window.__p2p.push(e)); });
   return { label, name, ctx, page, frame, did: created.did };
 }
-async function connect(A, B) {
+async function connectOnly(A, B) {
   const inv = await call(A.frame, 'p2p.offer', { name: A.label });
   const ans = await call(B.frame, 'p2p.answer', { code: inv.r.code, name: B.label });
   await call(A.frame, 'p2p.finish', { id: inv.r.id, code: ans.r.code });
   const ra = await findP2p(A, 'state', (e) => e.id === inv.r.id && e.state === 'ready'), rb = await findP2p(B, 'state', (e) => e.id === ans.r.id && e.state === 'ready');
   if (!ra || !rb) throw new Error('the devices did not connect');
   return { a: inv.r.id, b: ans.r.id };
+}
+async function connect(A, B) {
+  const k = await connectOnly(A, B);
+  await befriend(A, B, k);            // messages, calls and file offers are for friends: the first time through the shell's dialogs, afterwards the books remember
+  return k;
 }
 
 // ---- the world's own UI, from outside
@@ -95,8 +101,26 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
   try {
     // ---- 0. the menu, before and after a connection
     check('the menu bar offers Messages to a signed-in local identity', (await menuLabels(A)).some((l) => /^Messages/.test(l)), await menuLabels(A));
-    const k = await connect(A, B);
+    const k = await connectOnly(A, B);
     await sleep(800);
+    // ---- 0b. connected is not enough: until the two are friends the screens say so and nothing is sent or rung
+    await A.page.bringToFront();
+    await menuRun(A, /^Messages/);
+    const notYet = await waitFor(async () => { const x = await inbox(A); return x && /Jun/.test(x) ? x : null; }, 15000);
+    check('before they are friends the inbox lists the connected device as "Connected, not friends yet."', !!notYet && /Connected, not friends yet/.test(notYet) && !/Say hello/.test(notYet), notYet);
+    await A.frame.evaluate((d) => lively.identity.DMChat.openLocal('Jun', d), B.did);
+    check('the chat window says "Connected, not friends"', (await waitFor(async () => (await caption(A, B.did)) === 'Connected, not friends' ? true : null, 8000)) === true, await caption(A, B.did));
+    await shot(A.page, 'msg-0-not-friends');
+    await typeIn(A, B.did, 'too early');
+    await sleep(1200);
+    check('a message typed to a non-friend is not sent, and does not appear in the thread', !/too early/.test((await chatText(A, B.did)) || '') && (await call(B.frame, 'dm.take')).r.length === 0);
+    check('the refused draft is put back in the box, not lost', (await chat(A, B.did, (w) => w.get('InputField').textString)) === 'too early');
+    await chat(A, B.did, (w) => { w.get('InputField').textString = ''; return true; });
+    await clickIn(A, B.did, 'CallButton');
+    await sleep(1000);
+    check('the Call button asks for nothing from a non-friend (no prompt)', ((await panel(A)) || { hidden: true }).hidden === true);
+    await befriend(A, B, k);
+    check('once they are friends the window says so', (await waitFor(async () => (await caption(A, B.did)) === 'Connected directly' ? true : null, 8000)) === true, await caption(A, B.did));
     check('an open menu entry opens the inbox, which lists the connected device even though no message was sent yet', await (async () => {
       await A.page.bringToFront();
       await menuRun(A, /^Messages/);
@@ -144,7 +168,12 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     // B answers (B's window is in the page B shows)
     await B.page.bringToFront();
     await typeIn(B, A.did, 'hi Maya, I hear you');
-    check('A receives the reply in its open window', !!(await waitFor(async () => /hi Maya, I hear you/.test((await chatText(A, B.did)) || '') ? true : null, 15000)));
+    const gotReply = !!(await waitFor(async () => /hi Maya, I hear you/.test((await chatText(A, B.did)) || '') ? true : null, 15000));
+    // (if it fails, say which step: is the message still in A's shell, was it saved, is A's window the one the pull would find?)
+    check('A receives the reply in its open window', gotReply, gotReply ? undefined : {
+      windowText: await chatText(A, B.did), shellStillHolds: await A.page.evaluate(() => window.keoDm.take().map((m) => m.text)), saved: (await rows(A, A.did, B.did)).map((r) => r.text),
+      windows: await A.frame.evaluate(() => Object.keys(lively.identity.DMChat._windows).map((k) => [k.slice(-6), !!(lively.identity.DMChat._windows[k].world())])),
+      pulling: await A.frame.evaluate(() => [lively.identity.DMChat._pulling, lively.identity.DMChat._again]), bState: (await p2pEvents(B)).filter((e) => e.type === 'state').map((e) => e.state + ':' + e.friend).slice(-4) });
     // several quickly: all arrive, once each, in order
     await A.page.bringToFront();
     for (const t of ['one', 'two', 'three']) { await typeIn(A, B.did, t); }
@@ -233,6 +262,34 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     await clickIn(A, B.did, 'CallButton');
     await sleep(800);
     check('without a connection the Call button asks for nothing (no prompt)', ((await panel(A)) || { hidden: true }).hidden === true);
+
+    // ---- 8. the Friends window (menu: Friends ...): the book, this identity's own words, and Remove with the shell's question
+    const labels = await menuLabels(A);
+    check('the menu offers "Friends ..." next to "Connect a device ..."', labels.some((l) => /^Friends/.test(l)), labels);
+    await A.page.bringToFront();
+    await menuRun(A, /^Friends/);
+    const win = () => A.frame.evaluate(() => {
+      const w = $world.submorphs.filter((m) => m.name === 'IdentityFriendsDialog')[0];
+      if (!w) return null;
+      const content = w.get('friendsContent'), pick = (n) => content.submorphs.filter((m) => m.name === n);
+      return { words: (pick('myWords')[0] || {}).textString, names: pick('friendName').map((m) => m.textString), subs: pick('friendDid').map((m) => m.textString), empty: !!pick('emptyText').length,
+        avatars: pick('friendAvatar').length, status: (pick('statusText')[0] || {}).textString };
+    });
+    const myWords = await A.page.evaluate(() => window.keoFriend.myWords());
+    const f1 = await waitFor(async () => { const x = await win(); return x && x.names.length && x.words && x.words !== '…' ? x : null; }, 15000);
+    check('the Friends window lists the friend by name with a picture, and says it is not connected right now', !!f1 && f1.names.join() === 'Jun' && f1.avatars === 1 && /not connected/.test(f1.subs[0]) && f1.subs[0].indexOf(await A.frame.evaluate((d) => lively.identity.localIdentity.shortDid(d), B.did)) === 0, f1);
+    check('it shows this identity\'s own eight words (never the friend\'s)', !!f1 && f1.words === myWords.join(' '), f1);
+    await shot(A.page, 'msg-8-friends');
+    const rm = (name) => A.frame.evaluate((n) => { const w = $world.submorphs.filter((m) => m.name === 'IdentityFriendsDialog')[0]; const m = w.get('friendsContent').submorphs.filter((x) => x.name === n)[0]; if (!m) return null; const node = m.renderContext().shapeNode, b = node.getBoundingClientRect(), x = b.left + b.width / 2, y = b.top + b.height / 2, top = document.elementFromPoint(x, y); return { x, y, covered: !(top && (node === top || node.contains(top) || top.contains(node))) }; }, name);
+    const rb = await rm('removeBtn');
+    check('Remove is on screen and not covered', !!rb && rb.covered === false, rb);
+    await A.page.mouse.click(rb.x, rb.y);
+    const asked = await waitFor(async () => A.page.evaluate(() => { const r = document.getElementById('keo-confirm'); return r && !r.hidden ? r.textContent : null; }), 8000);
+    check('Remove makes the SHELL ask, naming the device', !!asked && /Remove this friend\?/.test(asked) && /Jun/.test(asked), asked);
+    check('and nothing is removed until the person answers', (await call(A.frame, 'friend.list')).r.length === 1);
+    await A.page.click('#keo-confirm button[data-ans="yes"]');
+    const f2 = await waitFor(async () => { const x = await win(); return x && x.empty ? x : null; }, 10000);
+    check('after a real yes the window shows no friends and the book is empty', !!f2 && (await call(A.frame, 'friend.list')).r.length === 0, f2);
   } catch (e) {
     failed++; console.log('FAIL test crashed: ' + (e && e.stack || e));
   }
@@ -244,7 +301,7 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     const gone = await dump(A);
     check('removing an identity removes its conversations (purge leaves no record)', gone.index.length === 0 && gone.bodies.length === 0 && (await call(A.frame, 'chat.threads')).r.length === 0, gone);
   } catch (e) { failed++; console.log('FAIL purge: ' + e.message); }
-  const mine = errors.filter((e) => !/youtube\.com|Geolocation access|Not connected to this device/.test(e));
+  const mine = errors.filter((e) => !/youtube\.com|Geolocation access|Not connected to this device|You can only (message|call) a friend/.test(e));
   check('no page errors or console errors (other than the landing page\'s two known ones)', mine.length === 0, mine.slice(0, 5));
   for (const c of ctxs) await c.close().catch(() => {});
   clearTimeout(hard);

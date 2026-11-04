@@ -96,12 +96,35 @@ module("lively.identity.LocalIdentity")
       peerList: function peerList(thenDo) { this._run("p2p.list", {}, 30000, thenDo); },
 
       // Events the shell pushes about connections: { type, id, ... } with type "state" (state: invited / connecting / open / ready
-      // / closed, peer, why), "incoming", "progress", "received", "saved", "delivered", "declined", "cancelled", "failed" (the
-      // file events carry fid, name and dir "in" or "out"). Not queued: ask peerList for the state at hand when a listener starts.
+      // / closed, peer, why, and friend / added / theirs, see below), "friendship" (friend / added / theirs changed on a ready
+      // connection), "incoming", "progress", "received", "saved", "delivered", "declined", "cancelled", "failed" (the file events
+      // carry fid, name and dir "in" or "out"). Not queued: ask peerList for the state at hand when a listener starts.
       // Returns a function that stops listening.
+      // friend: files, messages and calls work only when it is true, which needs BOTH added (this identity checked the device's
+      // eight words and added it) and theirs (the device has told us, on this connection, that it added us).
       onPeerEvent: function onPeerEvent(fn) {
         if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
         return window.keo.on("p2p", fn);
+      },
+
+      // ─── friends (shell/keo-friend.js, keo-contacts.js) ─────────────────────────
+      // Files, messages and calls work only between friends. Two devices become friends when each person has added the other,
+      // and adding happens only in a dialog the SHELL draws: the person reads their own eight words to the other and types the
+      // eight words they hear back, and the dialog adds the device only if those match the identity that proved itself. The world
+      // can only ASK for that dialog, list who was added, read its own words, and ask to remove a friend (the shell asks the
+      // person first). It cannot add, answer or hide anything, and it is never given the other device's words.
+      //   friendStart(id)    -> true             puts the shell's dialog up for a ready connection
+      //   friendList()       -> [{ did, name, at }]   the devices this identity has added
+      //   friendWords()      -> [8 words]        this identity's own words (to show, so they can be read out)
+      //   friendRemove(did)  -> true             the shell asks first; the device is told and any connection to it ends
+      //   onFriendEvent(fn): { type: "friend", kind: "theirs" | "untheirs" | "added" | "removed", peer { did, name } }
+      friendStart: function friendStart(id, thenDo) { this._run("friend.start", { id: id }, 30000, thenDo); },
+      friendList: function friendList(thenDo) { this._run("friend.list", {}, 30000, thenDo); },
+      friendWords: function friendWords(thenDo) { this._run("friend.words", {}, 30000, thenDo); },
+      friendRemove: function friendRemove(did, thenDo) { this._run("friend.remove", { did: did }, 120000, thenDo || function () {}); },
+      onFriendEvent: function onFriendEvent(fn) {
+        if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
+        return window.keo.on("friend", fn);
       },
 
       // ─── calls (shell/keo-call.js) ──────────────────────────────────────────────

@@ -296,6 +296,7 @@ module('lively.identity.DMChat')
       },
 
       _conns: {},              // peer DID -> id of the ready connection to it
+      _friends: {},            // peer DID -> true while that connection is a friend's (messages and calls are for friends)
       _localStarted: false,
       _pulling: false,
       _again: false,
@@ -309,17 +310,24 @@ module('lively.identity.DMChat')
         li.onDmEvent(function () { self.pullLocal(); });
         li.peerList(function (err, list) {
           if (err) return;
-          (list || []).forEach(function (c) { if (c.state === 'ready' && c.peer) self._conns[c.peer.did] = c.id; });
+          (list || []).forEach(function (c) { if (c.state === 'ready' && c.peer) { self._conns[c.peer.did] = c.id; self._friends[c.peer.did] = !!c.friend; } });
           self._refreshLocalWindows();
         });
         this.pullLocal();
       },
 
       _onLocalPeerEvent: function (ev) {
-        if (ev.type !== 'state') return;
         var self = this;
-        if (ev.state === 'ready' && ev.peer) this._conns[ev.peer.did] = ev.id;
-        else if (ev.state === 'closed') Object.keys(this._conns).forEach(function (d) { if (self._conns[d] === ev.id) delete self._conns[d]; });
+        if (ev.type === 'friendship' && ev.peer) {
+          // the device added us, took us out, or the person added it: the window's header and the inbox follow
+          this._friends[ev.peer.did] = !!ev.friend;
+          this._refreshLocalWindows();
+          if (this._inboxWindow && this._inboxWindow.world()) this._inboxWindow.refresh();
+          return;
+        }
+        if (ev.type !== 'state') return;
+        if (ev.state === 'ready' && ev.peer) { this._conns[ev.peer.did] = ev.id; this._friends[ev.peer.did] = !!ev.friend; }
+        else if (ev.state === 'closed') Object.keys(this._conns).forEach(function (d) { if (self._conns[d] === ev.id) { delete self._conns[d]; delete self._friends[d]; } });
         else return;
         this._refreshLocalWindows();
       },
@@ -402,6 +410,7 @@ module('lively.identity.DMChat')
         var self = this, me = this._localMe(), id = this._conns[peerDid];
         if (!me) return thenDo(new Error('Not signed in'));
         if (!id) return thenDo(new Error('Not connected to this device. Messages need a connection: menu, Connect a device.'));
+        if (!this._friends[peerDid]) return thenDo(new Error('You can only message a friend. Menu, Connect a device, then Add as friend.'));
         lively.identity.localIdentity.dmSend(id, text, function (err, r) {
           if (err) return thenDo(err);
           var row = {
@@ -417,6 +426,7 @@ module('lively.identity.DMChat')
       callPeer: function (peerDid, audioOnly) {
         var id = this._conns[peerDid];
         if (!id) return $world.setStatusMessage('Not connected to this device. Calls need a connection: menu, Connect a device.', Color.red, 5);
+        if (!this._friends[peerDid]) return $world.setStatusMessage('You can only call a friend. Menu, Connect a device, then Add as friend.', Color.red, 5);
         lively.identity.localIdentity.callStart(id, function (err) {
           if (err) return $world.setStatusMessage('Could not start a call: ' + (err.message || err), Color.red, 5);
           $world.setStatusMessage(audioOnly ? 'Start the audio call in the call panel at the lower right.' : 'Choose how to call in the call panel at the lower right.', Color.gray, 5);
@@ -438,7 +448,8 @@ module('lively.identity.DMChat')
             threads.forEach(function (t) { known[t.peerDid] = true; });
             (conns || []).forEach(function (c) {
               if (c.state !== 'ready' || !c.peer || known[c.peer.did]) return;
-              threads.push({ threadId: null, peerHandle: self.localLabel(c.peer), peerDid: c.peer.did, lastText: 'Connected. Say hello.', lastSentAt: '' });
+              threads.push({ threadId: null, peerHandle: self.localLabel(c.peer), peerDid: c.peer.did, lastSentAt: '',
+                lastText: c.friend ? 'Connected. Say hello.' : 'Connected, not friends yet.' });
             });
             thenDo(null, threads);
           });
@@ -1571,13 +1582,14 @@ module('lively.identity.DMChat')
         },
 
         updateLink: function updateLink() {
-          var up = !!lively.identity.DMChat._conns[this._peerDid];
+          // up: a connection to this device is ready. friend: it is a friend's too (messages and calls are for friends).
+          var up = !!lively.identity.DMChat._conns[this._peerDid], friend = up && !!lively.identity.DMChat._friends[this._peerDid];
           var cap = this.get('EncryptedCaption'), lock = this.get('EncryptedLock');
-          if (cap) cap.setTextString(up ? 'Connected directly' : 'Not connected');
-          if (lock) lock.setTextString(up ? 'lock' : 'link_off');
+          if (cap) cap.setTextString(friend ? 'Connected directly' : up ? 'Connected, not friends' : 'Not connected');
+          if (lock) lock.setTextString(friend ? 'lock' : up ? 'person_add' : 'link_off');
           ['CallButton', 'AudioCallButton'].forEach(function (n) {
             var btn = this.get(n);
-            if (btn) btn.setFill(up ? Color.rgba(255, 255, 255, 0.18) : Color.rgba(255, 255, 255, 0.06));
+            if (btn) btn.setFill(friend ? Color.rgba(255, 255, 255, 0.18) : Color.rgba(255, 255, 255, 0.06));
           }, this);
         },
 

@@ -207,6 +207,7 @@
   // prompt without the video choice: a request can only take capability away from the prompt, never add to it (like call.lower).
   function start(args) {
     var h = p2p.handle(args.id);
+    if (!h.friend) throw new Error('You can only call a friend.');
     if (call) throw new Error('A call is already in progress.');
     if (Date.now() - lastDismissed < DISMISS_MS) throw new Error('A call prompt was dismissed a moment ago.');
     var c = newCall(h, 'out');

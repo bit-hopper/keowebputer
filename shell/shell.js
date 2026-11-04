@@ -81,7 +81,7 @@
       }).then(function (yes) {
         if (!yes) throw new Error('Not removed: it was not confirmed.');
         return window.keoIdentity.remove({ did: did });
-      }).then(function () { return window.keoWorlds.purge(did); }).then(function () { return window.keoChatLog.purge(did); }).then(function () {
+      }).then(function () { return window.keoWorlds.purge(did); }).then(function () { return window.keoChatLog.purge(did); }).then(function () { return window.keoContacts.purge(did); }).then(function () {
         return window.keoIdentity.current();
       }).then(function (s) {
         if (!s || s.did !== did) return true;
@@ -141,6 +141,13 @@
     'chat.thread': function (a) { return window.keoChatLog.thread({ peerDid: a.peerDid }); },
     'chat.threads': function () { return window.keoChatLog.threads(); },
     'chat.remove': function (a) { return window.keoChatLog.remove({ peerDid: a.peerDid }); },
+    // Friends (keo-friend.js, keo-contacts.js). Messages, calls and file offers work only between friends: the person here checks the
+    // other device's eight words and adds it, in a dialog this page draws. The world can only ASK for that dialog, list who has been
+    // added, read OUR words (to show them) and ask to remove a friend (the person confirms in this page). It cannot add, answer or hide.
+    'friend.start': function (a) { return window.keoFriend.start({ id: a.id }); },
+    'friend.list': function () { return window.keoFriend.list(); },
+    'friend.words': function () { return window.keoFriend.myWords(); },
+    'friend.remove': function (a) { return window.keoFriend.remove({ did: a.did }); },
     // The vault asked to be shown (its "Unlock with passkey" button needs a click inside its own frame), or hidden again.
     'vault.frame': function (a) { vault.classList.toggle('shown', !!a.shown); return true; }
   };
@@ -151,10 +158,11 @@
   // Call events go the same way, as {keo:1, event:'call', data}; ask call.state for the call at hand when a listener starts.
   window.keoCall.onEvent(function (data) { toWorld({ keo: 1, event: 'call', data: data }); });
   window.keoDm.onEvent(function (data) { toWorld({ keo: 1, event: 'dm', data: data }); });
+  window.keoFriend.onEvent(function (data) { toWorld({ keo: 1, event: 'friend', data: data }); });
   // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
   // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
   // connections were proven with that identity's device key, and the next one to sign in must not inherit them.
-  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); });
+  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoContacts.clear(); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;

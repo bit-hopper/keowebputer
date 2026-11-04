@@ -200,6 +200,7 @@ module("lively.identity.MenuBarEntry")
               ["My homestar",        function () { self.openMyHomestar(); }],
               ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
+              ["Friends ...",        function () { self.openFriendsDialog(); }],
               ["Identity", [
                 [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
                 ["Copy DID",           function () { self.copyDid(); }],
@@ -239,6 +240,13 @@ module("lively.identity.MenuBarEntry")
         openPeerDialog: function openPeerDialog() {
           lively.require("lively.identity.PeerDialog").toRun(function () {
             lively.BuildSpec("lively.identity.PeerDialog").createMorph().openInWorldCenter();
+          });
+        },
+
+        // The devices this identity has added as friends (inside keo only: the list lives in its shell).
+        openFriendsDialog: function openFriendsDialog() {
+          lively.require("lively.identity.FriendsDialog").toRun(function () {
+            lively.BuildSpec("lively.identity.FriendsDialog").createMorph().openInWorldCenter();
           });
         },
 

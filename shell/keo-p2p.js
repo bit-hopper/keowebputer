@@ -25,6 +25,10 @@
 // PROOF_MS is dropped.
 // Calls (keo-call.js) and text messages (keo-dm.js) ride the same proven channel: they attach by message prefix (see attach) and
 // are handed a message only after the peer's proof has been checked; media is added to this same connection by renegotiating.
+// FRIENDS: a proven DID is still a stranger. Files, messages and calls move only between friends: the person here has added the device
+// after comparing its words (keo-contacts.js, keo-friend.js) AND the device has told us, on this connection, that it has added us. A
+// device that is not a friend may say only that (the 'friend' prefix); anything else from it closes the connection, and so does the
+// loss of a friendship while connected. Our own sends are refused with a sentence before anything goes out.
 // Known gaps: connections are not closed when the session expires (so neither is a call); the codes carry UDP host addresses only; nothing is retried
 // after a failure; one data channel, files go one at a time per direction as the sender pumps them in order.
 (function () {
@@ -57,15 +61,17 @@
     });
   }
 
+  // Have WE added this device (the person checked its words)? Only meaningful once the peer has proven who it is.
+  function addedOf(c) { return !!(c.peerOk && c.peer && window.keoContacts.isAdded(c.peer.did)); }
   function view(c) {
-    return { id: c.id, role: c.role, state: c.state, peer: c.peer,
+    return { id: c.id, role: c.role, state: c.state, peer: c.peer, friend: !!c.friend, added: addedOf(c), theirs: !!c.theirs,
       incoming: Object.keys(c.in).map(function (k) { var i = c.in[k]; return { fid: i.fid, name: i.name, size: i.size, got: i.got, state: i.state }; }),
       outgoing: Object.keys(c.out).map(function (k) { var o = c.out[k]; return { fid: o.fid, name: o.name, size: o.size, sent: o.sent, state: o.state }; }) };
   }
   function setState(c, state, why) {
     if (c.state === state) return;
     c.state = state;
-    var ev = { type: 'state', id: c.id, state: state, peer: c.peer };
+    var ev = { type: 'state', id: c.id, state: state, peer: c.peer, friend: !!c.friend, added: addedOf(c), theirs: !!c.theirs };
     if (why) ev.why = why;
     emit(ev);
   }
@@ -189,15 +195,29 @@
     hello.verifyProof(m, { role: c.role === 'offerer' ? 'answer' : 'offer', fps: c.fps, audience: location.origin }).then(function (v) {
       if (c.state === 'closed') return;
       if (!v.ok) return closeConn(c, v.error);
-      c.peer = { did: v.did, name: v.name };
-      c.peerOk = true;
-      var queued = c.held; c.held = null;
-      maybeReady(c);
-      queued.forEach(function (d) { if (c.state !== 'closed') { try { onMessage(c, d); } catch (x) { closeConn(c, 'A message could not be handled: ' + (x && x.message)); } } });
-    });
+      // Who is a friend is read before anything else is accepted, so that the first message already meets the right answer.
+      return window.keoContacts.ensure().then(function () {
+        if (c.state === 'closed') return;
+        c.peer = { did: v.did, name: v.name };
+        c.peerOk = true;
+        c.theirs = false; c.friend = false;           // learned from the peer's own word on this connection (keo-friend.js)
+        maybeReady(c);
+        release(c);
+      });
+    }).catch(function (e) { closeConn(c, 'Could not check who is a friend: ' + (e && e.message)); });
+  }
+  // Handles what was held back while the proof was being checked, in the order it arrived.
+  function release(c) {
+    var queued = c.held; c.held = null;
+    if (!queued) return;
+    queued.forEach(function (d) { if (c.state !== 'closed') { try { onMessage(c, d); } catch (x) { closeConn(c, 'A message could not be handled: ' + (x && x.message)); } } });
   }
   function maybeReady(c) {
-    if (c.state === 'open' && c.peerOk && c.hiSent) setState(c, 'ready');
+    if (c.state === 'open' && c.peerOk && c.hiSent) {
+      setState(c, 'ready');
+      // Modules that have something to say as soon as the peer is proven (keo-friend.js: whether we have added it) are told here.
+      Object.keys(hooks).forEach(function (k) { if (hooks[k].ready) { try { hooks[k].ready(handleOf(c)); } catch (e) {} } });
+    }
   }
 
   // ---- the protocol -------------------------------------------------------------------------------------------------
@@ -217,14 +237,20 @@
       var dot = typeof m.t === 'string' ? m.t.indexOf('.') : -1;
       if (dot > 0 && Object.prototype.hasOwnProperty.call(hooks, m.t.slice(0, dot))) {
         if (!c.peerOk) return violation(c, 'a message before the proof');
-        return hooks[m.t.slice(0, dot)].message(handleOf(c), m);
+        var hook = hooks[m.t.slice(0, dot)];
+        // Only the module that settles friendship may be spoken to by someone who is not a friend; everything else (calls, messages)
+        // is for friends. A device that is not one has nothing to say but "I added you" and "I removed you".
+        if (!c.friend && !hook.open) return violation(c, 'a message from someone who is not a friend');
+        return hook.message(handleOf(c), m);
       }
       if (data.length > MAX_CONTROL) return violation(c, 'oversized message');
       if (!c.peerOk) return violation(c, 'a message before the proof');
+      if (!c.friend) return violation(c, 'a file message from someone who is not a friend');
       if (!Number.isSafeInteger(m.fid) || m.fid < 1 || m.fid > 0xffffffff) return violation(c, 'bad message');
       return control(c, m);
     }
     if (!c.peerOk) return violation(c, 'data before the proof');
+    if (!c.friend) return violation(c, 'file data from someone who is not a friend');
     if (data instanceof ArrayBuffer) return chunk(c, data);
     violation(c, 'unknown message kind');
   }
@@ -338,6 +364,7 @@
   // bytes flow only after the other side agrees.
   function send(args) {
     var c = ready(args.id), f = args.file;
+    if (!c.friend) throw new Error('You can only share files with a friend.');
     if (!(f instanceof Blob)) throw new Error('send: a file is needed.');
     if (f.size > MAX_FILE) throw new Error('That file is larger than the limit (' + Math.round(MAX_FILE / 1048576) + ' MiB).');
     if (Object.keys(c.out).length >= MAX_OFFERED) throw new Error('Too many files are waiting. Let some finish first.');
@@ -393,6 +420,8 @@
       c.handle = { id: c.id, pc: c.pc, role: c.role, fps: c.fps,
         peerFp: c.fps ? String(c.fps[c.role === 'offerer' ? 1 : 0]).toUpperCase() : null,
         get peer() { return c.peer; },
+        get friend() { return !!c.friend; },
+        get theirs() { return !!c.theirs; },
         ready: function () { return c.state === 'ready'; },
         send: function (m) { if (c.state !== 'ready') throw new Error('That connection is not ready.'); sendCtl(c, m); },
         drop: function (why) { closeConn(c, why); } };
@@ -401,16 +430,47 @@
   }
   function handle(id) { return handleOf(ready(id)); }
   // A module takes the messages whose type starts with `<prefix>.`: attach('call', { message(handle, m), closed(handle, why) }).
-  // `message` gets each one from a peer that has proven itself; if it throws, the connection is closed like for any message that
-  // cannot be handled. `closed` is told when any connection ends. One module per prefix, and the file protocol's own types
-  // (file, go, no, done, ok, cancel) have no dot, so a module cannot take those.
-  function attach(prefix, ext) {
+  // `message` gets each one from a peer that has proven itself AND is a friend (a message from anyone else closes the connection);
+  // if it throws, the connection is closed like for any message that cannot be handled. `ready(handle)`, if given, is called when a
+  // connection becomes ready. `closed` is told when any connection ends. One module per prefix, and the file protocol's own types (file, go,
+  // no, done, ok, cancel) have no dot, so a module cannot take those. `open: true` (only keo-friend.js) also takes messages from a
+  // peer that is not a friend yet: that is how two devices become friends.
+  function attach(prefix, ext, opts) {
     if (!/^[a-z]+$/.test(prefix) || hooks[prefix]) throw new Error('keo-p2p: bad or taken prefix ' + prefix);
     hooks[prefix] = ext;
+    if (opts && opts.open === true) ext.open = true;
+  }
+
+  // For keo-friend.js (this page only). A connection's peer is a FRIEND while we have added it (the book) AND it has told us, on this
+  // connection, that it has added us. Either half changing re-decides it: becoming one is announced to the world; ceasing to be one
+  // closes the connection, which also ends a call on it and stops the camera and microphone. Never put these behind a bridge op.
+  function recompute(c) {
+    if (c.state === 'closed' || !c.peerOk) return;
+    var now = !!(c.theirs && addedOf(c));
+    var was = !!c.friend;
+    c.friend = now;
+    if (was && !now) return closeConn(c, 'You are no longer friends.');
+    // Not a 'state' event: the connection's state did not change, and a world that counts states must not see 'ready' twice.
+    emit({ type: 'friendship', id: c.id, peer: c.peer, friend: now, added: addedOf(c), theirs: !!c.theirs });
+  }
+  // The peer on this connection said whether it has added us.
+  function setTheirs(id, value) {
+    var c = peers[String(id)];
+    if (!c || !c.peerOk) return;
+    c.theirs = value === true;
+    recompute(c);
+  }
+  // The book changed for this DID: every connection to it is re-decided.
+  function friendChanged(did) {
+    Object.keys(peers).forEach(function (k) { var c = peers[k]; if (c.peerOk && c.peer && c.peer.did === did) recompute(c); });
+  }
+  // Handles of the connections to one DID that are ready (to tell them something).
+  function connectionsTo(did) {
+    return Object.keys(peers).map(function (k) { return peers[k]; }).filter(function (c) { return c.state === 'ready' && c.peer && c.peer.did === did; }).map(function (c) { return handleOf(c); });
   }
 
   window.keoP2p = { offer: offer, answer: answer, finish: finish, send: send, respond: respond, cancel: cancel, save: save,
-    close: close, list: list, closeAll: closeAll, cleanName: cleanName, handle: handle, attach: attach,
+    close: close, list: list, closeAll: closeAll, cleanName: cleanName, handle: handle, attach: attach, friendChanged: friendChanged, setTheirs: setTheirs, connectionsTo: connectionsTo,
     // one listener, for the bridge: events are plain data
     onEvent: function (fn) { listener = fn; } };
 })();
