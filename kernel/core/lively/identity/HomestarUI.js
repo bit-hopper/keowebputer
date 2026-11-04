@@ -167,6 +167,9 @@ module("lively.identity.HomestarUI")
       },
 
       getJSON: function (path, thenDo) {
+        // A local identity (the keo app) has no host: its handle is its DID, and nothing serves /@did:... (written %3A once the handle is URL-encoded), so asking would only
+        // log a failed request. Answer the way a missing page would (no body, no error), without leaving the page.
+        if (/^\/@did(:|%3A)/i.test(path)) return void setTimeout(function () { thenDo(null, null); }, 0);
         fetch(path, { credentials: "include", headers: { Accept: "application/json" } })
           .then(function (res) { return res.ok ? res.json() : null; })
           .then(function (body) { thenDo(null, body); })

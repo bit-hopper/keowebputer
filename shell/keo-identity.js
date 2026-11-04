@@ -290,6 +290,12 @@
     }).catch(function () {});
   }
 
+  // Code in THIS page that holds things which belong to the session (the open connections, messages waiting for the world) asks to
+  // be told when it ends, however it ends: sign-out, expiry, removal of the identity. Called once per ended session, after the
+  // session is gone, so a listener that looks for it finds nobody signed in.
+  var endListeners = [];
+  function onEnd(fn) { endListeners.push(fn); }
+
   function endSession() {
     if (session) {
       if (session.timer) clearTimeout(session.timer);
@@ -297,6 +303,7 @@
       var id = session.id;
       session = null;
       tabId(null);
+      endListeners.forEach(function (fn) { try { fn(); } catch (e) {} });
       return sessionTx('readwrite', function (st) { return st.delete(id); }).catch(function () {});
     }
     return Promise.resolve();
@@ -404,5 +411,5 @@
   }
 
   window.keoIdentity = { create: create, list: list, rename: rename, remove: remove, signIn: signIn, current: current,
-    signOut: signOut, resume: resume, sessionWorldKey: sessionWorldKey, deviceProof: deviceProof, signWithDevice: signWithDevice };
+    signOut: signOut, onEnd: onEnd, resume: resume, sessionWorldKey: sessionWorldKey, deviceProof: deviceProof, signWithDevice: signWithDevice };
 })();

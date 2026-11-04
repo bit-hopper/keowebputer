@@ -374,7 +374,7 @@ module("lively.identity.Homestar")
       // save/rename menu; this page is neither, so it names the page instead.
       _patchMenuBarEntry: function (entry) {
         var self = this;
-        var name = "@" + this._shown;
+        var name = this._atName();
         entry.currentWorldDisplayName = function () { return name; };
         entry.toolTip = name + "'s homestar";
         entry.onMouseUp = function (evt) {
@@ -386,6 +386,21 @@ module("lively.identity.Homestar")
           return true;
         };
         entry.update();
+      },
+
+      // A local identity (the keo app, no host) has no handle: its "handle" is its DID and its name is the label the person gave it,
+      // so there is nothing to put an "@" in front of. A handle assigned by a host is shown as @handle, as before.
+      _isLocalId: function () { return /^did:/.test(String(this._handle)); },
+
+      // How the page names its owner in running text and in the menu bar.
+      _atName: function () { return this._isLocalId() ? this._shown : "@" + this._shown; },
+
+      // The line under the name in the header: @handle, or for a local identity the short form of its DID (the label is the name
+      // above it already).
+      _subName: function () {
+        if (!this._isLocalId()) return "@" + this._shown;
+        var li = lively.identity.localIdentity;
+        return li && li.shortDid ? li.shortDid(this._did) : String(this._did);
       },
 
       _copyLink: function () {
@@ -527,7 +542,7 @@ module("lively.identity.Homestar")
         var shownName = trunc(name, 40);
         hero.addMorph(label(lively.rect(TEXT_X, textTop, nameW, 34), shownName, { px: 26, bold: true }));
 
-        var sub = "@" + this._shown + (p.pronouns ? "  ·  " + trunc(p.pronouns, 24) : "");
+        var sub = this._subName() + (p.pronouns ? "  ·  " + trunc(p.pronouns, 24) : "");
         hero.addMorph(label(lively.rect(TEXT_X, textTop + 36, nameW, 22), sub, { px: 14, color: MUTED }));
 
         var cy = textTop + 66;
@@ -684,7 +699,7 @@ module("lively.identity.Homestar")
         } else if (o.failed) {
           text = "Could not load the orbit.";
         } else if (o.locked) {
-          text = "@" + this._shown + " keeps their orbit " + (o.visibility === "friends" ? "for friends." : "private.");
+          text = this._atName() + " keeps their orbit " + (o.visibility === "friends" ? "for friends." : "private.");
         } else if (!o.members.length) {
           text = this._isOwner ? "Your orbit is empty. Add the friends you are closest to." : "Nobody in orbit yet.";
         }

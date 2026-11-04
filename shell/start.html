@@ -32,6 +32,23 @@
   #keo-call button:hover { background: #444a5e; }
   #keo-call button.go-video, #keo-call button.accept { background: #2f9e5b; }
   #keo-call button.hang, #keo-call button.decline { background: #c0392b; }
+  /* The confirmation dialog (keo-confirm.js): drawn and placed by this page only. Like the call panel it stays BELOW the vault. */
+  #keo-confirm { position: fixed; inset: 0; z-index: 2147483001; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  #keo-confirm[hidden] { display: none; }
+  #keo-confirm .box { width: 340px; max-width: calc(100% - 32px); box-sizing: border-box; padding: 16px; background: #1d1f27; color: #f2f3f7;
+                      border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.45); }
+  #keo-confirm .title { font-weight: 600; font-size: 15px; margin-bottom: 12px; }
+  #keo-confirm .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  #keo-confirm .head[hidden] { display: none; }
+  #keo-confirm .who-img { width: 40px; height: 40px; border-radius: 6px; image-rendering: pixelated; flex: none; }
+  #keo-confirm .who { min-width: 0; }
+  #keo-confirm .who-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #keo-confirm .who-did { font: 12px ui-monospace, monospace; color: #a9adbd; }
+  #keo-confirm .text { color: #d6d9e4; line-height: 1.4; }
+  #keo-confirm .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #keo-confirm button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
+  #keo-confirm button:hover { background: #444a5e; }
+  #keo-confirm button.yes { background: #c0392b; }
 </style>
 <!-- Both frames get their src from shell.js, after its message listener exists (the world's only once keo-gate.js has decided how it starts). -->
 <iframe id="world"></iframe>
@@ -44,6 +61,7 @@
 <script src="keo-p2p.js"></script>
 <script src="keo-callsdp.js"></script>
 <script src="keo-identicon.js"></script>
+<script src="keo-confirm.js"></script>
 <script src="keo-call.js"></script>
 <script src="keo-dm.js"></script>
 <script src="keo-chatlog.js"></script>

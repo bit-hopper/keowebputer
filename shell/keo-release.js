@@ -65,7 +65,7 @@
   // the policy the shell enforces; a release that changes such a file is reported as needing a new package, not applied.
   var FIXED_EXACT = {
     'manifest.json': 1, 'bg.js': 1, 'start.html': 1, 'shell.js': 1, 'shell-store.js': 1, 'keo-overlay.js': 1,
-    'keo-release.js': 1, 'keo-did.js': 1, 'keo-hello.js': 1, 'keo-identity.js': 1, 'keo-p2p.js': 1, 'keo-callsdp.js': 1, 'keo-identicon.js': 1, 'keo-call.js': 1, 'keo-dm.js': 1, 'keo-chatlog.js': 1, 'keo-worlds.js': 1, 'keo-gate.js': 1, 'vault.html': 1, 'update-key.json': 1, 'keo-files.json': 1,
+    'keo-release.js': 1, 'keo-did.js': 1, 'keo-hello.js': 1, 'keo-identity.js': 1, 'keo-p2p.js': 1, 'keo-callsdp.js': 1, 'keo-identicon.js': 1, 'keo-confirm.js': 1, 'keo-call.js': 1, 'keo-dm.js': 1, 'keo-chatlog.js': 1, 'keo-worlds.js': 1, 'keo-gate.js': 1, 'vault.html': 1, 'update-key.json': 1, 'keo-files.json': 1,
     'world.html': 1, 'keo-shim.js': 1, 'keo-bridge.js': 1, 'keo-idb.js': 1, 'keo-boot.js': 1,
     'core/lively/localconfig.js': 1, 'core/lively/identity/IdentityVaultFrame.js': 1
   };

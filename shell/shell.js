@@ -66,9 +66,27 @@
     'identity.create': function (a) { return window.keoIdentity.create({ label: a.label }); },
     'identity.list': function () { return window.keoIdentity.list(); },
     'identity.rename': function (a) { return window.keoIdentity.rename({ did: a.did, label: a.label }); },
-    // Removing an identity also drops what it saved: without its record the key is gone for good.
+    // Removing an identity destroys its key for good, so the world can only ASK: this page puts the question to the person (worded
+    // from its own record of the identity, not from anything the world sends) and nothing happens until they click Remove. It also
+    // drops what the identity saved. Removing the identity that is signed in ends that session, like signing out.
     'identity.remove': function (a) {
-      return window.keoIdentity.remove({ did: a.did }).then(function () { return window.keoWorlds.purge(String(a.did)); }).then(function () { return window.keoChatLog.purge(String(a.did)); }).then(function () { return true; });
+      var did = String(a.did);
+      return window.keoIdentity.list().then(function (all) {
+        var rec = all.filter(function (x) { return x.did === did; })[0];
+        if (!rec) throw new Error('No such identity on this device.');
+        return window.keoConfirm.ask({
+          title: 'Remove this identity from this device?', did: rec.did, label: rec.label, yes: 'Remove', no: 'Keep',
+          text: 'The world you are in asked for this. Its keys, saved worlds and messages are deleted from this device and cannot be brought back. The passkey stays in your authenticator: a web page cannot delete it.'
+        });
+      }).then(function (yes) {
+        if (!yes) throw new Error('Not removed: it was not confirmed.');
+        return window.keoIdentity.remove({ did: did });
+      }).then(function () { return window.keoWorlds.purge(did); }).then(function () { return window.keoChatLog.purge(did); }).then(function () {
+        return window.keoIdentity.current();
+      }).then(function (s) {
+        if (!s || s.did !== did) return true;
+        return window.keoIdentity.signOut().then(function () { setTimeout(function () { location.reload(); }, 0); return true; });
+      });
     },
     // The world may sign in only while nobody is: it cannot swap the identity a person chose on the sign-in screen.
     'identity.signIn': function (a) {
@@ -80,7 +98,7 @@
     // The public part of the session (DID, label, expiry, the delegation certificate), or null.
     'session.current': function () { return window.keoIdentity.current(); },
     // Ends the session and shows the sign-in screen again. The world may ask: it only lowers what the world can do.
-    'session.signOut': function () { window.keoP2p.closeAll(); return window.keoIdentity.signOut().then(function () { setTimeout(function () { location.reload(); }, 0); return true; }); },
+    'session.signOut': function () { return window.keoIdentity.signOut().then(function () { setTimeout(function () { location.reload(); }, 0); return true; }); },
     // Saved worlds, encrypted under the signed-in identity (keo-worlds.js). `doc` is the whole saved page as text.
     'world.save': function (a) { return window.keoWorlds.save({ name: a.name, doc: a.doc }); },
     'world.list': function () { return window.keoWorlds.list(); },
@@ -133,6 +151,10 @@
   // Call events go the same way, as {keo:1, event:'call', data}; ask call.state for the call at hand when a listener starts.
   window.keoCall.onEvent(function (data) { toWorld({ keo: 1, event: 'call', data: data }); });
   window.keoDm.onEvent(function (data) { toWorld({ keo: 1, event: 'dm', data: data }); });
+  // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
+  // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
+  // connections were proven with that identity's device key, and the next one to sign in must not inherit them.
+  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;

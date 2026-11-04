@@ -48,7 +48,11 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     await ctx.addInitScript(() => { if (location.protocol === 'chrome-extension:' && /start\.html/.test(location.pathname) && navigator.credentials) { window.__cred = { create: 0, get: 0 }; for (const k of ['create', 'get']) { const o = navigator.credentials[k].bind(navigator.credentials); navigator.credentials[k] = function () { window.__cred[k]++; return o.apply(null, arguments); }; } } });
     const page = await ctx.newPage();
     page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message.slice(0, 200)));
-    page.on('console', (m) => { if (m.type() === 'error' && !/compute-pressure|ERR_FILE_NOT_FOUND/.test(m.text())) errors.push('console: ' + m.text().slice(0, 200)); });
+    const homeFetches = [];     // failed requests for /@<did>/...: a local identity has no host, so the home page must not ask for them
+    page.on('console', (m) => {
+      if (m.type() === 'error' && /ERR_FILE_NOT_FOUND/.test(m.text()) && /\/@did/.test(m.location().url || '')) homeFetches.push(m.location().url.slice(-80));
+      if (m.type() === 'error' && !/compute-pressure|ERR_FILE_NOT_FOUND/.test(m.text())) errors.push('console: ' + m.text().slice(0, 200));
+    });
     const cdp = await ctx.newCDPSession(page);
     await cdp.send('WebAuthn.enable', { enableUI: false });
     await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
@@ -97,6 +101,9 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     check('copy DID: the world asks the browser to copy the full DID, and the browser accepts', asked.ok === true && asked.seen.length >= 1 && asked.seen.every((t) => t === did), asked);
     const text = await frame.evaluate(() => { const out = []; (function walk(m) { if (m.textString) out.push(String(m.textString)); (m.submorphs || []).forEach(walk); })($world); return out.join(' | '); });
     check('new identity: the home page shows the label', /Maya/.test(text), text.slice(0, 300));
+    check('new identity: the home page does not put an "@" before the label (there is no handle); the line under it is the short DID', !/@Maya/.test(text) && /keo:.{4}….{4}/.test(text), text.slice(0, 300));
+    await sleep(1500);
+    check('new identity: the home page does not ask for /@<did>/... pages (nothing serves them)', homeFetches.length === 0, homeFetches);
     await page.screenshot({ path: path.join(WORK, 'session-homestar.png') });
 
     // ---- 3. the session
@@ -213,15 +220,47 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     check('guest: saving needs a session', !gs.ok && /Sign in/.test(gs.e), gs);
     await g.close();
 
-    // ---- 11. removing the identity removes what it saved
+    // ---- 11. removing the identity: the world can only ask, the person decides in a dialog this page draws, and what is removed
+    // takes what it saved with it (and, being the signed-in one, ends the session)
     await page.bringToFront();
-    const rm = await keoCall(frame, 'identity.remove', { did });
-    const left = await page.evaluate(async () => {
-      const db = await new Promise((res, rej) => { const q = indexedDB.open('keo-worlds'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
-      const n = (s) => new Promise((res) => { const r = db.transaction(s).objectStore(s).count(); r.onsuccess = () => res(r.result); });
-      const out = { bodies: await n('bodies'), index: await n('index') }; db.close(); return out;
+    const count = () => page.evaluate(async () => (await window.keoIdentity.list()).length);
+    const confirmUp = () => page.evaluate(() => { const r = document.getElementById('keo-confirm'); return !!r && !r.hidden; });
+    let pend = keoCall(frame, 'identity.remove', { did });
+    await page.waitForSelector('#keo-confirm:not([hidden])', { timeout: 10000 });
+    const dlgInfo = await page.evaluate(() => {
+      const r = document.getElementById('keo-confirm');
+      return { name: r.querySelector('.who-name').textContent, did: r.querySelector('.who-did').title, z: +getComputedStyle(r).zIndex, focus: document.activeElement && document.activeElement.dataset.ans };
     });
-    check('remove: the identity and its saved worlds are gone', rm.ok && left.bodies === 0 && left.index === 0, { rm, left });
+    check('remove: the request only raises the dialog, worded from the shell\'s own record, below the vault, focus on Keep',
+      (await count()) === 1 && dlgInfo.did === did && dlgInfo.name.length > 0 && dlgInfo.z < 2147483647 && dlgInfo.focus === 'no', dlgInfo);
+    await page.evaluate(() => document.querySelector('#keo-confirm button[data-ans="yes"]').click());   // a scripted click is not a person's
+    await sleep(600);
+    check('remove: a scripted click does not confirm', (await confirmUp()) && (await count()) === 1);
+    const second = await keoCall(frame, 'identity.remove', { did });
+    check('remove: a second request while the dialog is up is refused', !second.ok && /Another question/.test(second.e), second);
+    await page.click('#keo-confirm button[data-ans="no"]');
+    const kept = await pend;
+    check('remove: Keep leaves the identity, and the world is told it was not confirmed', !kept.ok && /not confirmed/.test(kept.e) && (await count()) === 1 && !(await confirmUp()), kept);
+    const nag = await keoCall(frame, 'identity.remove', { did });
+    check('remove: asking again right after a no is refused', !nag.ok && /declined a moment ago/.test(nag.e) && !(await confirmUp()), nag);
+    check('remove: a request for an identity that is not here fails without asking', await (async () => {
+      const r = await keoCall(frame, 'identity.remove', { did: 'did:keo:nothing:here' }); return !r.ok && /No such identity/.test(r.e) && !(await confirmUp());
+    })());
+    await sleep(10500);
+    pend = keoCall(frame, 'identity.remove', { did }).catch((e) => ({ ok: null, e: e.message }));       // the page reloads under it
+    await page.waitForSelector('#keo-confirm:not([hidden])', { timeout: 10000 });
+    await page.click('#keo-confirm button[data-ans="yes"]');
+    let left = null;
+    for (let i = 0; i < 60 && !(left && left.ids === 0); i++) {
+      await sleep(500);
+      left = await page.evaluate(async () => {
+        const db = await new Promise((res, rej) => { const q = indexedDB.open('keo-worlds'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+        const n = (s) => new Promise((res) => { const r = db.transaction(s).objectStore(s).count(); r.onsuccess = () => res(r.result); });
+        const out = { bodies: await n('bodies'), index: await n('index'), ids: (await window.keoIdentity.list()).length, session: await window.keoIdentity.current() }; db.close(); return out;
+      }).catch(() => null);
+    }
+    check('remove: Remove deletes the identity and its saved worlds', !!left && left.ids === 0 && left.bodies === 0 && left.index === 0, left);
+    check('remove: removing the signed-in identity ended its session', !!left && left.session === null, left);
 
     // A package with a landing page starts it as the sign-in: it is the user's own world and embeds a video player and a map that want location (the extension's policy blocks it).
     const mine = errors.filter((e) => !/youtube\.com|Geolocation access/.test(e));

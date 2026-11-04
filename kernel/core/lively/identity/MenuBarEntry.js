@@ -42,6 +42,8 @@ module("lively.identity.MenuBarEntry")
         var did = lively.identity && lively.identity.did;
         var user = did && did.isLoggedIn() && did.currentUser();
         if (!user) return;
+        // A local identity has no inbox on a server (no host): nothing to ask.
+        if (/^did:keo:/.test(user.handle)) return;
         fetch(did.baseUrl() + "/@" + encodeURIComponent(user.handle) + "/inbox?limit=1", {
           credentials: "include",
           headers: { Accept: "application/json" },

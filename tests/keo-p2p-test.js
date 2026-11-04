@@ -223,6 +223,25 @@ async function device(label, name) {
     await findEvent(B.frame, 'state', (e) => e.id === a3.r.id && e.state === 'ready');
     await call(A.frame, 'session.signOut', {}).catch(() => {});
     check('signing out closes the connections, and the other side hears it', !!(await findEvent(B.frame, 'state', (e) => e.id === a3.r.id && e.state === 'closed')));
+
+    // ---- 6. a session that EXPIRES ends what belongs to it just as signing out does. The page's clock is faked before the sign-in,
+    // so the session's expiry timer is the fake clock's and a jump of 13 hours (the session lasts 12) fires it without waiting.
+    await sleep(2500);                                              // the sign-out reloads A's page
+    A.frame = await waitForWorld(A.page);
+    await A.frame.evaluate(() => { window.__p2p = []; window.keo.on('p2p', (e) => window.__p2p.push(e)); });
+    await A.page.clock.install();
+    await A.page.evaluate((d) => window.keoIdentity.signIn({ did: d }), A.did);
+    const i4 = await call(A.frame, 'p2p.offer', {});
+    const a4 = await call(B.frame, 'p2p.answer', { code: i4.r.code });
+    await call(A.frame, 'p2p.finish', { id: i4.r.id, code: a4.r.code });
+    const up4 = await findEvent(B.frame, 'state', (e) => e.id === a4.r.id && e.state === 'ready');
+    await call(B.frame, 'dm.send', { id: a4.r.id, text: 'said before the session ended' });
+    const msgWaiting = await waitFor('a message waiting on A', async () => (await A.page.evaluate(() => window.keoDm.take())).length === 1);
+    check('before the expiry: A has a session, a ready connection and a message nobody has taken', !!up4 && !!msgWaiting && (await A.page.evaluate(() => window.keoIdentity.current())) !== null);
+    await A.page.clock.fastForward('13:00:00');
+    check('when the session expires the connection is closed and the other side hears it', !!(await findEvent(B.frame, 'state', (e) => e.id === a4.r.id && e.state === 'closed')));
+    check('and A has no session, no connection and no message left for the next identity to take', (await A.page.evaluate(() => window.keoIdentity.current())) === null
+      && (await A.page.evaluate(() => window.keoP2p.list())).length === 0 && (await A.page.evaluate(() => window.keoDm.take())).length === 0);
     check('no page errors in either browser', errors.length === 0, errors.slice(0, 5));
   } catch (e) {
     check('the test ran to the end', false, String(e && e.stack || e).slice(0, 600));

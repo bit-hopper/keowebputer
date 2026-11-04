@@ -309,7 +309,7 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     await sleep(1500);
     check('messages for a call that does not exist are ignored (the connection stays up, no panel)', (await call(B.frame, 'p2p.list')).r.some((c) => c.id === k.b && c.state === 'ready') && ((await panel(B)) || { hidden: true }).hidden && (await mark(B)) === b0);
     // a call that is rung for real, accepted by a click, and then given a description for another certificate
-    await sleep(5300);                                            // (the ring limit: one a few seconds apart, across connections)
+    await sleep(5300);                                            // (a new connection has its own ring limit; the wait is only for the earlier calls to settle)
     await send(A, k.a, { t: 'call.ring', cid: 'BBBBBBBBBBBB', video: false });
     await waitPanel(B, (p) => /is calling/.test(p.status));
     await click(B, 'accept');
@@ -337,6 +337,26 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     check('a second ring while one is showing does not make a second call', events.filter((e) => e.state === 'incoming').length === 1, events.map((e) => e.state));
     await call(B.frame, 'call.end', { id: k.b });
     check('the world may end a call (it lowers what the world can do)', !!(await waitCall(B, 'ended', b0)));
+
+    // ---- 6. the ring limit is per connection: a nagging peer is held back, a ring on another connection is not
+    k = await connect(A, B);
+    const k2 = await connect(A, B);
+    const incoming = (P, from) => calls(P).then((l) => l.slice(from).filter((e) => e.state === 'incoming').length);
+    b0 = await mark(B);
+    await send(A, k.a, { t: 'call.ring', cid: 'GGGGGGGGGGGG', video: false });
+    check('a first ring on a connection shows the panel', !!(await waitPanel(B, (p) => /is calling/.test(p.status))));
+    await call(B.frame, 'call.end', { id: k.b });
+    await waitCall(B, 'ended', b0);
+    b0 = await mark(B);
+    await send(A, k2.a, { t: 'call.ring', cid: 'HHHHHHHHHHHH', video: false });             // another connection, straight after
+    const other = await waitPanel(B, (p) => /is calling/.test(p.status), 4000);
+    check('a ring on another connection right after is not held back by the first one\'s limit', !!other && (await incoming(B, b0)) === 1);
+    await call(B.frame, 'call.end', { id: k2.b });
+    await waitCall(B, 'ended', b0);
+    b0 = await mark(B);
+    await send(A, k.a, { t: 'call.ring', cid: 'IIIIIIIIIIII', video: false });              // the first connection again, still inside its 5 s
+    await sleep(1500);
+    check('and the first connection stays held back', (await incoming(B, b0)) === 0 && ((await panel(B)) || { hidden: true }).hidden);
   } catch (e) {
     failed++; console.log('FAIL test crashed: ' + (e && e.stack || e));
   }

@@ -146,9 +146,15 @@ async function waitForWorld(page) {
     const labels = (l3 || []).map((x) => x.label).sort();
     check('list: labels are as given (Work laptop, Race, Dialog made)', JSON.stringify(labels) === JSON.stringify(['Dialog made', 'Race', 'Work laptop']), labels);
 
-    // ---- remove one
-    const gone = await frame.evaluate((did) => new Promise((res) => lively.identity.localIdentity.remove(did, () => lively.identity.localIdentity.list((e, r) => res(r)))), A.did);
-    check('remove: only the record on this device goes', gone.length === 2 && !gone.some((x) => x.did === A.did), gone);
+    // ---- remove one (not the signed-in one: removing that signs out and reloads, which the session test covers). The world only
+    // asks; the shell page puts the question to the person, and the identity stays until a real click says Remove.
+    const sess = await page.evaluate(() => window.keoIdentity.current());
+    const victim = l3.find((x) => !sess || x.did !== sess.did);
+    const asked = frame.evaluate((did) => new Promise((res) => lively.identity.localIdentity.remove(did, (e) => lively.identity.localIdentity.list((e2, r) => res({ err: e && e.message, list: r })))), victim.did);
+    await page.waitForSelector('#keo-confirm:not([hidden])', { timeout: 10000 });
+    await page.click('#keo-confirm button[data-ans="yes"]');
+    const gone = await asked;
+    check('remove: only the record on this device goes, after the person confirms', !gone.err && gone.list.length === 2 && !gone.list.some((x) => x.did === victim.did), gone);
 
     // ---- nothing needed the network
     const unexpected = errors.filter((e) => !/IdentityServer\/session/.test(e));

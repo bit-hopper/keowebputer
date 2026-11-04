@@ -38,6 +38,9 @@
     return { mid: mid, at: Date.now(), peer: { did: h.peer.did, name: h.peer.name || null } };
   }
   function take() { return pending.slice(); }
+  // For code in THIS page only (shell.js, when the session ends): what is waiting was said to the identity that has just signed out,
+  // so the next one to sign in must not be able to take it. Never put it behind a bridge op.
+  function clear() { pending = []; }
   function done(args) {
     var mids = Array.isArray(args.mids) ? args.mids.map(String) : [];
     pending = pending.filter(function (x) { return mids.indexOf(x.mid) < 0; });
@@ -45,5 +48,5 @@
   }
 
   p2p.attach('dm', { message: message, closed: closed });
-  window.keoDm = { send: send, take: take, done: done, onEvent: function (fn) { listener = fn; } };
+  window.keoDm = { send: send, take: take, done: done, clear: clear, onEvent: function (fn) { listener = fn; } };
 })();

@@ -33,7 +33,9 @@
   var RING_MS = 45000, PROMPT_MS = 60000, CONNECT_MS = 25000, RERING_MS = 5000, DISMISS_MS = 10000;
   var CID = /^[A-Za-z0-9_-]{8,24}$/;
   var call = null;                  // the one call at a time
-  var listener = null, lastDismissed = 0, lastRing = 0;
+  var listener = null, lastDismissed = 0;
+  var lastRing = {};                // connection id -> when that peer last got a panel: the limit is per peer, so one nagging peer
+                                    // cannot make a different peer's call go unseen
   var ui = null;                    // the panel's elements, built on first use
 
   function newCid() { return kd.b64u(crypto.getRandomValues(new Uint8Array(9))); }
@@ -332,8 +334,8 @@
       if (!h.ready()) return;
       if (call) { if (!c) { try { h.send({ t: 'call.decline', cid: m.cid, why: 'busy' }); } catch (e) {} } return; }
       var now = Date.now();
-      if (now - lastRing < RERING_MS) return;                       // a peer that rings again and again gets no panel
-      lastRing = now;
+      if (now - (lastRing[h.id] || 0) < RERING_MS) return;          // a peer that rings again and again gets no panel
+      lastRing[h.id] = now;
       var n = newCall(h, 'in');
       n.cid = m.cid; n.wantsVideo = m.video;
       call = n;
@@ -364,6 +366,7 @@
     bad('unknown');
   }
   function closed(h, why) {
+    delete lastRing[h.id];
     if (call && call.h.id === h.id) endCall(call, why || 'The connection closed.', false);
   }
 

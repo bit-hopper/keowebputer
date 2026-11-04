@@ -568,6 +568,7 @@ module("lively.identity.AmbientPresencePanel")
           this._avatarMorph.setImageURL(
             lively.identity.postCardUtils.identiconDataUrl(handle, 32));
           var self = this;
+          if (/^did:keo:/.test(handle)) return;   // a local identity has no profile on a server to fetch an uploaded avatar from
           fetch("/@" + handle + "/profile", { credentials: "include" })
             .then(function (res) { return res.ok ? res.json() : null; })
             .then(function (env) {
@@ -1054,6 +1055,7 @@ module("lively.identity.AmbientPresencePanel")
             // notice this tab's timer already fired.
             if (lively.identity.did && lively.identity.did.isLoggedIn()) {
               var handle = lively.identity.did.currentUser().handle;
+              if (/^did:keo:/.test(handle)) return;   // a local identity keeps its status on this device only (no host)
               fetch("/@" + handle + "/status", {
                 method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ status: "online", duration: null }),
@@ -1079,6 +1081,7 @@ module("lively.identity.AmbientPresencePanel")
 
         if (!lively.identity.did || !lively.identity.did.isLoggedIn()) return;
         var handle = lively.identity.did.currentUser().handle;
+        if (/^did:keo:/.test(handle)) return;   // a local identity keeps its status on this device only (no host)
         fetch("/@" + handle + "/status", {
           method: "PUT", credentials: "include",
           headers: { "Content-Type": "application/json" },
@@ -1113,6 +1116,9 @@ module("lively.identity.AmbientPresencePanel")
 
         if (!lively.identity.did || !lively.identity.did.isLoggedIn()) return;
         var handle = lively.identity.did.currentUser().handle;
+        // A local identity has no status on a server (no host): the cached copy painted above is all there is, and there is
+        // nothing to poll for.
+        if (/^did:keo:/.test(handle)) return;
         fetch("/@" + handle + "/status", { credentials: "include" })
           .then(function (res) { return res.ok ? res.json() : null; })
           .then(function (result) {
@@ -1143,6 +1149,7 @@ module("lively.identity.AmbientPresencePanel")
         this._statusPollTimer = setInterval(function () {
           if (!lively.identity.did || !lively.identity.did.isLoggedIn()) return;
           var handle = lively.identity.did.currentUser().handle;
+          if (/^did:keo:/.test(handle)) return;   // a local identity has no status on a server (no host)
           fetch("/@" + handle + "/status", { credentials: "include" })
             .then(function (res) { return res.ok ? res.json() : null; })
             .then(function (result) {
