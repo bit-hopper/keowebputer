@@ -196,12 +196,25 @@ module('lively.identity.DMChat')
 
       // row: {msgId, threadId, peerHandle, peerDid, myDid, text, sentAt, direction: 'in'|'out'}
       saveLocalMessage: function (row, thenDo) {
+        // inside keo the shell keeps the history, encrypted under the signed-in identity (see "local mode")
+        if (this.isLocal()) {
+          return lively.identity.localIdentity.chatAppend({ peerDid: row.peerDid, label: row.peerHandle, k: row.msgId, dir: row.direction, text: row.text, at: row.sentAt },
+            function (err) { thenDo(err || null); });
+        }
         this.openDb(function (err, db) {
           if (err) return thenDo(err);
           var tx = db.transaction('messages', 'readwrite');
           tx.objectStore('messages').put(row);
           tx.oncomplete = function () { thenDo(null); };
           tx.onerror = function () { thenDo(tx.error); };
+        });
+      },
+
+      // Inside keo: the conversation with one device, as the rows the window draws ({ msgId, text, direction, sentAt }).
+      listLocalMessages: function (peerDid, thenDo) {
+        lively.identity.localIdentity.chatThread(peerDid, function (err, msgs) {
+          if (err) return thenDo(err);
+          thenDo(null, (msgs || []).map(function (m) { return { msgId: m.k, text: m.text, direction: m.dir, sentAt: m.at }; }));
         });
       },
 
@@ -229,13 +242,11 @@ module('lively.identity.DMChat')
           if (err) return thenDo(err);
           var store = db.transaction('messages', 'readonly').objectStore('messages');
           var byThread = {};
-          var me = lively.identity.DMChat._localMe();          // inside keo: only this identity's own threads (see "local mode")
           var req = store.openCursor();
           req.onsuccess = function (evt) {
             var cursor = evt.target.result;
             if (cursor) {
               var row = cursor.value;
-              if (me && row.myDid !== me) { cursor.continue(); return; }
               var existing = byThread[row.threadId];
               if (!existing || row.sentAt > existing.lastSentAt) {
                 byThread[row.threadId] = {
@@ -267,11 +278,9 @@ module('lively.identity.DMChat')
       // direct connection to the other device (Connect a device ...; shell/keo-dm.js): the connection is already encrypted and
       // the peer already proved which DID it is, so there is no sealed box, no signature and no mailbox, and a message can only
       // be sent while the two devices are connected. Threads are keyed by the peer's DID (the "handle" slot holds a display
-      // label: the name the peer chose to show, else its short DID), and history is kept in the same IndexedDB store as above.
-      // KNOWN GAPS: that store lives in the world's storage, which is shared by every identity on this device and is not
-      // encrypted (the list is filtered to the signed-in identity, which hides the others' threads but does not protect the
-      // data); there are no delivery receipts, no unread marks, and a message that arrives while the world is not running
-      // waits in the shell only until that page is closed. A call is started from a chat window's button; the shell draws and
+      // label: the name the peer chose to show, else its short DID), and the history is kept by the shell, encrypted under the
+      // signed-in identity (shell/keo-chatlog.js), not in this world's own storage. KNOWN GAPS: there are no delivery receipts, no
+      // unread marks, and a message that arrives while the world is not running waits in the shell only until that page is closed. A call is started from a chat window's button; the shell draws and
       // answers it (shell/keo-call.js), this window only asks.
 
       isLocal: function () {
@@ -416,8 +425,12 @@ module('lively.identity.DMChat')
       // The thread list for the inbox window: the saved threads and, inside keo, the devices connected right now that have none yet.
       listThreadsForUi: function (thenDo) {
         var self = this;
-        this.listThreads(function (err, threads) {
-          if (err || !self.isLocal()) return thenDo(err, threads);
+        if (!this.isLocal()) return this.listThreads(thenDo);
+        lively.identity.localIdentity.chatThreads(function (err, list) {
+          if (err) return thenDo(err);
+          var threads = (list || []).map(function (t) {
+            return { threadId: null, peerHandle: t.label || lively.identity.localIdentity.shortDid(t.peerDid), peerDid: t.peerDid, lastText: t.lastText, lastSentAt: t.lastAt };
+          });
           lively.identity.localIdentity.peerList(function (err2, conns) {
             if (err2) return thenDo(null, threads);
             var known = {};
@@ -1518,10 +1531,12 @@ module('lively.identity.DMChat')
           var user = lively.identity.did.currentUser();
           if (!user || !this._peerDid) return;
           var threadId = lively.identity.DMChat.threadId(user.did, this._peerDid);
-          lively.identity.DMChat.listThreadMessages(threadId, function (err, rows) {
+          var show = function (err, rows) {
             if (err || !rows || !self.world()) return;
             rows.forEach(function (row) { self.appendMessage(row.text, row.direction === 'out', row.sentAt, row.msgId); });
-          });
+          };
+          if (this._local) lively.identity.DMChat.listLocalMessages(this._peerDid, show);
+          else lively.identity.DMChat.listThreadMessages(threadId, show);
         },
 
         // Inside keo (see DMChat "local mode"): the strip says whether the connection is up, and a Call button asks the shell to

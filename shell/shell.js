@@ -68,7 +68,7 @@
     'identity.rename': function (a) { return window.keoIdentity.rename({ did: a.did, label: a.label }); },
     // Removing an identity also drops what it saved: without its record the key is gone for good.
     'identity.remove': function (a) {
-      return window.keoIdentity.remove({ did: a.did }).then(function () { return window.keoWorlds.purge(String(a.did)); }).then(function () { return true; });
+      return window.keoIdentity.remove({ did: a.did }).then(function () { return window.keoWorlds.purge(String(a.did)); }).then(function () { return window.keoChatLog.purge(String(a.did)); }).then(function () { return true; });
     },
     // The world may sign in only while nobody is: it cannot swap the identity a person chose on the sign-in screen.
     'identity.signIn': function (a) {
@@ -111,12 +111,18 @@
     // and call.state only lower or read what the world can do. The events below carry text only, never a stream.
     'call.start': function (a) { return window.keoCall.start({ id: a.id }); },
     'call.end': function (a) { return window.keoCall.end({ id: a.id }); },
+    'call.lower': function (a) { return window.keoCall.lower({ id: a.id, what: a.what }); },
     'call.state': function () { return window.keoCall.state(); },
     // Text messages over a connection (keo-dm.js). The world sends, and PULLS what arrived: dm.take lists the waiting messages,
     // dm.done drops the ones it has saved. The events only say that something is waiting.
     'dm.send': function (a) { return window.keoDm.send({ id: a.id, text: a.text }); },
     'dm.take': function () { return window.keoDm.take(); },
     'dm.done': function (a) { return window.keoDm.done({ mids: a.mids }); },
+    // The signed-in identity's message history, encrypted under it (keo-chatlog.js). Only its own conversations are reachable.
+    'chat.append': function (a) { return window.keoChatLog.append({ peerDid: a.peerDid, label: a.label, k: a.k, dir: a.dir, text: a.text, at: a.at }); },
+    'chat.thread': function (a) { return window.keoChatLog.thread({ peerDid: a.peerDid }); },
+    'chat.threads': function () { return window.keoChatLog.threads(); },
+    'chat.remove': function (a) { return window.keoChatLog.remove({ peerDid: a.peerDid }); },
     // The vault asked to be shown (its "Unlock with passkey" button needs a click inside its own frame), or hidden again.
     'vault.frame': function (a) { vault.classList.toggle('shown', !!a.shown); return true; }
   };

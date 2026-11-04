@@ -236,6 +236,7 @@ module("lively.identity.AmbientPresencePanel")
       },
 
       toggleMic: function toggleMic() {
+        if (lively.identity.AmbientPresencePanel.isLocal()) return lively.identity.AmbientPresencePanel.localControl("mic");
         if (!lively.identity.AmbientPresencePanel.controlEnabled("mic")) return;
         if (this.deafened) {
           this.deafened = false;
@@ -249,6 +250,7 @@ module("lively.identity.AmbientPresencePanel")
       },
 
       toggleDeafen: function toggleDeafen() {
+        if (lively.identity.AmbientPresencePanel.isLocal()) return lively.identity.AmbientPresencePanel.localControl("headset");
         if (!lively.identity.AmbientPresencePanel.controlEnabled("deafen")) return;
         this.deafened = !this.deafened;
         this.micMuted = this.deafened;
@@ -258,6 +260,7 @@ module("lively.identity.AmbientPresencePanel")
       },
 
       toggleCamera: function toggleCamera() {
+        if (lively.identity.AmbientPresencePanel.isLocal()) return lively.identity.AmbientPresencePanel.localControl("camera");
         if (!lively.identity.AmbientPresencePanel.controlEnabled("camera")) return;
         this.cameraOff = !this.cameraOff;
         this._updateControls();
@@ -640,11 +643,85 @@ module("lively.identity.AmbientPresencePanel")
 
       _mediaKinds: { audio: true, video: true },
 
+      // ─── inside keo: calls instead of rooms ───────────────────────────────
+      // There is no room to join here, so the camera, microphone and headset buttons act on a call between two connected devices
+      // (shell/keo-call.js). The call itself, and what is captured, belongs to the shell, so these buttons can only ASK and LOWER:
+      //   camera    no call: ask for one (the shell puts up its prompt; nothing starts until it is clicked there). During a call with
+      //             video: switch the camera off. To turn it on again, use the call panel.
+      //   mic       during a call: mute. To unmute, use the call panel.
+      //   headset   during a call: hang up.
+      // The icons follow the call (muted, camera off); a button with nothing to act on is greyed.
+      isLocal: function isLocal() {
+        var li = lively.identity.localIdentity;
+        return !!(li && li.isAvailable());
+      },
+      _localCall: null,             // the call at hand (its latest event), or null
+      _localStarted: false,
+
+      startLocal: function startLocal() {
+        if (this._localStarted || !this.isLocal()) return;
+        this._localStarted = true;
+        var self = this, li = lively.identity.localIdentity;
+        li.onCallEvent(function (ev) { self._setLocalCall(ev.state === "ended" ? null : ev); });
+        li.callState(function (err, c) { if (!err && c) self._setLocalCall(c); });
+      },
+
+      _setLocalCall: function _setLocalCall(c) {
+        this._localCall = c;
+        var p = this._panel, live = !!(c && c.state === "active");
+        if (p) {
+          p.micMuted = live && !c.mic;
+          p.cameraOff = live && !!c.video && !c.cam;
+          p.deafened = false;
+        }
+        this.refreshControls();
+      },
+
+      localControlEnabled: function localControlEnabled(which) {
+        var c = this._localCall, live = !!(c && c.state === "active");
+        if (which === "camera") return !c || (live && !!c.video);
+        if (which === "mic" || which === "deafen") return live;
+        return false;                                  // screen share, soundboard and face effects need a room
+      },
+
+      localControl: function localControl(which) {
+        var self = this, li = lively.identity.localIdentity, c = this._localCall, live = !!(c && c.state === "active");
+        function say(msg) { $world.setStatusMessage(msg, Color.gray, 4); }
+        if (which === "headset") {
+          if (!c) return say("You are not in a call.");
+          return li.callEnd(c.id);
+        }
+        if (which === "mic") {
+          if (!live) return say("You are not in a call.");
+          if (!c.mic) return say("Unmute in the call panel, at the lower right.");
+          return li.callLower(c.id, "mic", function (err) { if (err) say("Could not mute: " + (err.message || err)); });
+        }
+        // camera
+        if (c) {
+          if (!live || !c.video) return say("There is no video in this call.");
+          if (!c.cam) return say("Turn the camera on in the call panel, at the lower right.");
+          return li.callLower(c.id, "cam", function (err) { if (err) say("Could not switch the camera off: " + (err.message || err)); });
+        }
+        li.peerList(function (err, list) {
+          var ready = (list || []).filter(function (x) { return x.state === "ready"; });
+          if (err || !ready.length) return say("Connect a device first (menu: Connect a device), then call it from here or from Messages.");
+          if (ready.length > 1) {
+            say("Choose who to call: open a conversation and press its call button.");
+            return lively.require("lively.identity.DMChat").toRun(function () { lively.identity.DMChat.openInbox(); });
+          }
+          li.callStart(ready[0].id, function (err2) {
+            if (err2) return say("Could not start a call: " + (err2.message || err2));
+            say("Choose how to call in the call panel at the lower right.");
+          });
+        });
+      },
+
       // Whether a control does anything right now. Mic/deafen need a call;
       // the camera needs a call that carries video. With no room at all the
       // controls stay live so the prefs can be set ahead of joining; when the
       // only thing open is a text room there is no call, so they go inactive.
       controlEnabled: function controlEnabled(which) {
+        if (this.isLocal()) return this.localControlEnabled(which);
         // Call-only actions: need a live call; the soundboard also needs the headset on.
         if (which === "screenshare") return !!this._activeRoom;
         if (which === "faceeffects") return !!this._activeRoom && !!this._mediaKinds.video;
@@ -851,6 +928,7 @@ module("lively.identity.AmbientPresencePanel")
         p.enableFixedPositioning();
         p.alignInWorld();
         this._panel = p;
+        if (this.isLocal()) this.startLocal();
         return p;
       },
 

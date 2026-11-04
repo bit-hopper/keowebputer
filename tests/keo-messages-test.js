@@ -79,7 +79,10 @@ const caption = (P, did) => chat(P, did, (w) => w.get('EncryptedCaption').textSt
 const whereIn = (P, did, name) => chat(P, did, (w, n) => { const m = w.get(n); if (!m) return null; const node = m.renderContext().shapeNode, b = node.getBoundingClientRect(), x = b.left + b.width / 2, y = b.top + b.height / 2, top = document.elementFromPoint(x, y); return { x, y, covered: !(top && (node === top || node.contains(top) || top.contains(node))) }; }, name);
 async function clickIn(P, did, name) { const r = await whereIn(P, did, name); if (!r) throw new Error('no morph named ' + name); if (r.covered) throw new Error(name + ' is covered'); await P.page.mouse.click(r.x, r.y); }
 async function typeIn(P, did, text) { await clickIn(P, did, 'InputField'); await P.page.keyboard.type(text, { delay: 15 }); await P.page.keyboard.press('Enter'); }
-const rows = (P, a, b) => P.frame.evaluate(([x, y]) => new Promise((res) => lively.identity.DMChat.listThreadMessages(lively.identity.DMChat.threadId(x, y), (e, r) => res(r || []))), [a, b]);
+// the conversation with `b`, as the chat window reads it (from the shell's encrypted history; `a` is only for the reader's eyes)
+const rows = (P, a, b) => P.frame.evaluate((y) => new Promise((res) => lively.identity.DMChat.listLocalMessages(y, (e, r) => res(r || []))), b);
+// everything the shell has written to its history store, as it is on disk
+const dump = (P) => P.page.evaluate(() => new Promise((res, rej) => { const q = indexedDB.open('keo-chat'); q.onerror = () => rej(q.error); q.onsuccess = () => { const db = q.result, out = {}; let n = 0; const t = db.transaction(['index', 'bodies'], 'readonly'); ['index', 'bodies'].forEach((st) => { const r = t.objectStore(st).getAll(); r.onsuccess = () => { out[st] = r.result.map((x) => ({ did: x.did, id: x.id, iv: x.iv, ct: Array.from(x.ct) })); if (++n === 2) { db.close(); res(out); } }; }); }; }));
 const inbox = (P) => P.frame.evaluate(() => { const w = lively.identity.DMChat._inboxWindow; if (!w || !w.world()) return null; return w.get('ThreadList').renderContext().shapeNode.innerText; });
 const panel = (P) => P.page.evaluate(() => { const r = document.getElementById('keo-call'); return r ? { hidden: r.hidden, status: r.querySelector('.status').textContent } : null; });
 const shot = (page, n) => process.env.SHOT_DIR ? page.screenshot({ path: path.join(process.env.SHOT_DIR, n + '.png') }) : null;
@@ -119,7 +122,23 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     check('B\'s window is labelled with the name A chose to show, and shows A\'s DID in its picture seed', (await chat(B, A.did, (w) => w._peerHandle)) === 'Maya' && (await chat(B, A.did, (w) => w._local)) === true);
     check('the shell holds nothing back once the world has saved the message', (await call(B.frame, 'dm.take')).r.length === 0);
     const rA = await rows(A.frame ? A : A, A.did, B.did), rB = await rows(B, B.did, A.did);
-    check('both sides saved it, as out on A and in on B, with the peer\'s DID', rA.length === 1 && rA[0].direction === 'out' && rA[0].peerDid === B.did && rB.length === 1 && rB[0].direction === 'in' && rB[0].peerDid === A.did && rB[0].text === 'hello Jun', { rA, rB });
+    check('both sides saved it, as out on A and in on B, with the peer\'s DID', rA.length === 1 && rA[0].direction === 'out' && rB.length === 1 && rB[0].direction === 'in' && rB[0].text === 'hello Jun', { rA, rB });
+    const thA = (await call(A.frame, 'chat.threads')).r;
+    check('the conversation list names the peer by its DID, with the label it chose and the last message', thA.length === 1 && thA[0].peerDid === B.did && thA[0].label === 'Jun' && thA[0].lastText === 'hello Jun', thA);
+
+    // ---- 1b. the history is encrypted on disk, and tampering is noticed
+    const disk = await dump(A), hay = JSON.stringify(disk);
+    check('on disk there is one encrypted index for this identity and one body for the conversation', disk.index.length === 1 && disk.index[0].did === A.did && disk.bodies.length === 1 && disk.bodies[0].did === A.did, { i: disk.index.length, b: disk.bodies.length });
+    check('neither the text nor the peer DID can be found in what is stored', !hay.includes('hello Jun') && !hay.includes(B.did) && !hay.includes(B.did.slice(8, 24)), hay.slice(0, 120));
+    check('the world keeps no copy of it in its own storage', await A.frame.evaluate(() => new Promise((res) => lively.identity.DMChat.openDb((e, db) => { if (e) return res(true); const r = db.transaction('messages', 'readonly').objectStore('messages').count(); r.onsuccess = () => res(r.result === 0); }))));
+    await A.page.evaluate(() => new Promise((res) => { const q = indexedDB.open('keo-chat'); q.onsuccess = () => { const db = q.result, t = db.transaction('index', 'readwrite'), st = t.objectStore('index'), r = st.getAll(); r.onsuccess = () => { const x = r.result[0]; window.__orig = new Uint8Array(x.ct); x.ct[0] ^= 1; st.put(x); }; t.oncomplete = () => { db.close(); res(true); }; }; }));
+    const tam = await call(A.frame, 'chat.threads');
+    check('a changed record is refused, not read', tam.ok === false && /could not be decrypted/.test(tam.e), tam);
+    await A.page.evaluate(() => new Promise((res) => { const q = indexedDB.open('keo-chat'); q.onsuccess = () => { const db = q.result, t = db.transaction('index', 'readwrite'), st = t.objectStore('index'), r = st.getAll(); r.onsuccess = () => { const x = r.result[0]; x.ct = new Uint8Array(window.__orig); st.put(x); }; t.oncomplete = () => { db.close(); res(true); }; }; }));
+    check('and the original reads again', (await call(A.frame, 'chat.threads')).ok === true);
+    const bad = [['not a did', 'in', 'x'], [B.did, 'sideways', 'x'], [B.did, 'in', 'y'.repeat(8001)], [B.did, 'in', '']].map(([p, d, t]) => call(A.frame, 'chat.append', { peerDid: p, label: 'x', k: 'k1', dir: d, text: t, at: new Date().toISOString() }));
+    const badRes = await Promise.all(bad);
+    check('the world cannot write a malformed record (bad DID, bad direction, too long, empty)', badRes.every((r) => r.ok === false), badRes);
     await shot(B.page, 'msg-3-received');
 
     // B answers (B's window is in the page B shows)
@@ -190,6 +209,15 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     check('and nothing is captured until the person clicks in that prompt', (await A.page.evaluate(() => window.__gum)) === g0);
     await A.page.click('#keo-call button[data-act="cancel"]');
     check('Cancel there ends it', !!(await waitFor(async () => { const p = await panel(A); return p && p.hidden ? true : null; }, 8000)));
+    // the presence panel's camera button asks for a call too (after the shell's pause for a dismissed prompt)
+    await sleep(10500);
+    const cam = await A.frame.evaluate(() => { const p = lively.identity.AmbientPresencePanel._panel; if (!p) return null; const n = p._camBtn.renderContext().shapeNode, b = n.getBoundingClientRect(), x = b.left + b.width / 2, y = b.top + b.height / 2, top = document.elementFromPoint(x, y); return { x, y, covered: !(top && (n === top || n.contains(top) || top.contains(n))), icon: p._camBtn.textString }; });
+    check('the presence panel has a camera button that is not covered', !!cam && cam.covered === false, cam);
+    await A.page.mouse.click(cam.x, cam.y);
+    const pr2 = await waitFor(async () => { const p = await panel(A); return p && !p.hidden ? p : null; }, 10000);
+    check('with one connected device it puts the call prompt up: "Call Jun?"', !!pr2 && /^Call Jun?/.test(pr2.status), pr2);
+    await A.page.click('#keo-call button[data-act="cancel"]');
+    await waitFor(async () => { const p = await panel(A); return p && p.hidden ? true : null; }, 8000);
     await call(A.frame, 'p2p.close', { id: k5.a });
     await sleep(500);
     await clickIn(A, B.did, 'CallButton');
@@ -200,6 +228,12 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
   }
   // The landing page's two known ones, as in the other tests; and the red status line the world also logs when the checks above send
   // a message or ask for a call with no connection, which is the answer being tested.
+  try {
+    await call(A.frame, 'p2p.close', { id: 'none' });
+    await A.page.evaluate((d) => window.keoChatLog.purge(d), A.did);
+    const gone = await dump(A);
+    check('removing an identity removes its conversations (purge leaves no record)', gone.index.length === 0 && gone.bodies.length === 0 && (await call(A.frame, 'chat.threads')).r.length === 0, gone);
+  } catch (e) { failed++; console.log('FAIL purge: ' + e.message); }
   const mine = errors.filter((e) => !/youtube\.com|Geolocation access|Not connected to this device/.test(e));
   check('no page errors or console errors (other than the landing page\'s two known ones)', mine.length === 0, mine.slice(0, 5));
   for (const c of ctxs) await c.close().catch(() => {});

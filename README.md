@@ -69,6 +69,8 @@ node tests/keo-messages-test.js . dist <work dir>    # two browsers: Messages in
 node tests/keo-identity-real.js . dist <work dir>    # a REAL authenticator: you approve four OS prompts
 ```
 
+**Not yet verified** (the tests above cannot show it): calls and messages have been run only between two browser profiles on one machine, with the browser's fake camera and microphone. A real camera, microphone and permission prompt, two computers on a network, whether audio is audible, other browsers, and a real authenticator have not been tried.
+
 `<work dir>` is a scratch folder for browser profiles; keep its path short (a long profile path made browser storage fail in testing). The real-authenticator test creates passkeys that a web page cannot delete; remove them in your OS passkey settings afterwards.
 
 ## Licence

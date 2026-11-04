@@ -11,6 +11,7 @@
 //    progress it stays up with the other party's name, picture and short DID, a mute, a camera switch and a hang-up.
 //    (start.html keeps it below the identity vault's unlock frame, which must never be covered.)
 //  - The world gets text events only (state, who, whether video is on); the stream stays in this page.
+//  - The world may lower what is captured (mute, camera off: call.lower) and never raise it.
 //  - A request from the world is refused while a call is under way, and for a few seconds after the person dismissed a prompt, so
 //    it cannot keep putting a prompt in front of them.
 // A hostile world can still DRAW something that looks like this panel inside its own frame. Its clicks never reach this page, so
@@ -371,8 +372,20 @@
     if (call && call.h.id === String(args.id)) endCall(call, 'Ended here.', true);
     return true;
   }
+  // The world may LOWER what is captured, never raise it: it can mute the microphone or switch the camera off, and nothing here
+  // turns either back on (Unmute and Camera on are clicks in the panel). A request that would raise, or when nothing is on, does nothing.
+  function lower(args) {
+    var c = call;
+    if (!c || c.h.id !== String(args.id) || c.state !== 'active') throw new Error('There is no call to change.');
+    if (args.what === 'mic') {
+      if (c.mic) { c.mic = false; if (c.local) c.local.getAudioTracks().forEach(function (t) { t.enabled = false; }); render(); emit(c); }
+      return true;
+    }
+    if (args.what === 'cam') { if (c.cam) return camera(c).then(function () { return true; }); return true; }
+    throw new Error('Unknown control.');
+  }
   function state() { return call ? view(call) : null; }
 
   p2p.attach('call', { message: message, closed: closed });
-  window.keoCall = { start: start, end: end, state: state, onEvent: function (fn) { listener = fn; } };
+  window.keoCall = { start: start, end: end, lower: lower, state: state, onEvent: function (fn) { listener = fn; } };
 })();

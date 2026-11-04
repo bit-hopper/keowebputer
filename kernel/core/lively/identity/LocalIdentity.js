@@ -117,6 +117,9 @@ module("lively.identity.LocalIdentity")
       //     Not queued: ask callState when a listener starts. Returns a function that stops listening.
       callStart: function callStart(id, thenDo) { this._run("call.start", { id: id }, 30000, thenDo); },
       callEnd: function callEnd(id, thenDo) { this._run("call.end", { id: id }, 30000, thenDo || function () {}); },
+      // callLower(id, what) -> true   what is "mic" or "cam": mutes the microphone or switches the camera off. The world may only LOWER
+      // what is captured; turning either back on is a click in the shell's call panel.
+      callLower: function callLower(id, what, thenDo) { this._run("call.lower", { id: id, what: what }, 30000, thenDo || function () {}); },
       callState: function callState(thenDo) { this._run("call.state", {}, 30000, thenDo); },
       onCallEvent: function onCallEvent(fn) {
         if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
@@ -135,6 +138,18 @@ module("lively.identity.LocalIdentity")
         if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
         return window.keo.on("dm", fn);
       },
+
+      // ─── message history (shell/keo-chatlog.js) ─────────────────────────────────
+      // The signed-in identity's conversations, kept by the shell encrypted under that identity: only its own are reachable, and
+      // removing the identity removes them. A message is { k, dir ("in" | "out"), text, at (ISO time) }; `k` names it, so adding
+      // the same one twice keeps it once.
+      //   chatAppend({ peerDid, label, k, dir, text, at }) -> { added }
+      //   chatThread(peerDid) -> [message] oldest first      chatThreads() -> [{ peerDid, label, lastText, lastAt, lastDir }]
+      //   chatRemove(peerDid) -> true
+      chatAppend: function chatAppend(row, thenDo) { this._run("chat.append", row, 30000, thenDo); },
+      chatThread: function chatThread(peerDid, thenDo) { this._run("chat.thread", { peerDid: peerDid }, 30000, thenDo); },
+      chatThreads: function chatThreads(thenDo) { this._run("chat.threads", {}, 30000, thenDo); },
+      chatRemove: function chatRemove(peerDid, thenDo) { this._run("chat.remove", { peerDid: peerDid }, 30000, thenDo || function () {}); },
 
       // Puts text on the clipboard from inside the sandboxed world, where the clipboard API is not allowed: tries it, then
       // the old way (a selected text field and a copy command, which a click in this page permits). thenDo(true|false).

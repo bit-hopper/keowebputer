@@ -226,6 +226,20 @@ const send = (P, id, m) => P.page.evaluate(([i, x]) => window.keoP2p.handle(i).s
     const back = await waitCall(B, 'active', b0 + 1, 10000, (e) => e.remoteVideo === true);
     check('and the picture returns on the other side', !!back);
 
+    // the world may LOWER what is captured and can never raise it
+    const m1 = await mark(A);
+    const lowMic = await call(A.frame, 'call.lower', { id: k.a, what: 'mic' });
+    const mutedEv = await waitCall(A, 'active', m1, 5000, (e) => e.mic === false);
+    const allMuted = () => A.page.evaluate(() => window.__streams.every((s) => s.getAudioTracks().every((t) => !t.enabled)));
+    check('the world can mute the microphone (a lowering)', lowMic.ok && !!mutedEv && (await allMuted()), lowMic);
+    const lowAgain = await call(A.frame, 'call.lower', { id: k.a, what: 'mic' });
+    check('asking again changes nothing; there is no way for the world to turn the microphone back on', lowAgain.ok && (await allMuted()));
+    const lowCam = await call(A.frame, 'call.lower', { id: k.a, what: 'cam' });
+    const camEv = await waitCall(A, 'active', m1, 8000, (e) => e.cam === false);
+    check('the world can switch the camera off (a lowering), and the camera is stopped', lowCam.ok && !!camEv && await A.page.evaluate(() => window.__streams.every((s) => s.getVideoTracks().every((t) => t.readyState === 'ended'))), lowCam);
+    const lowBad = await call(A.frame, 'call.lower', { id: k.a, what: 'speaker' }), lowNone = await call(A.frame, 'call.lower', { id: 'nope', what: 'mic' });
+    check('an unknown control, or a call that is not there, is refused', lowBad.ok === false && /Unknown control/.test(lowBad.e) && lowNone.ok === false && /no call/.test(lowNone.e), { lowBad, lowNone });
+
     // hang up from the other end
     const a1 = await mark(A), b1 = await mark(B);
     await click(B, 'hang');
