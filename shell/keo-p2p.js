@@ -45,6 +45,71 @@
   function newId() { return kd.b64u(crypto.getRandomValues(new Uint8Array(9))); }
   function now() { return Date.now(); }
 
+  // ---- why a connection ended ---------------------------------------------------------------------------------------
+  // A closed connection gives one sentence, which says what this page noticed, not what led to it. This keeps a short record of the
+  // lead-up (states of the peer connection and the channel, the kind of network path, what the page itself went through), in memory
+  // and in localStorage so that it can still be read after the page was reloaded or discarded. keoP2p.diag() returns it as text.
+  // It holds states, times and kinds of path ("host/udp/wifi"); never addresses, codes, keys or message contents. A second shell tab
+  // would overwrite this one's record. It is a diagnostic: nothing decides anything from it.
+  var LOG_KEY = 'keo.p2p.log', LOG_MAX = 300, TICK_MS = 5000, STALL_MS = 15000;
+  var logEntries = [], lastTick = now();
+  try { logEntries = JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); if (!Array.isArray(logEntries)) logEntries = []; } catch (e) { logEntries = []; }
+  function note(c, what, detail) {
+    logEntries.push({ t: now(), c: c ? c.id.slice(0, 4) : '-', e: String(what), d: detail == null ? '' : String(detail).slice(0, 240) });
+    if (logEntries.length > LOG_MAX) logEntries.splice(0, logEntries.length - LOG_MAX);
+    try { localStorage.setItem(LOG_KEY, JSON.stringify(logEntries)); } catch (e) {}
+  }
+  function pad(n, w) { n = String(n); while (n.length < w) n = '0' + n; return n; }
+  function diag() {
+    return logEntries.map(function (x) {
+      var d = new Date(Number(x.t));
+      return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3) + ' ' + String(x.c) + ' ' + String(x.e) + (x.d ? ' ' + String(x.d) : '');
+    }).join('\n');
+  }
+  // The last look at a connection's path, taken every TICK_MS, so that a close can say how it was doing just before. Not at the
+  // moment of closing: getStats on a connection that is going away is not reliable.
+  function sample(c) {
+    if (c.state === 'closed' || c.sampling) return;
+    c.sampling = true;
+    c.pc.getStats().then(function (rep) {
+      c.sampling = false;
+      var byId = {}, pair = null, s = { at: now() };
+      rep.forEach(function (r) { byId[r.id] = r; });
+      rep.forEach(function (r) { if (r.type === 'transport' && r.selectedCandidatePairId) pair = byId[r.selectedCandidatePairId] || pair; });
+      if (pair) {
+        var l = byId[pair.localCandidateId], r2 = byId[pair.remoteCandidateId];
+        s.path = (l ? l.candidateType + '/' + l.protocol + (l.networkType ? '/' + l.networkType : '') : '?') + ' to ' + (r2 ? r2.candidateType + '/' + r2.protocol : '?');
+        s.rtt = pair.currentRoundTripTime; s.recv = pair.bytesReceived; s.req = pair.requestsSent; s.resp = pair.responsesReceived;
+      }
+      c.last = s;
+      if (s.path && s.path !== c.path) { c.path = s.path; note(c, 'path', s.path); }
+    }, function () { c.sampling = false; });
+  }
+  function lastWord(c) {
+    var s = c.last, bits = [];
+    if (s) bits.push((s.path || 'no path') + (typeof s.rtt === 'number' ? ', rtt ' + Math.round(s.rtt * 1000) + ' ms' : '') + (s.req != null ? ', checks answered ' + s.resp + '/' + s.req : '') + ', sampled ' + Math.round((now() - s.at) / 1000) + ' s ago');
+    else bits.push('never sampled');
+    bits.push(c.lastRx ? 'last message ' + Math.round((now() - c.lastRx) / 1000) + ' s ago' : 'no message received');
+    bits.push('pc ' + c.pc.connectionState + ', ice ' + c.pc.iceConnectionState + ', channel ' + (c.dc ? c.dc.readyState : 'none') + ', page ' + document.visibilityState);
+    return bits.join('; ');
+  }
+  function tick() {
+    var t = now();
+    if (t - lastTick > STALL_MS) note(null, 'late', 'this page ran ' + Math.round((t - lastTick - TICK_MS) / 1000) + ' s late (the system slept, or the page was in the background); page ' + document.visibilityState);
+    lastTick = t;
+    Object.keys(peers).forEach(function (k) { sample(peers[k]); });
+  }
+  setInterval(tick, TICK_MS);
+  [[document, 'visibilitychange'], [document, 'freeze'], [document, 'resume'], [window, 'pagehide'], [window, 'pageshow'], [window, 'online'], [window, 'offline']].forEach(function (p) {
+    p[0].addEventListener(p[1], function (e) {
+      note(null, p[1], p[1] === 'visibilitychange' ? document.visibilityState : p[1] === 'pagehide' ? Object.keys(peers).length + ' connection(s) open, persisted ' + !!(e && e.persisted) : '');
+    });
+  });
+  (function () {
+    var prev = logEntries.length ? logEntries[logEntries.length - 1] : null;
+    note(null, 'page-load', prev && prev.e !== 'pagehide' ? 'the page before this one ended without a pagehide (crash, discarded tab or power loss), after: ' + prev.e : '');
+  })();
+
   // A received name is shown and used for the download: no path, no control or direction-changing characters.
   function cleanName(s) {
     s = String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩\\\/:*?"<>|]/g, '_').replace(/^[.\s]+/, '').trim().slice(0, 128);
@@ -75,9 +140,13 @@
     if (why) ev.why = why;
     emit(ev);
   }
-  function closeConn(c, why) {
+  // lost: the connection ended because the path or the other end went away, not because of anything decided or detected here (a
+  // violation, a friendship that ended, a timeout, a close asked for here). A module that is waiting for a person is told, so that
+  // it can keep what the person is doing (keo-friend.js keeps its dialog).
+  function closeConn(c, why, lost) {
     if (c.state === 'closed') return;
-    Object.keys(hooks).forEach(function (k) { try { hooks[k].closed(handleOf(c), why); } catch (e) {} });
+    note(c, 'closed', (why || '(no reason)') + (lost ? ' [lost]' : '') + ' | ' + lastWord(c));
+    Object.keys(hooks).forEach(function (k) { try { hooks[k].closed(handleOf(c), why, !!lost); } catch (e) {} });
     c.timers.forEach(clearTimeout);
     c.timers = [];
     try { if (c.dc) c.dc.close(); } catch (e) {}
@@ -91,7 +160,14 @@
       myName: name ? String(name) : null, offerFp: null, offerTag: null, fps: null,
       hiSent: false, peerOk: false, held: null };
     peers[c.id] = c;
-    c.pc.onconnectionstatechange = function () { if (c.pc.connectionState === 'failed') closeConn(c, 'The connection failed.'); };
+    note(c, 'created', role);
+    c.pc.addEventListener('connectionstatechange', function () {
+      note(c, 'pc', c.pc.connectionState);
+      if (c.pc.connectionState === 'connected') sample(c);
+      if (c.pc.connectionState === 'failed') closeConn(c, 'The connection failed.', true);
+    });
+    c.pc.addEventListener('iceconnectionstatechange', function () { note(c, 'ice', c.pc.iceConnectionState); });
+    c.pc.addEventListener('signalingstatechange', function () { note(c, 'signaling', c.pc.signalingState); });
     return c;
   }
   // ms: how long the channel may take to open. The answering side starts waiting before the other person has pasted its code, so it
@@ -166,8 +242,9 @@
   function wireChannel(c, dc) {
     dc.binaryType = 'arraybuffer';
     dc.bufferedAmountLowThreshold = LOW_WATER;
-    dc.onopen = function () { opened(c); };
-    dc.onclose = function () { closeConn(c, 'The other side closed the connection.'); };
+    dc.onopen = function () { note(c, 'channel', 'open'); opened(c); };
+    dc.onclose = function () { note(c, 'channel', 'close'); closeConn(c, 'The other side closed the connection.', true); };
+    dc.onerror = function (e) { note(c, 'channel', 'error ' + (e && e.error && e.error.message || '')); };
     dc.onmessage = function (e) { try { onMessage(c, e.data); } catch (x) { closeConn(c, 'A message could not be handled: ' + (x && x.message)); } };
     if (dc.readyState === 'open') opened(c);
   }
@@ -225,6 +302,7 @@
   function sendCtl(c, m) { c.dc.send(JSON.stringify(m)); }
 
   function onMessage(c, data) {
+    c.lastRx = now();
     if (c.held) { c.held.push(data); return; }                 // behind a proof that is being checked
     if (typeof data === 'string') {
       if (data.length > MAX_PROOF) return violation(c, 'oversized message');
@@ -429,7 +507,7 @@
     return c.handle;
   }
   function handle(id) { return handleOf(ready(id)); }
-  // A module takes the messages whose type starts with `<prefix>.`: attach('call', { message(handle, m), closed(handle, why) }).
+  // A module takes the messages whose type starts with `<prefix>.`: attach('call', { message(handle, m), closed(handle, why, lost) }).
   // `message` gets each one from a peer that has proven itself AND is a friend (a message from anyone else closes the connection);
   // if it throws, the connection is closed like for any message that cannot be handled. `ready(handle)`, if given, is called when a
   // connection becomes ready. `closed` is told when any connection ends. One module per prefix, and the file protocol's own types (file, go,
@@ -470,7 +548,7 @@
   }
 
   window.keoP2p = { offer: offer, answer: answer, finish: finish, send: send, respond: respond, cancel: cancel, save: save,
-    close: close, list: list, closeAll: closeAll, cleanName: cleanName, handle: handle, attach: attach, friendChanged: friendChanged, setTheirs: setTheirs, connectionsTo: connectionsTo,
+    close: close, list: list, closeAll: closeAll, diag: diag, cleanName: cleanName, handle: handle, attach: attach, friendChanged: friendChanged, setTheirs: setTheirs, connectionsTo: connectionsTo,
     // one listener, for the bridge: events are plain data
     onEvent: function (fn) { listener = fn; } };
 })();

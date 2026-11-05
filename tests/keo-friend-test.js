@@ -215,6 +215,25 @@ const hasText = (bytes, text) => { const needle = Array.from(new TextEncoder().e
     const soon = await call(A.frame, 'friend.start', { id: k.a });
     check('the world cannot put it straight back', soon.ok === false && /dismissed a moment ago/.test(soon.e), soon);
 
+    // ---- 7b. a connection that is lost while the person is reading words aloud
+    await sleep(10500);                                       // the "not now" above keeps the dialog down for ten seconds
+    await A.page.bringToFront();
+    check('once the dismissal has aged, the world can ask again', (await call(A.frame, 'friend.start', { id: k.a })).ok === true);
+    check('and the dialog is up', !!(await dlgOpen(A)));
+    await call(B.frame, 'p2p.close', { id: k.b });
+    const lost = await findP2p(A, 'state', (e) => e.id === k.a && e.state === 'closed', 8000);
+    check('the other end goes away: the connection closes here', !!lost && /other side closed/.test(lost.why || ''), lost);
+    await sleep(500);
+    const dl = await dlg(A);
+    check('but the dialog stays, and says the connection has ended', !!dl && !dl.hidden && /connection has ended/.test(dl.text), dl);
+    await A.page.fill('#keo-friend input', B.words.join(' '));
+    const dlOk = await waitFor(async () => { const d = await dlg(A); return d.yesDisabled === false ? d : null; }, 5000);
+    check('their words are still checked against the device that proved itself, and match', !!dlOk && dlOk.hint === 'They match.', dlOk);
+    await A.page.click('#keo-friend button.yes');
+    check('and a real click still adds them, with no connection', !!(await dlgGone(A)) && (await call(A.frame, 'friend.list')).r.some((p) => p.did === B.did));
+    const dg = await A.page.evaluate(() => window.keoP2p.diag());
+    check('the connection log says how it ended: marked lost, with the last known state of the path', /closed The other side closed the connection\. \[lost\] \| .*pc /.test(dg), dg.split('\n').slice(-6));
+
     // ---- 8. removing an identity removes its friends
     await A.page.evaluate((d) => window.keoContacts.purge(d), A.did);
     check('purge leaves no record', (await disk(A)).length === 0);

@@ -49,9 +49,17 @@
     // Someone we have not added says it has added us: put the question to the person, once (the limits of offer() apply).
     if (m.added && !was && !contacts.isAdded(h.peer.did)) offer(h, 'incoming');
   }
-  function closed(h) {
+  // A connection that was LOST (the path or the other end went away) does not take the dialog with it: the person is in the middle
+  // of reading words aloud, and what they type is checked against the DID that proved itself on that connection, which is still
+  // known. Adding needs nothing from the connection; the other half of a friendship ("they added us") is learned on the next one.
+  // Any other end (a violation, a removed friendship, a close asked for here) still takes the dialog down.
+  var LOST_NOTE = ' The connection has ended. You can still finish this here; connect again afterwards.';
+  function closed(h, why, lost) {
     delete sets[h.id];
-    if (open && open.h.id === h.id) hide();
+    if (!open || open.h.id !== h.id) return;
+    if (!lost || !ui) return hide();
+    open.ended = true;
+    if (ui.text.textContent.indexOf(LOST_NOTE) < 0) ui.text.textContent += LOST_NOTE;
   }
 
   // ---- the dialog -----------------------------------------------------------------------------------------------------
@@ -88,8 +96,9 @@
   function hide() { open = null; if (ui) { ui.root.hidden = true; ui.input.value = ''; ui.yes.disabled = true; } }
   function dismiss() { lastDismissed = Date.now(); hide(); }
 
-  // Is the dialog allowed to come up now? (not while another is, nor right after a "not now")
-  function mayOffer() { return !open && Date.now() - lastDismissed >= DISMISS_MS; }
+  // Is the dialog allowed to come up now? (not while another is, nor right after a "not now"). One whose connection has ended gives
+  // way to a question about a live one.
+  function mayOffer() { return (!open || open.ended) && Date.now() - lastDismissed >= DISMISS_MS; }
   function offer(h, kind) {
     if (!mayOffer() || !h.ready() || !h.peer) return false;
     var u = build(), p = h.peer, n = p.name || 'Unnamed device';
@@ -152,7 +161,7 @@
   function start(args) {
     var h = p2p.handle(args.id);
     if (contacts.isAdded(h.peer.did)) throw new Error('You have already added this device.');
-    if (open) throw new Error('A friend request is already waiting for an answer.');
+    if (open && !open.ended) throw new Error('A friend request is already waiting for an answer.');
     if (Date.now() - lastDismissed < DISMISS_MS) throw new Error('A friend request was dismissed a moment ago.');
     offer(h, 'asked');
     return true;

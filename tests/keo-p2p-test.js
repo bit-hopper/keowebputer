@@ -218,6 +218,14 @@ async function device(label, name) {
     check('A closes the connection', (await call(A.frame, 'p2p.close', { id: cA })).ok);
     check('B is told, and has no connection left', !!(await findEvent(B.frame, 'state', (e) => e.id === cB && e.state === 'closed')) && (await call(B.frame, 'p2p.list')).r.length === 0);
 
+    // the record of how connections went, kept for finding out why one dropped
+    const dg = await A.page.evaluate(() => window.keoP2p.diag());
+    check('the log shows the path coming up and the proof going through: states of the peer connection, the channel and the kind of path',
+      /\bpc connected\b/.test(dg) && /\bchannel open\b/.test(dg) && /\bpath (host|srflx|prflx)\/(udp|tcp)\b/.test(dg), dg.split('\n').slice(0, 12));
+    check('the log shows this close and who closed it, with the last state of the connection', /closed Closed here\. \| .*pc /.test(dg), dg.split('\n').slice(-6));
+    check('the log keeps no network address and no code: nothing looks like an IPv4 address, an mDNS name, or an invitation', !/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/.test(dg) && !/\.local\b/.test(dg) && !/keo2\./.test(dg), dg.split('\n').filter((l) => /\d+\.\d+\.\d+\.\d+|\.local|keo2\./.test(l)).slice(0, 4));
+    check('and it survives in storage for the next page', await A.page.evaluate(() => { try { return JSON.parse(localStorage.getItem('keo.p2p.log')).length > 5; } catch (e) { return false; } }));
+
     // a new pair, and sign-out closes it
     const i3 = await call(A.frame, 'p2p.offer', {});
     const a3 = await call(B.frame, 'p2p.answer', { code: i3.r.code });
