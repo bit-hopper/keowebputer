@@ -5,11 +5,14 @@
 // virtual authenticator, connected through the world's bridge and made friends through the shell's dialog (tests/friends-helper.js). Each
 // device also gets a popup page, opened in a TAB at its own address (a test cannot click the toolbar icon, so this is not the browser's own
 // popup surface). Covered: the friends list is empty until a friend is added; a connected friend; a friend's name is drawn as text; the
-// connection ending from the other side reads "Connection lost" with the reason, ending it here reads "Not connected"; connecting again
-// clears that; what the shell answers holds only the fields it should; signing out empties it, shows nobody's name and drops the record of
-// how connections ended.
+// connection ending from the other side reads "Connection lost" with the reason and when the friend was last seen, ending it here reads "Not
+// connected"; RECONNECT by real clicks (the popup's button, the Connect a device window the world opens with an invitation made for that
+// friend, the other device answering, the answer pasted and Connect clicked) and giving it up with the popup's Cancel; an invitation made for
+// one identity is closed when another proves itself; what the shell answers holds only the fields it should; signing out empties it, shows
+// nobody's name and drops the record of how connections ended.
 // NOT covered: the state "connected, waiting for them to add you", a connection that ends for a reason other than the other side leaving,
-// two real machines, the browser's real popup surface.
+// the OTHER device doing the reconnect from its own popup, a real third device answering the invitation, two real machines, the browser's
+// real popup surface.
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
@@ -19,7 +22,7 @@ const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0, passed = 0;
 function check(name, ok, detail) { if (ok) passed++; else failed++; console.log((ok ? 'PASS ' : 'FAIL ') + name + (detail !== undefined && !ok ? '  -> ' + JSON.stringify(detail).slice(0, 900) : '')); }
-const errors = [], ctxs = [];
+const errors = [], ctxs = [], worldErrors = [];      // worldErrors: the kernel's own console errors, kept for a failure report only
 
 const worldFrame = (page) => page.frames().find((f) => /world\.html$/.test(f.url()));
 async function waitForWorld(page, kind) {
@@ -45,6 +48,7 @@ async function device(label, name) {
   page.on('dialog', (d) => d.accept().catch(() => {}));
   page.on('pageerror', (e) => errors.push(name + ' PAGEERROR ' + e.message.slice(0, 200)));
   // Only errors from the shell's and the popup's own files count: the kernel's home page logs blocked third-party scripts and a policy line of its own, and asks for a badge picture the package does not hold (Media/badges/by-sa.svg).
+  page.on('console', (m) => { if (m.type() === 'error' && !/by-sa\.svg|youtube|Permissions policy/.test(m.text() + ' ' + m.location().url)) worldErrors.push(name + ': ' + m.text().slice(0, 240) + ' @ ' + (m.location().url || '').slice(-60)); });
   page.on('console', (m) => { if (m.type() === 'error' && new RegExp('^chrome-extension://' + ID + '/(?!core/|generated/|Media/)').test(m.location().url || '')) errors.push(name + ' console: ' + m.text().slice(0, 200) + ' @ ' + (m.location().url || '').slice(0, 160)); });
   const cdp = await ctx.newCDPSession(page);
   await cdp.send('WebAuthn.enable', { enableUI: false });
@@ -54,13 +58,38 @@ async function device(label, name) {
   const created = await page.evaluate((l) => window.keoIdentity.create({ label: l }), label);
   await frame.evaluate(() => window.keo.call('world.go', { kind: 'enter' }, 60000)).catch(() => {});
   frame = await waitForWorld(page, 'homestar');
-  await frame.evaluate(() => { window.__p2p = []; window.keo.on('p2p', (e) => window.__p2p.push(e)); window.__fr = []; window.keo.on('friend', (e) => window.__fr.push(e)); });
-  const pop = await ctx.newPage();
-  pop.on('pageerror', (e) => errors.push(name + ' popup PAGEERROR ' + e.message.slice(0, 200)));
-  pop.on('console', (m) => { if (m.type() === 'error') errors.push(name + ' popup console: ' + m.text().slice(0, 200)); });
-  await pop.goto(`chrome-extension://${ID}/popup.html`);
-  return { label, name, ctx, page, frame, pop, did: created.did };
+  await frame.evaluate(() => { window.__p2p = []; window.keo.on('p2p', (e) => window.__p2p.push(e)); window.__fr = []; window.keo.on('friend', (e) => window.__fr.push(e)); window.__rc = []; window.keo.on('reconnect', (e) => window.__rc.push(e)); });
+  const P = { label, name, ctx, page, frame, pop: null, did: created.did };
+  await reopen(P);
+  return P;
 }
+// A fresh popup page for a device (the popup closes itself after it takes the person to keo).
+async function reopen(P) {
+  if (P.pop && !P.pop.isClosed()) await P.pop.close().catch(() => {});
+  const pop = await P.ctx.newPage();
+  pop.on('pageerror', (e) => errors.push(P.name + ' popup PAGEERROR ' + e.message.slice(0, 200)));
+  pop.on('console', (m) => { if (m.type() === 'error') errors.push(P.name + ' popup console: ' + m.text().slice(0, 200)); });
+  await pop.goto(`chrome-extension://${ID}/popup.html`);
+  P.pop = pop;
+}
+// The Connect a device window in a device's world, as the world holds it.
+const peerDlg = (P) => P.frame.evaluate(() => {
+  let d = null;
+  (function walk(m) { if (m.name === 'IdentityPeerDialog') d = m; (m.submorphs || []).forEach(walk); })($world);
+  if (!d) return null;
+  const t = (n) => { const x = d.get(n); return x ? String(x.textString || '') : null; };
+  return { phase: d._p.phase, reconnect: d._p.reconnect || null, id: d._p.id, code: (t('codeBox') || '').replace(/\s+/g, ''),
+    text: d.get('peerContent').submorphs.map((m) => m.textString || (m.getLabel && m.getLabel()) || '').filter(Boolean).join(' | ') };
+});
+const dlgDo = (P, what, arg) => P.frame.evaluate(([w, a]) => {
+  let d = null;
+  (function walk(m) { if (m.name === 'IdentityPeerDialog') d = m; (m.submorphs || []).forEach(walk); })($world);
+  if (!d) return false;
+  if (w === 'paste') { d.get('pasteBox').setTextString(a); return true; }
+  const b = d.get(w);
+  if (!b) return false;
+  b.simulateButtonClick(); return true;
+}, [what, arg]);
 async function connect(A, B) {
   const inv = await call(A.frame, 'p2p.offer', { name: A.label });
   const ans = await call(B.frame, 'p2p.answer', { code: inv.r.code, name: B.label });
@@ -74,7 +103,7 @@ const seen = (P) => P.pop.evaluate(() => ({
   pill: (document.querySelector('.pill') || {}).textContent, count: (document.querySelector('.sec-h span') || {}).textContent,
   empty: (document.querySelector('.empty') || {}).textContent, foot: (document.querySelector('.foot') || {}).textContent, text: document.body.innerText,
   me: (document.querySelector('.me .who b') || {}).textContent,
-  rows: [...document.querySelectorAll('.dev')].map((r) => ({ name: r.querySelector('.l1 span').textContent, dot: r.querySelector('.dot').className, word: r.querySelector('.l2 b').textContent, tone: r.querySelector('.l2 b').className, l2: r.querySelector('.l2').textContent, why: (r.querySelector('.why') || {}).textContent || null, markup: r.querySelector('.l1 span').children.length }))
+  rows: [...document.querySelectorAll('.dev')].map((r) => ({ name: r.querySelector('.l1 span').textContent, dot: r.querySelector('.dot').className, word: r.querySelector('.l2 b').textContent, tone: r.querySelector('.l2 b').className, l2: r.querySelector('.l2').textContent, why: (r.querySelector('.why') || {}).textContent || null, markup: r.querySelector('.l1 span').children.length, buttons: [...r.querySelectorAll('button')].map((b) => b.textContent) }))
 }));
 const until = (P, pred, ms) => waitFor(async () => { const s = await seen(P); return pred(s) ? s : null; }, ms || 15000);
 
@@ -109,27 +138,77 @@ const until = (P, pred, ms) => waitFor(async () => { const s = await seen(P); re
     // ---- 4. what the shell answers
     const raw = await A.page.evaluate(() => window.keoStatus.build());
     const keys = (o) => Object.keys(o).sort().join();
-    check('the shell\'s answer holds only the expected fields', keys(raw) === 'exp,friends,me,signedIn,v' && keys(raw.me) === 'did,label' && keys(raw.friends[0]) === 'did,ended,name,since,state', { raw });
+    check('the shell\'s answer holds only the expected fields', keys(raw) === 'exp,friends,me,signedIn,v' && keys(raw.me) === 'did,label' && keys(raw.friends[0]) === 'did,ended,name,seen,since,state,waiting', { raw });
     check('the shell\'s answer has no key, code, address or message text', !/sdp|candidate|ice-ufrag|secret|private|\"d\":|BEGIN/i.test(JSON.stringify(raw)), raw);
 
     // ---- 5. the other side ends the connection: that is a lost connection here, and a quiet one there
     await call(B.frame, 'p2p.close', { id: k.b });
     s = await until(A, (x) => x.rows.length === 1 && x.rows[0].word === 'Connection lost');
-    check('the other side left: Connection lost, a red dot, and the reason', !!s && s.rows[0].tone === 'bad' && /bad/.test(s.rows[0].dot) && /closed the connection/.test(s.rows[0].why || '') && /ago$/.test(s.rows[0].l2.replace(s.rows[0].why || '', '')), s && s.rows[0]);
+    check('the other side left: Connection lost, a red dot, and the reason', !!s && s.rows[0].tone === 'bad' && /bad/.test(s.rows[0].dot) && /closed the connection/.test(s.rows[0].why || '') && /ago/.test(s.rows[0].l2), s && s.rows[0]);
     check('and the count drops', !!s && s.count === '0 of 1 connected', s && s.count);
+    check('the row says when the friend was last seen, and offers Reconnect', !!s && /last seen today \d\d:\d\d/.test(s.rows[0].l2) && s.rows[0].buttons.join() === 'Reconnect', s && s.rows[0]);
+    check('the last seen time is in the shell\'s answer and is recent', await A.page.evaluate(() => window.keoStatus.build().then((b) => Math.abs(Date.now() - b.friends[0].seen) < 120000)));
     await A.pop.screenshot({ path: path.join(WORK, 'status-lost.png') });
     const bq = await until(B, (x) => x.rows.length === 1 && x.rows[0].word === 'Not connected');
-    check('ending it here is not a loss: the closing side reads Not connected, with no reason', !!bq && bq.rows[0].why === null && !/bad/.test(bq.rows[0].dot), bq && bq.rows[0]);
+    check('ending it here is not a loss: the closing side reads Not connected, with no reason, and offers Connect', !!bq && !/bad/.test(bq.rows[0].dot) && bq.rows[0].buttons.join() === 'Connect', bq && bq.rows[0]);
 
-    // ---- 6. connecting again clears the loss
-    k = await connect(A, B);
-    await befriend(A, B, k);
+    // ---- 6. reconnecting from the popup, by clicks
+    await reopen(A);
+    s = await until(A, (x) => x.rows.length === 1 && x.rows[0].word === 'Connection lost');
+    await A.pop.locator('.dev button', { hasText: 'Reconnect' }).click();
+    const dlg = await waitFor(async () => { const d = await peerDlg(A); return d && d.phase === 'invited' && d.code.length > 50 ? d : null; }, 25000);
+    // (If it did not open: did the event reach the world, and was the listener installed? Those are the two steps after the popup.)
+    const rcDiag = dlg ? null : await A.frame.evaluate(() => ({ events: window.__rc, listening: !!window.keoReconnectListening, menuBar: !!(lively.identity && lively.identity.MenuBarEntry) })); if (rcDiag) { rcDiag.dialogNow = await peerDlg(A); rcDiag.worldErrors = worldErrors.slice(-8); }
+    check('Reconnect opens the Connect a device window on an invitation made for that friend', !!dlg && !!dlg.reconnect && dlg.reconnect.did === B.did, rcDiag || dlg);
+    check('the window is worded for the friend', !!dlg && dlg.text.includes('Send this invitation to <i>Jun</i>') && dlg.text.includes('Paste <i>Jun</i>\'s answer here'), dlg && dlg.text);
+    check('the popup closed itself after taking the person to keo', await waitFor(async () => A.pop.isClosed(), 5000));
+    await reopen(A);
+    s = await until(A, (x) => x.rows.length === 1 && /^Waiting for/.test(x.rows[0].word));
+    check('the popup says the reconnect is waiting for the friend\'s reply, with Show in keo and Cancel, and where the code is', !!s && s.rows[0].buttons.join() === 'Show in keo,Cancel' && /Your code is ready in keo, in the Connect a device window/.test(s.rows[0].l2 + s.text) && /warn/.test(s.rows[0].dot), s && s.rows[0]);
+    await A.pop.screenshot({ path: path.join(WORK, 'status-reconnecting.png') });
+    const pend = await A.page.evaluate(() => window.keoP2p.status().connections.filter((c) => c.state === 'reconnecting'));
+    check('the shell lists the reconnect under way, for that friend only', pend.length === 1 && pend[0].did === B.did && pend[0].waiting === true, pend);
+
+    const ans = await call(B.frame, 'p2p.answer', { code: dlg.code, name: B.label });
+    check('the other device takes the invitation with the ordinary Connect a device answer', ans.ok === true && !!ans.r.code, ans);
+    await dlgDo(A, 'paste', ans.r.code);
+    await dlgDo(A, 'connectBtn');
+    const ra = await findP2p(A, 'state', (e) => e.id === dlg.id && e.state === 'ready'), rb = await findP2p(B, 'state', (e) => e.id === ans.r.id && e.state === 'ready');
+    // (Whether they are friends is learned from the other device a moment after 'ready', so it is read again, not taken from that event.)
+    const friendsNow = (P, id) => waitFor(() => P.frame.evaluate((i) => window.keo.call('p2p.list', {}, 20000).then((l) => l.filter((c) => c.id === i && c.friend)[0] || null), id), 10000);
+    check('both devices are connected, and they are friends again without any eight words', !!ra && !!rb && !!(await friendsNow(A, dlg.id)) && !!(await friendsNow(B, ans.r.id)), { ra, rb });
+    k = { a: dlg.id, b: ans.r.id };
     s = await until(A, (x) => x.rows.length === 1 && x.rows[0].word === 'Connected');
-    check('connected again: the loss is gone from the row', !!s && s.rows[0].why === null && s.count === '1 of 1 connected', s && s.rows[0]);
+    check('connected again: the loss is gone from the row, and the count is back', !!s && s.rows[0].why === null && s.count === '1 of 1 connected' && s.rows[0].buttons.length === 0, s && s.rows[0]);
 
-    // ---- 7. signing out: nothing about anyone, and the record of endings goes
+    // ---- 6b. giving a reconnect up from the popup
     await call(B.frame, 'p2p.close', { id: k.b });
     await until(A, (x) => x.rows.length === 1 && x.rows[0].word === 'Connection lost');
+    await A.pop.locator('.dev button', { hasText: 'Reconnect' }).click();
+    const dlg2 = await waitFor(async () => { const d = await peerDlg(A); return d && d.phase === 'invited' && d.code.length > 50 ? d : null; }, 25000);
+    check('a second Reconnect opens a window again', !!dlg2 && dlg2.reconnect && dlg2.reconnect.did === B.did, dlg2);
+    await reopen(A);
+    await until(A, (x) => x.rows.length === 1 && /^Waiting for/.test(x.rows[0].word));
+    await A.pop.locator('.extra button', { hasText: 'Cancel' }).click();
+    s = await until(A, (x) => x.rows.length === 1 && x.rows[0].word === 'Not connected');
+    check('Cancel in the popup: the row goes back to Not connected (giving up is not a loss: no red, no reason, only the last seen time)', !!s && !/bad/.test(s.rows[0].dot) && /^last seen /.test(s.rows[0].why || '') && !/lost|ended|closed/i.test(s.rows[0].l2), s && s.rows[0]);
+    const closedDlg = await waitFor(async () => { const d = await peerDlg(A); return d && d.phase === 'closed' ? d : null; }, 8000);
+    check('and the keo window for it says it is disconnected', !!closedDlg, await peerDlg(A));
+    check('and the shell holds no reconnect for that friend any more', (await A.page.evaluate(() => window.keoP2p.status().connections.filter((c) => c.state === 'reconnecting').length)) === 0);
+
+    // ---- 6c. an invitation made for one identity, answered by another
+    const bad = await call(A.frame, 'p2p.offer', { name: A.label, expect: 'nonsense' });
+    check('an invitation for something that is not a valid identity is refused with a sentence', bad.ok === false && /not a valid device identity/.test(bad.e), bad);
+    const inv = await call(A.frame, 'p2p.offer', { name: A.label, expect: 'did:keo:zzzz:' + 'B'.repeat(43) });
+    const ans2 = await call(B.frame, 'p2p.answer', { code: inv.r.code, name: B.label });
+    await call(A.frame, 'p2p.finish', { id: inv.r.id, code: ans2.r.code });
+    const mism = await findP2p(A, 'state', (e) => e.id === inv.r.id && e.state === 'closed');
+    check('an invitation made for one identity is closed when another proves itself, with a sentence', !!mism && /not the one this connection was made for/.test(mism.why || ''), mism);
+    check('and it never reached ready', !(await p2pEvents(A)).some((e) => e.type === 'state' && e.id === inv.r.id && e.state === 'ready'));
+    check('and the other device hears the connection end', !!(await findP2p(B, 'state', (e) => e.id === ans2.r.id && e.state === 'closed')));
+
+    // ---- 7. signing out: nothing about anyone, and the record of endings goes
+    check('before signing out the page remembers how connections ended', Object.keys((await A.page.evaluate(() => window.keoP2p.status())).ended).length > 0);
     await call(A.frame, 'session.signOut');
     await A.page.waitForLoadState('load').catch(() => {});
     s = await until(A, (x) => x.pill === 'Open' && /Nobody is signed in yet/.test(x.text));

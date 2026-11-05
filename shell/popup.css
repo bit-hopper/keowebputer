@@ -4,14 +4,14 @@
    nothing from the network. */
 :root {
   color-scheme: light dark;
-  --idle: #6a6275; --ground: #efecf3; --ink: #241928; --ink-2: #625a6c; --panel: #fbfaff; --panel-2: #f7f6f9; --panel-line: #e8e6ec; --tile: #e8e9ee;
+  --idle: #6a6275; --btn-2: #ece9f2; --ground: #efecf3; --ink: #241928; --ink-2: #625a6c; --panel: #fbfaff; --panel-2: #f7f6f9; --panel-line: #e8e6ec; --tile: #e8e9ee;
   --accent: #f01a69; --accent-fill: #c80f55; --on-accent: #ffffff;
   --good: #1f7a46; --good-bg: #dff3e7; --warn: #8a5a00; --warn-bg: #fbecc9; --bad: #b02f22; --bad-bg: #fbe0dc;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --idle: #9a90a6; --ground: #17101b; --ink: #f4eef7; --ink-2: #b3a9bd; --panel: #241928; --panel-2: #2f2236; --panel-line: #43334b;
+    --idle: #9a90a6; --btn-2: #3a2d42; --ground: #17101b; --ink: #f4eef7; --ink-2: #b3a9bd; --panel: #241928; --panel-2: #2f2236; --panel-line: #43334b;
     --accent: #ff4d8d; --accent-fill: #ff4d8d; --on-accent: #241928;
     --good: #6fd39a; --good-bg: #1c3a2b; --warn: #f1c27d; --warn-bg: #3b2f14; --bad: #f1948a; --bad-bg: #402220;
   }
@@ -58,7 +58,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .sec-h h3 { margin: 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); font-weight: 600; }
 .sec-h span { font-size: 12px; color: var(--ink-2); }
 .devs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.dev { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; align-items: center; padding: 8px; border-radius: 12px; background: var(--panel-2); }
+.dev { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border-radius: 12px; background: var(--panel-2); }
 .dev img { width: 32px; height: 32px; border-radius: 8px; image-rendering: pixelated; }
 .dev .l1 { display: flex; align-items: center; gap: 6px; font-weight: 600; min-width: 0; }
 .dev .l1 span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -68,5 +68,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .dev .l2 b { font-weight: 600; }
 .dev .l2 .good { color: var(--good); } .dev .l2 .warn { color: var(--warn); } .dev .l2 .bad { color: var(--bad); }
 .dev .why { display: block; margin-top: 1px; }
+.dev.wide { grid-template-columns: 32px minmax(0, 1fr); }
+.dev.wide .extra { grid-column: 1 / -1; display: grid; gap: 8px; padding-top: 2px; }
+.extra .note { font-size: 12.5px; color: var(--ink); }
+.extra .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn.quiet { background: var(--btn-2); color: var(--ink); font-weight: 500; }
+.btn.sm { width: auto; height: 28px; padding: 0 12px; font-size: 13px; }
 .empty { color: var(--ink-2); font-size: 13px; padding: 10px; border: 1px dashed var(--panel-line); border-radius: 12px; }
 .foot { padding: 10px 14px; border-top: 1px solid var(--panel-line); font-size: 12px; color: var(--ink-2); }

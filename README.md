@@ -73,7 +73,7 @@ node tests/keo-friend-test.js . dist <work dir>      # two browsers: becoming fr
 node tests/keo-call-test.js . dist <work dir>        # two browsers, a fake camera: calls answered by real clicks on the shell's panel, and a hostile world and peer
 node tests/keo-messages-test.js . dist <work dir>    # two browsers: Messages inside keo (real typing), and the Call button
 node tests/keo-popup-test.js    . dist <work dir>    # the toolbar popup page, by real clicks (opened in a tab: not the browser's own popup surface)
-node tests/keo-popup-status-test.js . dist <work dir> # two browsers: what the popup shows of the session and of each friend's connection
+node tests/keo-popup-status-test.js . dist <work dir> # two browsers: what the popup shows of the session and of each friend's connection, and Reconnect by real clicks
 node tests/keo-identity-real.js . dist <work dir>    # a REAL authenticator: you approve four OS prompts
 ```
 

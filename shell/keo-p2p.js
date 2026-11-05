@@ -29,6 +29,8 @@
 // after comparing its words (keo-contacts.js, keo-friend.js) AND the device has told us, on this connection, that it has added us. A
 // device that is not a friend may say only that (the 'friend' prefix); anything else from it closes the connection, and so does the
 // loss of a friendship while connected. Our own sends are refused with a sentence before anything goes out.
+// RECONNECTING to a friend is a new invitation, made by hand like the first, but ADDRESSED: offer({ expect: <DID> }) closes the connection
+// if the device that answers proves any other identity (the codes name nobody, so only the proof can say). Nothing reconnects by itself.
 // Known gaps: connections are not closed when the session expires (so neither is a call); the codes carry UDP host addresses only; nothing is retried
 // after a failure; one data channel, files go one at a time per direction as the sender pumps them in order.
 (function () {
@@ -44,6 +46,8 @@
   // the page and with the session, see closeAll) and read by status() for the toolbar popup. A connection that closed before its
   // peer had proven who it is has no DID and leaves no record.
   var ended = {};
+  // When a friend's "last seen" was last written (DID -> ms), so a long connection writes once a minute and not every tick.
+  var seenWrote = {}, SEEN_EVERY_MS = 60000;
 
   function emit(ev) { if (listener) { try { listener(ev); } catch (e) {} } }
   function newId() { return kd.b64u(crypto.getRandomValues(new Uint8Array(9))); }
@@ -101,7 +105,7 @@
     var t = now();
     if (t - lastTick > STALL_MS) note(null, 'late', 'this page ran ' + Math.round((t - lastTick - TICK_MS) / 1000) + ' s late (the system slept, or the page was in the background); page ' + document.visibilityState);
     lastTick = t;
-    Object.keys(peers).forEach(function (k) { sample(peers[k]); });
+    Object.keys(peers).forEach(function (k) { sample(peers[k]); noteSeen(peers[k]); });
   }
   setInterval(tick, TICK_MS);
   [[document, 'visibilitychange'], [document, 'freeze'], [document, 'resume'], [window, 'pagehide'], [window, 'pageshow'], [window, 'online'], [window, 'offline']].forEach(function (p) {
@@ -147,10 +151,22 @@
   // lost: the connection ended because the path or the other end went away, not because of anything decided or detected here (a
   // violation, a friendship that ended, a timeout, a close asked for here). A module that is waiting for a person is told, so that
   // it can keep what the person is doing (keo-friend.js keeps its dialog).
+  // A ready connection to a friend is the friend's "last seen" (keo-contacts.js): written at most once a minute while it lasts, and
+  // again when it ends. `force` skips the once-a-minute limit.
+  function noteSeen(c, force) {
+    if (c.state !== 'ready' || !c.friend || !c.peer) return;
+    var t = now(), did = c.peer.did;
+    if (!force && seenWrote[did] && t - seenWrote[did] < SEEN_EVERY_MS) return;
+    seenWrote[did] = t;
+    window.keoContacts.seen(did, t);
+  }
   function closeConn(c, why, lost) {
     if (c.state === 'closed') return;
+    noteSeen(c, true);
     note(c, 'closed', (why || '(no reason)') + (lost ? ' [lost]' : '') + ' | ' + lastWord(c));
-    if (c.peerOk && c.peer) ended[c.peer.did] = { at: now(), why: String(why || '').slice(0, 200), lost: !!lost };
+    // Recorded against the proven peer, or against the friend an addressed offer was for (a reconnect that failed or was given up)
+    var who = c.peerOk && c.peer ? c.peer.did : c.expect;
+    if (who) ended[who] = { at: now(), why: String(why || '').slice(0, 200), lost: !!lost };
     Object.keys(hooks).forEach(function (k) { try { hooks[k].closed(handleOf(c), why, !!lost); } catch (e) {} });
     c.timers.forEach(clearTimeout);
     c.timers = [];
@@ -160,8 +176,8 @@
     delete peers[c.id];
     setState(c, 'closed', why);
   }
-  function makeConn(role, name) {
-    var c = { id: newId(), role: role, pc: new RTCPeerConnection({ iceServers: [] }), dc: null, state: 'new', peer: null, in: {}, out: {}, nextFid: 1, timers: [],
+  function makeConn(role, name, expect) {
+    var c = { id: newId(), role: role, expect: expect, pc: new RTCPeerConnection({ iceServers: [] }), dc: null, state: 'new', peer: null, in: {}, out: {}, nextFid: 1, timers: [],
       myName: name ? String(name) : null, offerFp: null, offerTag: null, fps: null,
       hiSent: false, peerOk: false, held: null };
     peers[c.id] = c;
@@ -185,11 +201,20 @@
   }
 
   // ---- making a connection ------------------------------------------------------------------------------------------
+  // An addressed connection (a reconnect to a friend) names the identity it is FOR. The codes name nobody, so this is the only place
+  // that can be said: when the peer's proof is checked and it is a different identity, the connection is closed at once. Asking for
+  // it can only narrow who may connect, which is why the world may ask (p2p.offer).
+  function expectOf(v) {
+    if (v === undefined || v === null || v === '') return null;
+    v = String(v);
+    if (!/^did:keo:[^\s]{1,190}$/.test(v)) throw new Error('That is not a valid device identity.');
+    return v;
+  }
   // Side 1: an invitation. Resolves { id, code }; the code goes to the other person.
   async function offer(args) {
     args = args || {};
     await needSession();
-    var c = makeConn('offerer', args.name);
+    var c = makeConn('offerer', args.name, expectOf(args.expect));
     try {
       c.dc = c.pc.createDataChannel(LABEL);
       wireChannel(c, c.dc);
@@ -209,7 +234,7 @@
   async function answer(args) {
     await needSession();
     var d = await hello.decodeCode(args.code, { role: 'offer' });
-    var c = makeConn('answerer', args.name);
+    var c = makeConn('answerer', args.name, expectOf(args.expect));
     try {
       c.pc.ondatachannel = function (e) {
         if (e.channel.label !== LABEL || c.dc) { try { e.channel.close(); } catch (x) {} return; }
@@ -277,6 +302,7 @@
     hello.verifyProof(m, { role: c.role === 'offerer' ? 'answer' : 'offer', fps: c.fps, audience: location.origin }).then(function (v) {
       if (c.state === 'closed') return;
       if (!v.ok) return closeConn(c, v.error);
+      if (c.expect && v.did !== c.expect) return closeConn(c, 'The device that connected is not the one this connection was made for: it proved a different identity.');
       // Who is a friend is read before anything else is accepted, so that the first message already meets the right answer.
       return window.keoContacts.ensure().then(function () {
         if (c.state === 'closed') return;
@@ -492,13 +518,21 @@
     return true;
   }
   function list() { return Object.keys(peers).map(function (k) { return view(peers[k]); }); }
+  // Gives up the reconnects under way to one friend (not the live connection, if there is one).
+  function cancelFor(did) {
+    Object.keys(peers).forEach(function (k) { var c = peers[k]; if (!c.peerOk && c.expect === did) closeConn(c, 'Closed here.'); });
+    return true;
+  }
   // Only for the end of a session: what it knew about how connections ended goes with it.
-  function closeAll() { Object.keys(peers).forEach(function (k) { closeConn(peers[k], 'Closed here.'); }); ended = {}; }
+  function closeAll() { Object.keys(peers).forEach(function (k) { closeConn(peers[k], 'Closed here.'); }); ended = {}; seenWrote = {}; }
   // Plain data for the toolbar popup (keo-status.js): every connection whose peer has proven who it is, and how the last one to each
   // peer ended. 'connected' is a friend on a ready connection; 'unconfirmed' is ready but not (yet) a friend either way round.
   function status() {
     return {
-      connections: Object.keys(peers).map(function (k) { return peers[k]; }).filter(function (c) { return c.peerOk && c.peer; }).map(function (c) {
+      connections: Object.keys(peers).map(function (k) { return peers[k]; }).filter(function (c) { return (c.peerOk && c.peer) || c.expect; }).map(function (c) {
+        // An addressed connection whose peer has not proven itself yet is a reconnect under way: 'invited' while it waits for the other
+        // side's code, then 'connecting'.
+        if (!c.peerOk) return { did: c.expect, state: 'reconnecting', waiting: c.state === 'invited', since: null };
         return { did: c.peer.did, state: c.state === 'ready' ? (c.friend ? 'connected' : 'unconfirmed') : 'connecting', since: c.readyAt || null };
       }),
       ended: JSON.parse(JSON.stringify(ended))
@@ -545,6 +579,7 @@
     var was = !!c.friend;
     c.friend = now;
     if (was && !now) return closeConn(c, 'You are no longer friends.');
+    if (now && !was) noteSeen(c);
     // Not a 'state' event: the connection's state did not change, and a world that counts states must not see 'ready' twice.
     emit({ type: 'friendship', id: c.id, peer: c.peer, friend: now, added: addedOf(c), theirs: !!c.theirs });
   }
@@ -565,7 +600,7 @@
   }
 
   window.keoP2p = { offer: offer, answer: answer, finish: finish, send: send, respond: respond, cancel: cancel, save: save,
-    close: close, list: list, closeAll: closeAll, status: status, diag: diag, cleanName: cleanName, handle: handle, attach: attach, friendChanged: friendChanged, setTheirs: setTheirs, connectionsTo: connectionsTo,
+    close: close, list: list, closeAll: closeAll, cancelFor: cancelFor, status: status, diag: diag, cleanName: cleanName, handle: handle, attach: attach, friendChanged: friendChanged, setTheirs: setTheirs, connectionsTo: connectionsTo,
     // one listener, for the bridge: events are plain data
     onEvent: function (fn) { listener = fn; } };
 })();

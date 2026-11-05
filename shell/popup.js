@@ -51,7 +51,7 @@
   }
 
   // ---- asking the shell tab ----------------------------------------------------------------------------------------------
-  var STATES = { connected: 1, unconfirmed: 1, connecting: 1, lost: 1, ended: 1, idle: 1 };
+  var STATES = { connected: 1, unconfirmed: 1, connecting: 1, reconnecting: 1, lost: 1, ended: 1, idle: 1 };
   var isStr = function (v, max) { return typeof v === 'string' && v.length <= max; };
   // The answer is plain data from this extension's own page, but it is checked and copied anyway: whatever is not the expected
   // shape is dropped, so a mistake on the other side cannot become markup or a script error here.
@@ -62,7 +62,8 @@
     var out = { signedIn: true, me: { did: a.me.did, label: a.me.label }, exp: Date.parse(a.exp), friends: null };
     if (Array.isArray(a.friends)) {
       out.friends = a.friends.filter(function (f) { return f && isStr(f.did, 200) && isStr(f.name, 200) && STATES[f.state]; }).slice(0, 100).map(function (f) {
-        return { did: f.did, name: f.name, state: f.state, since: typeof f.since === 'number' ? f.since : null,
+        return { did: f.did, name: f.name, state: f.state, since: typeof f.since === 'number' ? f.since : null, waiting: f.waiting === true,
+          seen: typeof f.seen === 'number' ? f.seen : null,
           ended: f.ended && typeof f.ended.at === 'number' && isStr(f.ended.why, 200) ? { at: f.ended.at, why: f.ended.why } : null };
       });
     }
@@ -73,11 +74,16 @@
     var late = new Promise(function (res) { setTimeout(function () { res(null); }, ASK_MS); });
     return Promise.race([asked, late]).then(clean, function () { return null; });
   }
-  // The first tab that is signed in, else the first that answered at all, else null (no tab answered: an older page, or one still loading).
+  // The first tab that is signed in, else the first that answered at all, else null (no tab answered: an older page, or one still
+  // loading). The answer carries the id of the tab it came from, to send that tab what the person asks for.
   function statusFrom(tabs) {
-    return Promise.all(tabs.map(ask)).then(function (all) {
+    return Promise.all(tabs.map(function (t) { return ask(t).then(function (s) { if (s) s.tabId = t.tabId; return s; }); })).then(function (all) {
       return all.filter(function (s) { return s && s.signedIn; })[0] || all.filter(Boolean)[0] || null;
     });
+  }
+  // Asks the keo tab for something the person clicked. Resolves { ok } or { ok: false, error }.
+  function tell(tabId, msg) {
+    return chrome.tabs.sendMessage(tabId, msg).then(function (r) { return r || { ok: false, error: 'keo did not answer.' }; }, function () { return { ok: false, error: 'keo did not answer.' }; });
   }
 
   // ---- doing ---------------------------------------------------------------------------------------------------------
@@ -125,12 +131,27 @@
   }
 
   // One friend's row: a dot and a word for the state, then what is known about it.
-  var ORDER = { connected: 0, unconfirmed: 1, connecting: 2, lost: 3, ended: 4, idle: 5 };
-  function friendRow(f, now) {
+  var ORDER = { connected: 0, unconfirmed: 1, connecting: 2, reconnecting: 3, lost: 4, ended: 5, idle: 6 };
+  // "last seen": the time of day if it was today, "yesterday" with it, else the date.
+  function seenText(ms, now) {
+    var d = new Date(ms), t = new Date(now), pad = function (n) { return (n < 10 ? '0' : '') + n; }, hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    var day = function (x) { return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); };
+    if (day(d) === day(t)) return 'last seen today ' + hm;
+    if (day(d) === day(t) - 86400000) return 'last seen yesterday ' + hm;
+    return 'last seen ' + d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' + hm;
+  }
+  function smallButton(text, onClick, quiet) {
+    var b = el('button', 'btn sm' + (quiet ? ' quiet' : ''), text); b.type = 'button';
+    b.addEventListener('click', function () { b.disabled = true; onClick().catch(function (e) { b.disabled = false; console.error('keo popup:', e); }); });
+    return b;
+  }
+  // act: { reconnect(did), cancel(did), show() } for the buttons.
+  function friendRow(f, now, act) {
     var img = el('img'); img.src = window.keoIdenticon.dataUrl(f.did, 32); img.alt = '';
-    var tone = { connected: 'good', unconfirmed: 'warn', connecting: 'warn', lost: 'bad' }[f.state] || '';
+    var tone = { connected: 'good', unconfirmed: 'warn', connecting: 'warn', reconnecting: 'warn', lost: 'bad' }[f.state] || '';
     var l2 = el('div', 'l2');
-    var word = { connected: 'Connected', unconfirmed: 'Connected', connecting: 'Connecting…', lost: 'Connection lost', ended: 'Connection ended', idle: 'Not connected' }[f.state];
+    var who = f.name || shortDid(f.did);
+    var word = { connected: 'Connected', unconfirmed: 'Connected', connecting: 'Connecting…', reconnecting: f.waiting ? 'Waiting for ' + who + '\'s reply' : 'Connecting…', lost: 'Connection lost', ended: 'Connection ended', idle: 'Not connected' }[f.state];
     add(l2, el('b', tone, word));
     if (f.state === 'connected' && f.since) l2.appendChild(document.createTextNode(' · ' + dur(now - f.since)));
     if (f.state === 'unconfirmed') l2.appendChild(document.createTextNode(' · waiting for them to add you'));
@@ -138,16 +159,27 @@
       l2.appendChild(document.createTextNode(' · ' + dur(now - f.ended.at) + ' ago'));
       if (f.ended.why) l2.appendChild(span('why', f.ended.why));
     }
-    var l1 = add(el('div', 'l1'), el('i', 'dot ' + tone), span(null, f.name || shortDid(f.did)));
-    return add(el('li', 'dev'), img, add(el('div'), l1, l2));
+    if (f.seen && (f.state === 'idle' || f.state === 'lost' || f.state === 'ended')) l2.appendChild(span('why', seenText(f.seen, now)));
+    var l1 = add(el('div', 'l1'), el('i', 'dot ' + tone), span(null, who));
+    var row = add(el('li', 'dev'), img, add(el('div'), l1, l2));
+    if (f.state === 'reconnecting') {
+      // The code lives in keo, in the Connect a device window: the popup closes when focus leaves it and holds nothing.
+      row.className = 'dev wide';
+      var extra = add(el('div', 'extra'), el('div', 'note', f.waiting ? 'Your code is ready in keo, in the Connect a device window. Send it to ' + who + ', then paste the code ' + who + ' sends back.' : 'Connecting…'),
+        add(el('div', 'btns'), smallButton('Show in keo', act.show), smallButton('Cancel', function () { return act.cancel(f.did); }, true)));
+      row.appendChild(extra);
+    } else if (f.state === 'idle' || f.state === 'lost' || f.state === 'ended') {
+      row.appendChild(smallButton(f.state === 'idle' ? 'Connect' : 'Reconnect', function () { return act.reconnect(f.did); }, f.state === 'idle'));
+    }
+    return row;
   }
-  function friendsSection(friends, now) {
+  function friendsSection(friends, now, act) {
     if (friends === null) return el('div', 'empty', 'Your friends could not be read.');
     if (!friends.length) return el('div', 'empty', 'No friends yet. Add one from Connect a device in keo.');
     var sorted = friends.slice().sort(function (a, b) { return ORDER[a.state] - ORDER[b.state] || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); });
     var up = friends.filter(function (f) { return f.state === 'connected'; }).length;
     var list = el('ul', 'devs');
-    sorted.forEach(function (f) { list.appendChild(friendRow(f, now)); });
+    sorted.forEach(function (f) { list.appendChild(friendRow(f, now, act)); });
     return add(el('div'), add(el('div', 'sec-h'), el('h3', null, 'Friends\' devices'), span(null, up + ' of ' + friends.length + ' connected')), list);
   }
 
@@ -158,7 +190,13 @@
       var left = st.exp - now, ending = left < ENDING_MS;
       var body = add(el('div', 'body'), person(st.me));
       if (ending) body.appendChild(el('div', 'banner', left > 0 ? 'Your session ends in ' + dur(left) + '. Sign in again to keep sharing and calling.' : 'Your session has ended.'));
-      add(body, go('Switch to keo'), friendsSection(st.friends, now));
+      var act = {
+        show: function () { return openKeo(tabs); },
+        // Ask keo to open its Connect a device window for this friend, then bring the tab forward so the person sees it.
+        reconnect: function (did) { return tell(st.tabId, { keo: 'popup.reconnect', did: did }).then(function (r) { if (!r.ok) throw new Error(r.error); return openKeo(tabs); }); },
+        cancel: function (did) { return tell(st.tabId, { keo: 'popup.cancel', did: did }).then(function () { return refresh(); }); }
+      };
+      add(body, go('Switch to keo'), friendsSection(st.friends, now, act));
       return [head(ending ? 'Ends soon' : 'Signed in', ending ? 'warn' : 'good'), body, el('div', 'foot', left > 0 ? 'Session ends in ' + dur(left) : 'Session ended')];
     }
     if (tabs.length && st) {

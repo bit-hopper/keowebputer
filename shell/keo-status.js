@@ -5,12 +5,15 @@
 // friend gave itself, a state word, a time and one of this page's own sentences. Never a key, a code, a message, a file name, an
 // address, or the connection log. Names are text another device chose: the reader must draw them as text.
 // Who may ask: a message from this extension's own popup page, nobody else (the sandboxed world has no extension messaging at all,
-// and the page checks the sender anyway). It only reads: nothing here changes a connection, a friend or the session.
+// and the page checks the sender anyway). Reading changes nothing. Two things can be asked that do something, and both only narrow or
+// give up: 'popup.reconnect' (for a FRIEND only: it tells the world, as an event, that the person wants to reconnect to that friend, and
+// the world opens the Connect a device window for it; nothing is connected by asking) and 'popup.cancel' (gives up the reconnects
+// under way to one friend). It cannot add a friend, sign in or out, or touch a live connection.
 // What it is NOT: a bridge op. The world cannot reach it, and it must not be given one.
 (function () {
   'use strict';
   var MAX_FRIENDS = 100;
-  var RANK = { connected: 0, unconfirmed: 1, connecting: 2 };
+  var RANK = { connected: 0, unconfirmed: 1, connecting: 2, reconnecting: 3 };
 
   // For one friend: the best live connection to its DID, else how the last one ended, else nothing.
   function friendView(p, st) {
@@ -19,7 +22,8 @@
     var state = 'idle', since = null, why = null;
     if (live) { state = live.state; since = live.since; }
     else if (end && end.why !== 'Closed here.') { state = end.lost ? 'lost' : 'ended'; }
-    return { did: p.did, name: p.name, state: state, since: since, ended: state === 'lost' || state === 'ended' ? { at: end.at, why: end.why } : null };
+    return { did: p.did, name: p.name, state: state, since: since, waiting: !!(live && live.waiting), seen: p.seen ? Date.parse(p.seen) || null : null,
+      ended: state === 'lost' || state === 'ended' ? { at: end.at, why: end.why } : null };
   }
 
   function build() {
@@ -34,12 +38,40 @@
     });
   }
 
+  // ---- what the popup may do ---------------------------------------------------------------------------------------------
+  // The world is told through one listener, set by shell.js (events are not queued: a world that is not up misses it, and the person
+  // then finds nothing opened). Resolves { ok } or { ok: false, error }.
+  var reconnectListener = null;
+  function reconnect(did) {
+    if (typeof did !== 'string') return Promise.resolve({ ok: false, error: 'That is not a valid device identity.' });
+    return window.keoIdentity.current().then(function (s) {
+      if (!s) return { ok: false, error: 'Nobody is signed in.' };
+      return window.keoContacts.ensure().then(function () {
+        var f = window.keoContacts.get(did);
+        if (!f) return { ok: false, error: 'That device is not in your friends.' };
+        // Connected, or a connection to it is already under way: nothing to start.
+        if (window.keoP2p.status().connections.some(function (c) { return c.did === did; })) return { ok: true, already: true };
+        if (!reconnectListener) return { ok: false, error: 'keo is not ready.' };
+        reconnectListener({ did: did, name: f.name });
+        return { ok: true };
+      });
+    }).catch(function (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 200) }; });
+  }
+  function cancel(did) {
+    if (typeof did !== 'string') return Promise.resolve({ ok: false });
+    window.keoP2p.cancelFor(did);
+    return Promise.resolve({ ok: true });
+  }
+
   var POPUP = chrome.runtime.getURL('popup.html');
   chrome.runtime.onMessage.addListener(function (msg, sender, reply) {
-    if (!msg || msg.keo !== 'popup.status') return false;
+    if (!msg || typeof msg.keo !== 'string' || msg.keo.indexOf('popup.') !== 0) return false;
     if (sender.id !== chrome.runtime.id || !sender.url || sender.url.split(/[?#]/)[0] !== POPUP) return false;
-    build().then(reply, function () { reply(null); });
+    if (msg.keo === 'popup.status') build().then(reply, function () { reply(null); });
+    else if (msg.keo === 'popup.reconnect') reconnect(msg.did).then(reply);
+    else if (msg.keo === 'popup.cancel') cancel(msg.did).then(reply);
+    else return false;
     return true;                                  // the answer is sent later
   });
-  window.keoStatus = { build: build };
+  window.keoStatus = { build: build, onReconnect: function (fn) { reconnectListener = fn; } };
 })();

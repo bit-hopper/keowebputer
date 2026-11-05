@@ -73,7 +73,7 @@
 
   function peerOf(v) {
     v = String(v == null ? '' : v);
-    if (!PEER.test(v)) throw new Error('That is not a device identity.');
+    if (!PEER.test(v)) throw new Error('That is not a valid device identity.');
     return v;
   }
 

@@ -1,7 +1,7 @@
 // keo friends, SHELL side: the devices the signed-in identity has checked and added, kept on THIS device, encrypted under that identity.
 // Runs in the extension's own page; the sandboxed world reaches it only through the bridge ops in shell.js (friend.*), which take plain
 // data and never see the key. It is laid out like the message history (keo-chatlog.js) and uses the same session key:
-//   IndexedDB `keo-contacts`: `book` (one record per identity, { did, iv, ct }). The plaintext is { people: { <peer DID>: { name, at } } },
+//   IndexedDB `keo-contacts`: `book` (one record per identity, { did, iv, ct }). The plaintext is { people: { <peer DID>: { name, at, seen } } },
 //   AES-GCM with the identity as additional data, so a record cannot be moved to another identity. What is readable without the key:
 //   the identity's DID, the size of the book and the order of writes. WHO the friends are is inside the encryption.
 //
@@ -62,10 +62,10 @@
 
   function peerOf(v) {
     v = String(v == null ? '' : v);
-    if (!PEER.test(v)) throw new Error('That is not a device identity.');
+    if (!PEER.test(v)) throw new Error('That is not a valid device identity.');
     return v;
   }
-  function view(did, r) { return { did: did, name: r.name || '', at: r.at || '' }; }
+  function view(did, r) { return { did: did, name: r.name || '', at: r.at || '', seen: r.seen || '' }; }
 
   // Reads the book of the signed-in identity into memory (again if a different identity is signed in now).
   function ensure() {
@@ -113,6 +113,20 @@
       return Object.keys(m.people).map(function (d) { return view(d, m.people[d]); }).sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
     });
   }
+  // Notes that this friend was connected at `ts` (ms): the "last seen" the toolbar popup shows. It is the time a connection to the friend
+  // was last known to be up, not proof of anything. A failed write is dropped (the next one carries a newer time anyway), and a session
+  // that has ended writes nothing. Resolves true if it was saved.
+  function seen(did, ts) {
+    return serial(async function () {
+      var m = mem;
+      if (!m || !m.people[did]) return false;
+      var people = Object.assign({}, m.people), old = m.people;
+      people[did] = Object.assign({}, m.people[did], { seen: new Date(ts).toISOString() });
+      m.people = people;
+      try { await write(); } catch (e) { m.people = old; return false; }
+      return true;
+    }).catch(function () { return false; });
+  }
   // Takes a device out of the list: it is no longer a friend.
   function remove(did) {
     return serial(async function () {
@@ -134,5 +148,5 @@
   // The session ended: nothing about the identity stays in memory for the next one to sign in.
   function clear() { mem = null; }
 
-  window.keoContacts = { ensure: ensure, isAdded: isAdded, get: get, add: add, list: list, remove: remove, purge: purge, clear: clear };
+  window.keoContacts = { ensure: ensure, isAdded: isAdded, get: get, add: add, seen: seen, list: list, remove: remove, purge: purge, clear: clear };
 })();

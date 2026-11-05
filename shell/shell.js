@@ -115,8 +115,8 @@
     // Direct connections to another device and file sharing (keo-p2p.js). The connections live in this page; the world drives
     // them and gets plain-data events back (see the listener below). Received bytes never reach the world: p2p.save hands a
     // received file to the browser's download. All of it needs a signed-in identity (the invitation is signed with its device).
-    'p2p.offer': function (a) { return window.keoP2p.offer({ name: a.name }); },
-    'p2p.answer': function (a) { return window.keoP2p.answer({ code: a.code, name: a.name }); },
+    'p2p.offer': function (a) { return window.keoP2p.offer({ name: a.name, expect: a.expect }); },
+    'p2p.answer': function (a) { return window.keoP2p.answer({ code: a.code, name: a.name, expect: a.expect }); },
     'p2p.finish': function (a) { return window.keoP2p.finish({ id: a.id, code: a.code }); },
     'p2p.send': function (a) { return window.keoP2p.send({ id: a.id, file: a.file, name: a.name }); },
     'p2p.respond': function (a) { return window.keoP2p.respond({ id: a.id, fid: a.fid, accept: a.accept }); },
@@ -159,6 +159,9 @@
   window.keoCall.onEvent(function (data) { toWorld({ keo: 1, event: 'call', data: data }); });
   window.keoDm.onEvent(function (data) { toWorld({ keo: 1, event: 'dm', data: data }); });
   window.keoFriend.onEvent(function (data) { toWorld({ keo: 1, event: 'friend', data: data }); });
+  // The person asked, in the toolbar popup, to reconnect to a friend: {keo:1, event:'reconnect', data:{did, name}}. The world opens its
+  // Connect a device window for it and makes the invitation (p2p.offer with `expect`); this page only says that it was asked.
+  window.keoStatus.onReconnect(function (data) { toWorld({ keo: 1, event: 'reconnect', data: data }); });
   // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
   // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
   // connections were proven with that identity's device key, and the next one to sign in must not inherit them.
