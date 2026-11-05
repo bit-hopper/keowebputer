@@ -533,6 +533,18 @@ module("lively.identity.MenuBarEntry")
           if (!li || !li.isAvailable() || window.keoReconnectListening) return;
           window.keoReconnectListening = true;
           li.onReconnectRequest(function (ev) { if (ev && typeof ev.did === "string") self.openReconnect(ev.did, typeof ev.name === "string" ? ev.name : ""); });
+          li.onOpenRequest(function (ev) { if (ev) self.openFromPopup(ev); });
+        },
+
+        // What else the toolbar popup can ask for (see LocalIdentity.onOpenRequest): the shell has already checked it.
+        openFromPopup: function openFromPopup(ev) {
+          var li = lively.identity.localIdentity;
+          if (ev.what === "connect") return this.openPeerDialog();
+          if (ev.what === "signout") return li.signOut(function () {});
+          if (ev.what === "chat" && typeof ev.did === "string") {
+            var label = typeof ev.name === "string" && ev.name ? ev.name : li.shortDid(ev.did);
+            lively.require("lively.identity.DMChat").toRun(function () { lively.identity.DMChat.openLocal(label, ev.did); });
+          }
         },
       }),
     );

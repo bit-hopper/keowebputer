@@ -118,6 +118,15 @@ module("lively.identity.LocalIdentity")
         return window.keo.on("reconnect", fn);
       },
 
+      // The person clicked something else in the toolbar popup that opens a window here: fn({ what, did, name }) with what "chat" (the
+      // Messages window for a connected friend), "connect" (the Connect a device window) or "signout". The shell has checked the
+      // request makes sense (a signed-in session, and for chat a friend with a connection that is ready); the world only draws.
+      // Not queued: a world that is not up misses it. Returns a function that stops listening.
+      onOpenRequest: function onOpenRequest(fn) {
+        if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
+        return window.keo.on("open", fn);
+      },
+
       // ─── friends (shell/keo-friend.js, keo-contacts.js) ─────────────────────────
       // Files, messages and calls work only between friends. Two devices become friends when each person has added the other,
       // and adding happens only in a dialog the SHELL draws: the person reads their own eight words to the other and types the
