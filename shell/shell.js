@@ -162,6 +162,9 @@
   // The person asked, in the toolbar popup, to reconnect to a friend: {keo:1, event:'reconnect', data:{did, name}}. The world opens its
   // Connect a device window for it and makes the invitation (p2p.offer with `expect`); this page only says that it was asked.
   window.keoStatus.onReconnect(function (data) { toWorld({ keo: 1, event: 'reconnect', data: data }); });
+  // Other things the person asked for in the popup: {keo:1, event:'open', data:{what:'chat'|'connect'|'signout', did?, name?}}. Signing
+  // out goes through the world so that its bridge lifts the exit warning around it (world/keo-bridge.js); this page only says it was asked.
+  window.keoStatus.onOpen(function (data) { toWorld({ keo: 1, event: 'open', data: data }); });
   // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
   // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
   // connections were proven with that identity's device key, and the next one to sign in must not inherit them.

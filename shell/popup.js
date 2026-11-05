@@ -145,7 +145,23 @@
     b.addEventListener('click', function () { b.disabled = true; onClick().catch(function (e) { b.disabled = false; console.error('keo popup:', e); }); });
     return b;
   }
-  // act: { reconnect(did), cancel(did), show() } for the buttons.
+  // An icon-only button: the picture is drawn here (the popup carries no icon font) and the name is for screen readers and the tooltip.
+  function chatButton(label, onClick) {
+    var ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), p = document.createElementNS(ns, 'path');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '16'); svg.setAttribute('height', '16'); svg.setAttribute('aria-hidden', 'true');
+    p.setAttribute('d', 'M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-8l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z');
+    p.setAttribute('fill', 'none'); p.setAttribute('stroke', 'currentColor'); p.setAttribute('stroke-width', '2'); p.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(p);
+    var b = el('button', 'btn sm quiet icon'); b.type = 'button'; b.setAttribute('aria-label', label); b.title = label; b.appendChild(svg);
+    b.addEventListener('click', function () { b.disabled = true; onClick().catch(function (e) { b.disabled = false; console.error('keo popup:', e); }); });
+    return b;
+  }
+  function link(text, onClick) {
+    var b = el('button', 'link', text); b.type = 'button';
+    b.addEventListener('click', function () { b.disabled = true; onClick().catch(function (e) { b.disabled = false; console.error('keo popup:', e); }); });
+    return b;
+  }
+  // act: { reconnect(did), cancel(did), chat(did), show() } for the buttons.
   function friendRow(f, now, act) {
     var img = el('img'); img.src = window.keoIdenticon.dataUrl(f.did, 32); img.alt = '';
     var tone = { connected: 'good', unconfirmed: 'warn', connecting: 'warn', reconnecting: 'warn', lost: 'bad' }[f.state] || '';
@@ -168,6 +184,8 @@
       var extra = add(el('div', 'extra'), el('div', 'note', f.waiting ? 'Your code is ready in keo, in the Connect a device window. Send it to ' + who + ', then paste the code ' + who + ' sends back.' : 'Connecting…'),
         add(el('div', 'btns'), smallButton('Show in keo', act.show), smallButton('Cancel', function () { return act.cancel(f.did); }, true)));
       row.appendChild(extra);
+    } else if (f.state === 'connected') {
+      row.appendChild(chatButton('Chat', function () { return act.chat(f.did); }));
     } else if (f.state === 'idle' || f.state === 'lost' || f.state === 'ended') {
       row.appendChild(smallButton(f.state === 'idle' ? 'Connect' : 'Reconnect', function () { return act.reconnect(f.did); }, f.state === 'idle'));
     }
@@ -194,10 +212,16 @@
         show: function () { return openKeo(tabs); },
         // Ask keo to open its Connect a device window for this friend, then bring the tab forward so the person sees it.
         reconnect: function (did) { return tell(st.tabId, { keo: 'popup.reconnect', did: did }).then(function (r) { if (!r.ok) throw new Error(r.error); return openKeo(tabs); }); },
-        cancel: function (did) { return tell(st.tabId, { keo: 'popup.cancel', did: did }).then(function () { return refresh(); }); }
+        cancel: function (did) { return tell(st.tabId, { keo: 'popup.cancel', did: did }).then(function () { return refresh(); }); },
+        // The world opens these (it draws them); the popup then takes the person there. Signing out stays here: the popup shows the result.
+        chat: function (did) { return open({ what: 'chat', did: did }).then(function () { return openKeo(tabs); }); },
+        connect: function () { return open({ what: 'connect' }).then(function () { return openKeo(tabs); }); },
+        signOut: function () { return open({ what: 'signout' }).then(function () { return refresh(); }); }
       };
-      add(body, go('Switch to keo'), friendsSection(st.friends, now, act));
-      return [head(ending ? 'Ends soon' : 'Signed in', ending ? 'warn' : 'good'), body, el('div', 'foot', left > 0 ? 'Session ends in ' + dur(left) : 'Session ended')];
+      function open(m) { return tell(st.tabId, Object.assign({ keo: 'popup.open' }, m)).then(function (r) { if (!r.ok) throw new Error(r.error); }); }
+      add(body, go('Switch to keo'), friendsSection(st.friends, now, act), link('Connect a new device…', act.connect));
+      var foot = add(el('div', 'foot'), span(null, left > 0 ? 'Session ends in ' + dur(left) : 'Session ended'), link('Sign out', act.signOut));
+      return [head(ending ? 'Ends soon' : 'Signed in', ending ? 'warn' : 'good'), body, foot];
     }
     if (tabs.length && st) {
       return [head('Open', 'good'), add(el('div', 'body'), el('p', 'note', 'keo is open in a tab. Nobody is signed in yet.'), go('Switch to keo'))];

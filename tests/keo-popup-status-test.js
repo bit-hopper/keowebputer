@@ -10,9 +10,12 @@
 // friend, the other device answering, the answer pasted and Connect clicked) and giving it up with the popup's Cancel; an invitation made for
 // one identity is closed when another proves itself; what the shell answers holds only the fields it should; signing out empties it, shows
 // nobody's name and drops the record of how connections ended.
-// NOT covered: the state "connected, waiting for them to add you", a connection that ends for a reason other than the other side leaving,
-// the OTHER device doing the reconnect from its own popup, a real third device answering the invitation, two real machines, the browser's
-// real popup surface.
+// Also: the state "connected, waiting for them to add you" (added on one side only), the chat icon (opens the Messages window for that friend),
+// the Connect a new device link, the session-ending banner (the shell's idea of the session's end is moved), a long friend list staying inside the
+// popup's height, and Sign out from the popup with no browser "Leave site?" warning.
+// NOT covered: a connection that ends for a reason other than the other side leaving, the OTHER device doing the reconnect from its own popup,
+// a real third device answering the invitation, two real machines, the browser's real popup surface (its 600 px limit is checked as the page's
+// own height).
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
@@ -22,7 +25,7 @@ const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0, passed = 0;
 function check(name, ok, detail) { if (ok) passed++; else failed++; console.log((ok ? 'PASS ' : 'FAIL ') + name + (detail !== undefined && !ok ? '  -> ' + JSON.stringify(detail).slice(0, 900) : '')); }
-const errors = [], ctxs = [], worldErrors = [];      // worldErrors: the kernel's own console errors, kept for a failure report only
+const errors = [], ctxs = [], worldErrors = [], dialogs = [];      // worldErrors: the kernel's own console errors, kept for a failure report only
 
 const worldFrame = (page) => page.frames().find((f) => /world\.html$/.test(f.url()));
 async function waitForWorld(page, kind) {
@@ -45,7 +48,7 @@ async function device(label, name) {
   ctxs.push(ctx);
   await sleep(2000);
   const page = await ctx.newPage();
-  page.on('dialog', (d) => d.accept().catch(() => {}));
+  page.on('dialog', (d) => { dialogs.push({ name, type: d.type() }); d.accept().catch(() => {}); });
   page.on('pageerror', (e) => errors.push(name + ' PAGEERROR ' + e.message.slice(0, 200)));
   // Only errors from the shell's and the popup's own files count: the kernel's home page logs blocked third-party scripts and a policy line of its own, and asks for a badge picture the package does not hold (Media/badges/by-sa.svg).
   page.on('console', (m) => { if (m.type() === 'error' && !/by-sa\.svg|youtube|Permissions policy/.test(m.text() + ' ' + m.location().url)) worldErrors.push(name + ': ' + m.text().slice(0, 240) + ' @ ' + (m.location().url || '').slice(-60)); });
@@ -60,6 +63,7 @@ async function device(label, name) {
   frame = await waitForWorld(page, 'homestar');
   await frame.evaluate(() => { window.__p2p = []; window.keo.on('p2p', (e) => window.__p2p.push(e)); window.__fr = []; window.keo.on('friend', (e) => window.__fr.push(e)); window.__rc = []; window.keo.on('reconnect', (e) => window.__rc.push(e)); });
   const P = { label, name, ctx, page, frame, pop: null, did: created.did };
+  P.words = (await call(frame, 'friend.words')).r;
   await reopen(P);
   return P;
 }
@@ -101,9 +105,10 @@ async function connect(A, B) {
 // The popup as a person sees it: the pill, the rows of friends, the count and the foot.
 const seen = (P) => P.pop.evaluate(() => ({
   pill: (document.querySelector('.pill') || {}).textContent, count: (document.querySelector('.sec-h span') || {}).textContent,
-  empty: (document.querySelector('.empty') || {}).textContent, foot: (document.querySelector('.foot') || {}).textContent, text: document.body.innerText,
-  me: (document.querySelector('.me .who b') || {}).textContent,
-  rows: [...document.querySelectorAll('.dev')].map((r) => ({ name: r.querySelector('.l1 span').textContent, dot: r.querySelector('.dot').className, word: r.querySelector('.l2 b').textContent, tone: r.querySelector('.l2 b').className, l2: r.querySelector('.l2').textContent, why: (r.querySelector('.why') || {}).textContent || null, markup: r.querySelector('.l1 span').children.length, buttons: [...r.querySelectorAll('button')].map((b) => b.textContent) }))
+  empty: (document.querySelector('.empty') || {}).textContent, foot: ((document.querySelector('.foot span') || document.querySelector('.foot')) || {}).textContent, text: document.body.innerText,
+  me: (document.querySelector('.me .who b') || {}).textContent, banner: (document.querySelector('.banner') || {}).textContent, links: [...document.querySelectorAll('.link')].map((b) => b.textContent),
+  height: Math.round(document.body.getBoundingClientRect().height), listScrolls: (() => { const l = document.querySelector('.devs'); return !!l && l.scrollHeight > l.clientHeight; })(),
+  rows: [...document.querySelectorAll('.dev')].map((r) => ({ name: r.querySelector('.l1 span').textContent, dot: r.querySelector('.dot').className, word: r.querySelector('.l2 b').textContent, tone: r.querySelector('.l2 b').className, l2: r.querySelector('.l2').textContent, why: (r.querySelector('.why') || {}).textContent || null, markup: r.querySelector('.l1 span').children.length, buttons: [...r.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || b.textContent) }))
 }));
 const until = (P, pred, ms) => waitFor(async () => { const s = await seen(P); return pred(s) ? s : null; }, ms || 15000);
 
@@ -125,15 +130,42 @@ const until = (P, pred, ms) => waitFor(async () => { const s = await seen(P); re
     s = await seen(A);
     check('connected but not a friend: still no row (the list is the people the person added)', s.rows.length === 0, s);
 
+    // ---- 2b. added on this side only: connected, but not a friend until the other side adds back
+    // (Through the shell's own dialog, by typing and a click, so the other device is told that it was added: a book entry written directly
+    // would leave it never learning that.)
+    await A.page.bringToFront();
+    await call(A.frame, 'friend.start', { id: k.a });
+    await waitFor(() => A.page.evaluate(() => { const r = document.getElementById('keo-friend'); return !!r && !r.hidden; }), 8000);
+    await A.page.fill('#keo-friend input', B.words.join(' '));
+    await waitFor(() => A.page.evaluate(() => !document.querySelector('#keo-friend button.yes').disabled), 5000);
+    await A.page.click('#keo-friend button.yes');
+    s = await until(A, (x) => x.rows.length === 1 && /waiting for them to add you/.test(x.rows[0].l2));
+    check('added here but not back: Connected, with an amber dot and "waiting for them to add you", and not counted as connected', !!s && /warn/.test(s.rows[0].dot) && s.rows[0].word === 'Connected' && s.count === '0 of 1 connected' && s.rows[0].buttons.length === 0, s && s.rows[0]);
+    await A.pop.screenshot({ path: path.join(WORK, 'status-unconfirmed.png') });
+
     // ---- 3. friends
     await befriend(A, B, k);
-    s = await until(A, (x) => x.rows.length === 1 && x.rows[0].word === 'Connected');
+    s = await until(A, (x) => x.rows.length === 1 && x.rows[0].word === 'Connected' && x.rows[0].tone === 'good');
     check('a connected friend: a row with a green dot and the word Connected, and the count', !!s && s.rows[0].tone === 'good' && /good/.test(s.rows[0].dot) && s.count === '1 of 1 connected', s);
     check('a connected friend: the row says for how long', !!s && /· (under a minute|\d+ min)$/.test(s.rows[0].l2), s && s.rows[0]);
     check('a friend\'s name is drawn as text, never as markup', !!s && s.rows[0].name === '<i>Jun</i>' && s.rows[0].markup === 0, s && s.rows[0]);
     await A.pop.screenshot({ path: path.join(WORK, 'status-connected.png') });
     const bs = await until(B, (x) => x.rows.length === 1 && x.rows[0].word === 'Connected');
     check('the other device sees Maya as a connected friend too', !!bs && bs.rows[0].name === 'Maya', bs);
+
+    // ---- 3b. the chat icon, and the Connect a new device link
+    check('a connected friend has a Chat icon (named for screen readers) and the popup has the Connect and Sign out links', !!s && s.rows[0].buttons.join() === 'Chat' && s.links.join() === 'Connect a new device…,Sign out', s && { b: s.rows[0].buttons, l: s.links });
+    await A.pop.locator('.dev button[aria-label="Chat"]').click();
+    const chatOpen = await waitFor(() => A.frame.evaluate((did) => { const w = lively.identity.DMChat && lively.identity.DMChat._windows[did]; return !!(w && w.world()); }, B.did), 20000);
+    check('the Chat icon opens the Messages window for that friend in keo', !!chatOpen);
+    check('and the popup closed itself after taking the person to keo', await waitFor(async () => A.pop.isClosed(), 5000));
+    await reopen(A);
+    await until(A, (x) => x.rows.length === 1);
+    await A.pop.locator('.link', { hasText: 'Connect a new device' }).click();
+    const plain = await waitFor(async () => { const d = await peerDlg(A); return d && d.phase === 'start' && !d.reconnect ? d : null; }, 20000);
+    check('the Connect a new device link opens the ordinary Connect a device window (not one made for a friend)', !!plain, await peerDlg(A));
+    await dlgDo(A, 'closeBtn');
+    await reopen(A);
 
     // ---- 4. what the shell answers
     const raw = await A.page.evaluate(() => window.keoStatus.build());
@@ -179,7 +211,7 @@ const until = (P, pred, ms) => waitFor(async () => { const s = await seen(P); re
     check('both devices are connected, and they are friends again without any eight words', !!ra && !!rb && !!(await friendsNow(A, dlg.id)) && !!(await friendsNow(B, ans.r.id)), { ra, rb });
     k = { a: dlg.id, b: ans.r.id };
     s = await until(A, (x) => x.rows.length === 1 && x.rows[0].word === 'Connected');
-    check('connected again: the loss is gone from the row, and the count is back', !!s && s.rows[0].why === null && s.count === '1 of 1 connected' && s.rows[0].buttons.length === 0, s && s.rows[0]);
+    check('connected again: the loss is gone from the row, and the count is back', !!s && s.rows[0].why === null && s.count === '1 of 1 connected' && s.rows[0].buttons.join() === 'Chat', s && s.rows[0]);
 
     // ---- 6b. giving a reconnect up from the popup
     await call(B.frame, 'p2p.close', { id: k.b });
@@ -207,9 +239,30 @@ const until = (P, pred, ms) => waitFor(async () => { const s = await seen(P); re
     check('and it never reached ready', !(await p2pEvents(A)).some((e) => e.type === 'state' && e.id === inv.r.id && e.state === 'ready'));
     check('and the other device hears the connection end', !!(await findP2p(B, 'state', (e) => e.id === ans2.r.id && e.state === 'closed')));
 
-    // ---- 7. signing out: nothing about anyone, and the record of endings goes
+    // ---- 6d. the session is about to end (the shell's idea of its end is moved: a real one lasts twelve hours)
+    await reopen(A);
+    await A.page.evaluate(() => { window.__realCurrent = window.keoIdentity.current; window.keoIdentity.current = () => window.__realCurrent().then((x) => x && Object.assign({}, x, { exp: new Date(Date.now() + 4 * 60000).toISOString() })); });
+    s = await until(A, (x) => x.pill === 'Ends soon');
+    check('four minutes left: an amber pill, a banner that says so, and the foot', !!s && /^Your session ends in [34] min\./.test(s.banner || '') && /^Session ends in [34] min/.test(s.foot), s && { pill: s.pill, banner: s.banner, foot: s.foot });
+    await A.pop.screenshot({ path: path.join(WORK, 'status-ending.png') });
+    // a long list, with that banner showing: the page must stay inside what a popup may be (about 600 px), the list scrolling in its own box
+    await A.page.evaluate(async () => { for (let i = 1; i <= 12; i++) await window.keoContacts.add('did:keo:zzzz:' + ('F' + i).padEnd(43, 'A'), 'Friend ' + i); });
+    s = await until(A, (x) => x.rows.length === 13);
+    check('thirteen friends: the page is no taller than a popup may be, and the list scrolls inside its own box', !!s && s.height <= 600 && s.listScrolls === true, s && { height: s.height, scrolls: s.listScrolls, rows: s.rows.length });
+    await A.pop.screenshot({ path: path.join(WORK, 'status-many.png') });
+    await A.page.evaluate(() => { window.keoIdentity.current = () => window.__realCurrent().then((x) => x && Object.assign({}, x, { exp: new Date(Date.now() - 1000).toISOString() })); });
+    s = await until(A, (x) => x.foot === 'Session ended');
+    check('a session whose end has passed says so', !!s && s.banner === 'Your session has ended.' && s.pill === 'Ends soon', s && { pill: s.pill, banner: s.banner, foot: s.foot });
+    await A.page.evaluate(() => { window.keoIdentity.current = window.__realCurrent; });
+
+    // ---- 7. signing out from the popup: nothing about anyone, and the record of endings goes
     check('before signing out the page remembers how connections ended', Object.keys((await A.page.evaluate(() => window.keoP2p.status())).ended).length > 0);
-    await call(A.frame, 'session.signOut');
+    await A.page.bringToFront(); await A.page.mouse.click(600, 400);          // the browser warns only on a page the person has used
+    const nd = dialogs.length;
+    s = await until(A, (x) => x.pill === 'Signed in' || x.pill === 'Ends soon');
+    await A.pop.locator('.link', { hasText: 'Sign out' }).click();
+    await sleep(3000);
+    check('Sign out in the popup raises no browser "Leave site?" warning', dialogs.slice(nd).filter((d) => d.type === 'beforeunload').length === 0, dialogs.slice(nd));
     await A.page.waitForLoadState('load').catch(() => {});
     s = await until(A, (x) => x.pill === 'Open' && /Nobody is signed in yet/.test(x.text));
     check('signed out (the keo tab still open): the popup says nobody is signed in and shows no name', !!s && s.rows.length === 0 && !/Maya|Jun/.test(s.text), s);
