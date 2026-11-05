@@ -236,6 +236,19 @@ module("lively.identity.MenuBarEntry")
           });
         },
 
+        // The person asked, in the toolbar popup, to reconnect to a friend: open the Connect a device window made for that friend (or
+        // bring the one already open for it forward). The shell has checked it is a friend; this only draws.
+        openReconnect: function openReconnect(did, name) {
+          if (typeof did !== "string") return;
+          var open = $world.submorphs.filter(function (m) { return m.name === "IdentityPeerDialog" && m._p && m._p.reconnect && m._p.reconnect.did === did && m._p.phase === "invited"; })[0];
+          if (open) return open.comeForward();
+          lively.require("lively.identity.PeerDialog").toRun(function () {
+            var d = lively.BuildSpec("lively.identity.PeerDialog").createMorph();
+            d.openInWorldCenter();
+            d.reconnectTo(did, name);
+          });
+        },
+
         // A direct connection to another device, and file sharing over it (inside keo only: the connection lives in its shell).
         openPeerDialog: function openPeerDialog() {
           lively.require("lively.identity.PeerDialog").toRun(function () {
@@ -486,6 +499,7 @@ module("lively.identity.MenuBarEntry")
         // and by onFromBuildSpecCreated when created fresh.
         onLoad: function onLoad() {
           var self = this;
+          this.listenForReconnect();
           var connect = function () {
             self.update();
             lively.bindings.connect(
@@ -509,6 +523,16 @@ module("lively.identity.MenuBarEntry")
 
         onFromBuildSpecCreated: function onFromBuildSpecCreated() {
           this.onLoad();
+          this.listenForReconnect();
+        },
+
+        // Once per page, whichever menu bar entry is made first (a flag on the window, not on the morph: a saved world must not
+        // carry "already listening" into a page that is not).
+        listenForReconnect: function listenForReconnect() {
+          var li = lively.identity.localIdentity, self = this;
+          if (!li || !li.isAvailable() || window.keoReconnectListening) return;
+          window.keoReconnectListening = true;
+          li.onReconnectRequest(function (ev) { if (ev && typeof ev.did === "string") self.openReconnect(ev.did, typeof ev.name === "string" ? ev.name : ""); });
         },
       }),
     );

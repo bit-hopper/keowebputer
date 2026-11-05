@@ -17,6 +17,9 @@
  * A file moves only after the receiving person says yes. A received file is kept by the shell, not by the world; Save hands it
  * to the browser's download. Closing the window disconnects (a connection with no window could not be seen or stopped).
  *
+ * A RECONNECT (reconnectTo) opens straight on the invitation, made for one friend: the shell closes the connection if the device
+ * that answers proves a different identity. The friend still pastes the invitation into their own Connect a device window.
+ *
  * The phases (this._p.phase): "start" (choose), "enter" (paste an invitation), "invited" (waiting for the answer),
  * "answered" (the answer is shown; waiting for the other side), "connected", "closed". Events from the shell come in through
  * onPeerEvent and only for this window's connection.
@@ -183,6 +186,9 @@ module("lively.identity.PeerDialog")
         var local = lively.identity.localIdentity;
         if (!local.isAvailable()) {
           label("Connecting devices needs keo webputer.");
+        } else if (p.reconnect && p.phase === "start") {
+          label("Making an invitation for " + p.reconnect.name + "…");
+          y += 8;
         } else if (p.phase === "start") {
           label("Connect to another device on this network. No server is involved.");
           label("Show as (optional), what the other device sees of you:");
@@ -200,15 +206,15 @@ module("lively.identity.PeerDialog")
           button("Back", "backBtn", pad, 80, "plain", "startOver");
           y += 32;
         } else if (p.phase === "invited") {
-          label("1. Send this invitation to the other device:");
+          label(p.reconnect ? "1. Send this invitation to " + p.reconnect.name + ":" : "1. Send this invitation to the other device:");
           codeBox(p.code, "codeBox");
           button("Copy", "copyCodeBtn", pad, 80, "plain", "copyCode");
           y += 32;
-          label("2. Paste its answer here:");
+          label(p.reconnect ? "2. Paste " + p.reconnect.name + "'s answer here:" : "2. Paste its answer here:");
           text("", 62, { input: true, mono: true, size: 9, name: "pasteBox" });
           y += 68;
           button("Connect", "connectBtn", pad + w - 100, 100, "main", "finishConnect");
-          button("Cancel", "cancelBtn", pad, 80, "plain", "startOver");
+          button("Cancel", "cancelBtn", pad, 80, "plain", p.reconnect ? "cancelReconnect" : "startOver");
           y += 32;
         } else if (p.phase === "answered") {
           label("Send this answer back to the first device:");
@@ -396,6 +402,28 @@ module("lively.identity.PeerDialog")
           self.render();
         });
       },
+
+      // Opens on an invitation for one friend (the toolbar popup's Reconnect). `name` is what the book calls the friend: text the
+      // friend chose, shown and never trusted. Who answers is still proved over the channel, and the shell closes the connection if
+      // it is not `did`.
+      reconnectTo: function reconnectTo(did, name) {
+        var self = this, p = this._p, li = lively.identity.localIdentity;
+        p.reconnect = { did: did, name: String(name || li.shortDid(did)) };
+        this.render();
+        li.session(function (err, s) {
+          if (!self.world()) return;
+          p.name = (s && s.label) || ""; p.nameTouched = true;
+          li.peerOfferFor(did, p.name, function (err2, r) {
+            if (!self.world()) return;
+            if (err2) { p.status = { msg: "Could not make an invitation: " + (err2.message || err2), isError: true }; return self.render(); }
+            p.id = r.id; p.code = r.code; p.phase = "invited"; p.status = null;
+            self.render();
+          });
+        });
+      },
+
+      // Giving up a reconnect closes the window, which closes the half-made connection (see remove).
+      cancelReconnect: function cancelReconnect() { this.remove(); },
 
       showEnter: function showEnter() {
         this._p.name = this._name();

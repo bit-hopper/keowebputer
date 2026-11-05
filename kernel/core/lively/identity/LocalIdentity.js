@@ -81,12 +81,15 @@ module("lively.identity.LocalIdentity")
       // chooses to show the other (the identity's label never leaves the device on its own); empty means none.
       //   peerOffer(name)               -> { id, code }
       //   peerAnswer(code, name)        -> { id, code }
+      //   peerOfferFor(did, name)       -> { id, code }   an invitation FOR one device (a reconnect to a friend): the connection is
+      //                                                  closed if the device that answers proves a different identity
       //   peerFinish(id, code)          -> { id }
       //   peerSend(id, file)            -> { fid }   a Blob/File; the other side must agree before a byte moves
       //   peerRespond(id, fid, accept)  -> true      answers an incoming offer
       //   peerCancel(id, fid), peerSave(id, fid) (a received file goes to the browser's download), peerClose(id), peerList()
       peerOffer: function peerOffer(name, thenDo) { this._run("p2p.offer", { name: name }, 60000, thenDo); },
       peerAnswer: function peerAnswer(code, name, thenDo) { this._run("p2p.answer", { code: code, name: name }, 60000, thenDo); },
+      peerOfferFor: function peerOfferFor(did, name, thenDo) { this._run("p2p.offer", { name: name, expect: did }, 60000, thenDo); },
       peerFinish: function peerFinish(id, code, thenDo) { this._run("p2p.finish", { id: id, code: code }, 60000, thenDo); },
       peerSend: function peerSend(id, file, thenDo) { this._run("p2p.send", { id: id, file: file }, 60000, thenDo); },
       peerRespond: function peerRespond(id, fid, accept, thenDo) { this._run("p2p.respond", { id: id, fid: fid, accept: !!accept }, 30000, thenDo); },
@@ -105,6 +108,14 @@ module("lively.identity.LocalIdentity")
       onPeerEvent: function onPeerEvent(fn) {
         if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
         return window.keo.on("p2p", fn);
+      },
+
+      // The person asked, in the toolbar popup, to reconnect to a friend: fn({ did, name }). The shell only says that it was asked (and
+      // checked that the device is a friend); the world opens the Connect a device window for it. Not queued: a world that is not up
+      // misses it. Returns a function that stops listening.
+      onReconnectRequest: function onReconnectRequest(fn) {
+        if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
+        return window.keo.on("reconnect", fn);
       },
 
       // ─── friends (shell/keo-friend.js, keo-contacts.js) ─────────────────────────
