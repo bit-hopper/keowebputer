@@ -127,7 +127,7 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
 
   // 4. shell page, the vault page and the manifest
   put('start.html', fs.readFileSync(path.join(SHELL, 'start.html')));
-  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-hello.js', 'keo-identity.js', 'keo-p2p.js', 'keo-callsdp.js', 'keo-identicon.js', 'keo-confirm.js', 'keo-call.js', 'keo-dm.js', 'keo-chatlog.js', 'keo-contacts.js', 'keo-wordlist.js', 'keo-fingerprint.js', 'keo-friend.js', 'keo-worlds.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
+  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-hello.js', 'keo-identity.js', 'keo-p2p.js', 'keo-callsdp.js', 'keo-identicon.js', 'keo-confirm.js', 'keo-call.js', 'keo-dm.js', 'keo-chatlog.js', 'keo-contacts.js', 'keo-wordlist.js', 'keo-fingerprint.js', 'keo-friend.js', 'keo-status.js', 'keo-worlds.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
   // The vault page as the server builds it (IdentityServer.js buildIdentityVaultPage), with the shell's origin as the one
   // app origin it will answer. Relative script paths: this page lives at the package root.
   put('vault.html', '<!DOCTYPE html><html><head><meta charset="utf-8">' +
@@ -141,10 +141,16 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
   if (fs.existsSync(updateKey)) put('update-key.json', fs.readFileSync(updateKey));
   else console.warn('no extension/update-key.json: this package will not take updates');
   put('keo-release.js', fs.readFileSync(path.join(SHELL, 'keo-release.js')));
-  put('bg.js', "chrome.action.onClicked.addListener(() => chrome.tabs.create({ url: chrome.runtime.getURL('start.html') }));\n");
+  // The toolbar icon opens a popup (popup.js) instead of a tab; a manifest popup and an onClicked handler cannot both be set, so
+  // there is no background worker. The popup shows the runtime's mascot from the snapshot, so the build checks it is there.
+  for (const f of ['popup.html', 'popup.css', 'popup.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
+  if (!fs.existsSync(path.join(OUT, 'core/media/face-masks/keo.png'))) throw new Error('core/media/face-masks/keo.png is missing from the snapshot: the popup draws it');
+  // The icon (toolbar, extensions page): the mascot on a round tile, drawn by make-icons.js and committed.
+  const ICON_SIZES = [16, 32, 48, 128], icons = {};
+  for (const n of ICON_SIZES) { icons[n] = 'icons/keo-' + n + '.png'; put(icons[n], fs.readFileSync(path.join(__dirname, 'icons', 'keo-' + n + '.png'))); }
   put('manifest.json', JSON.stringify({
     manifest_version: 3, name: 'keo (prototype)', version: VERSION, description: 'keo world from the package, no server. Prototype.',
-    key: der.toString('base64'), action: { default_title: 'keo' }, background: { service_worker: 'bg.js' },
+    key: der.toString('base64'), icons, action: { default_title: 'keo', default_popup: 'popup.html', default_icon: icons },
     sandbox: { pages: ['world.html'] },
     // Extension pages (shell, vault): the default script-src plus 'wasm-unsafe-eval', which libsodium's WebAssembly needs.
     // (The extension-page CSP is a separate setting from the sandbox one below.)

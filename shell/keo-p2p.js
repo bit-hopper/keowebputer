@@ -40,6 +40,10 @@
   var peers = {};                 // id -> connection
   var listener = null;
   var hooks = {};                 // message prefix -> the module that handles those messages (keo-call.js: 'call', keo-dm.js: 'dm'); see attach
+  // How the last connection to each PROVEN peer ended: DID -> { at, why, lost }. Kept in this page's memory only (so it ends with
+  // the page and with the session, see closeAll) and read by status() for the toolbar popup. A connection that closed before its
+  // peer had proven who it is has no DID and leaves no record.
+  var ended = {};
 
   function emit(ev) { if (listener) { try { listener(ev); } catch (e) {} } }
   function newId() { return kd.b64u(crypto.getRandomValues(new Uint8Array(9))); }
@@ -146,6 +150,7 @@
   function closeConn(c, why, lost) {
     if (c.state === 'closed') return;
     note(c, 'closed', (why || '(no reason)') + (lost ? ' [lost]' : '') + ' | ' + lastWord(c));
+    if (c.peerOk && c.peer) ended[c.peer.did] = { at: now(), why: String(why || '').slice(0, 200), lost: !!lost };
     Object.keys(hooks).forEach(function (k) { try { hooks[k].closed(handleOf(c), why, !!lost); } catch (e) {} });
     c.timers.forEach(clearTimeout);
     c.timers = [];
@@ -291,6 +296,7 @@
   }
   function maybeReady(c) {
     if (c.state === 'open' && c.peerOk && c.hiSent) {
+      c.readyAt = now();
       setState(c, 'ready');
       // Modules that have something to say as soon as the peer is proven (keo-friend.js: whether we have added it) are told here.
       Object.keys(hooks).forEach(function (k) { if (hooks[k].ready) { try { hooks[k].ready(handleOf(c)); } catch (e) {} } });
@@ -486,7 +492,18 @@
     return true;
   }
   function list() { return Object.keys(peers).map(function (k) { return view(peers[k]); }); }
-  function closeAll() { Object.keys(peers).forEach(function (k) { closeConn(peers[k], 'Closed here.'); }); }
+  // Only for the end of a session: what it knew about how connections ended goes with it.
+  function closeAll() { Object.keys(peers).forEach(function (k) { closeConn(peers[k], 'Closed here.'); }); ended = {}; }
+  // Plain data for the toolbar popup (keo-status.js): every connection whose peer has proven who it is, and how the last one to each
+  // peer ended. 'connected' is a friend on a ready connection; 'unconfirmed' is ready but not (yet) a friend either way round.
+  function status() {
+    return {
+      connections: Object.keys(peers).map(function (k) { return peers[k]; }).filter(function (c) { return c.peerOk && c.peer; }).map(function (c) {
+        return { did: c.peer.did, state: c.state === 'ready' ? (c.friend ? 'connected' : 'unconfirmed') : 'connecting', since: c.readyAt || null };
+      }),
+      ended: JSON.parse(JSON.stringify(ended))
+    };
+  }
 
   // ---- for keo-call.js (this page only) -------------------------------------------------------------------------------
   // What a call needs of a connection: the peer connection to add media to, the two DTLS fingerprints the proof was made over,
@@ -548,7 +565,7 @@
   }
 
   window.keoP2p = { offer: offer, answer: answer, finish: finish, send: send, respond: respond, cancel: cancel, save: save,
-    close: close, list: list, closeAll: closeAll, diag: diag, cleanName: cleanName, handle: handle, attach: attach, friendChanged: friendChanged, setTheirs: setTheirs, connectionsTo: connectionsTo,
+    close: close, list: list, closeAll: closeAll, status: status, diag: diag, cleanName: cleanName, handle: handle, attach: attach, friendChanged: friendChanged, setTheirs: setTheirs, connectionsTo: connectionsTo,
     // one listener, for the bridge: events are plain data
     onEvent: function (fn) { listener = fn; } };
 })();

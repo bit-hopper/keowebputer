@@ -12,7 +12,7 @@ keo is an unpacked browser extension with two realms:
 |---|---|---|
 | `shell/` | the extension's own page (trusted) | Holds the passkey ceremonies, the account secret, the keys and the persistent storage. Answers requests from the world over `postMessage` and only ever returns plain data. |
 | `world/` | a sandboxed iframe (untrusted) | Runs the LivelyKernel runtime. A bridge gives it `localStorage`, an IndexedDB stand-in, `navigator.credentials` and an identity API that are all backed by the shell. |
-| `extension/` | build time | `build.js` assembles the extension package from the files below. Also holds `refresh-kernel.js`, the boot-file list and the **pinned public key** (see below). |
+| `extension/` | build time | `build.js` assembles the extension package from the files below. Also holds `refresh-kernel.js`, the boot-file list, the toolbar icons (`icons/`, redrawn by `make-icons.js`) and the **pinned public key** (see below). |
 | `kernel/` | | Snapshot of the runtime's shipped files (see Building). Not edited by hand, except `THIRD-PARTY-NOTICES.md`. |
 | `tests/` | | Tests of the shell, the bridge and the built package. |
 
@@ -36,7 +36,7 @@ The runtime's files are in this repository: `kernel/` is a verbatim snapshot of 
 node extension/build.js dist
 ```
 
-The build writes `keo-build.json` into the package with the kernel commit the snapshot came from. Load `dist/` with *Load unpacked* in `chrome://extensions` (developer mode), click the toolbar icon, and the world opens.
+The build writes `keo-build.json` into the package with the kernel commit the snapshot came from. Load `dist/` with *Load unpacked* in `chrome://extensions` (developer mode), click the toolbar icon, and a small panel opens (`shell/popup.*`). It shows who is signed in and how each friend's connection is doing; its button opens keo in a tab, or brings the open one forward.
 
 To move the snapshot to a newer kernel commit, run `node extension/refresh-kernel.js --kernel <path to a clean kernel checkout>` (a checkout made with `git clone -c core.autocrlf=false`, with the kernel's own `npm install` done). It rewrites `kernel/` completely, including the boot bundle, which only the kernel's own code can generate; so a change to the runtime's code is made in the kernel and arrives here by a refresh. Files under `kernel/` are stored byte for byte (`.gitattributes`).
 
@@ -72,6 +72,8 @@ node tests/keo-peer-dialog-test.js . dist <work dir> # two browsers: the "Connec
 node tests/keo-friend-test.js . dist <work dir>      # two browsers: becoming friends through the shell's dialog, and that nothing else works before
 node tests/keo-call-test.js . dist <work dir>        # two browsers, a fake camera: calls answered by real clicks on the shell's panel, and a hostile world and peer
 node tests/keo-messages-test.js . dist <work dir>    # two browsers: Messages inside keo (real typing), and the Call button
+node tests/keo-popup-test.js    . dist <work dir>    # the toolbar popup page, by real clicks (opened in a tab: not the browser's own popup surface)
+node tests/keo-popup-status-test.js . dist <work dir> # two browsers: what the popup shows of the session and of each friend's connection
 node tests/keo-identity-real.js . dist <work dir>    # a REAL authenticator: you approve four OS prompts
 ```
 
