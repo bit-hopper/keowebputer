@@ -47,8 +47,30 @@
 
   var nextId = 1, pending = {};
 
+  // Calls that END by replacing this world frame or reloading the whole page: signing out, removing the identity that is signed in,
+  // and the sign-in landing ('enter'). The runtime's exit warning (Config.askBeforeQuit, which makes the browser ask "Leave site?")
+  // would stop each of them on a prompt the person did not cause. It is lifted only around such a call and put back two seconds
+  // after the call settles (a reload or a new world frame ends this page before then, so the new page starts with it on). Closing
+  // the tab, a reload by the person and every other move between pages keep the warning, and so does everything else the runtime
+  // does with it: the kernel switches it off the same way before its own redirects. While a removal waits for the person's
+  // confirmation the warning is lifted too: the world cannot tell whether it is the signed-in identity being removed.
+  function leavesPage(op, args) {
+    return op === 'session.signOut' || op === 'identity.remove' || (op === 'world.go' && !!args && args.kind === 'enter');
+  }
+  var lifts = 0, warningWas;
+  function liftExitWarning() {
+    try { var C = window.lively && window.lively.Config; if (C && lifts === 0) warningWas = C.askBeforeQuit; if (C) C.askBeforeQuit = false; } catch (e) {}
+    lifts++;
+  }
+  function restoreExitWarning() {
+    if (--lifts > 0) return;
+    try { var C = window.lively && window.lively.Config; if (C) C.askBeforeQuit = warningWas; } catch (e) {}
+  }
+
   function call(op, args, timeoutMs) {
-    return new Promise(function (resolve, reject) {
+    var leaving = leavesPage(op, args);
+    if (leaving) liftExitWarning();
+    var sent = new Promise(function (resolve, reject) {
       var id = nextId++;
       var timer = setTimeout(function () {
         delete pending[id];
@@ -57,6 +79,8 @@
       pending[id] = { resolve: resolve, reject: reject, timer: timer };
       parentWin.postMessage({ keo: 1, id: id, op: op, args: args || {} }, SHELL_ORIGIN);
     });
+    if (leaving) { var back = function () { setTimeout(restoreExitWarning, 2000); }; sent.then(back, back); }
+    return sent;
   }
 
   // Events the shell pushes without being asked ({keo:1, event, data}): window.keo.on(name, fn) -> a function that stops listening.
