@@ -103,6 +103,15 @@ module("lively.identity.LocalIdentity")
         });
       },
 
+      // ─── the library objects on this device (shell/keo-library.js) ─────────────────
+      // What the runtime's apps (Books, Music, Gallery) keep as small objects, when there is no host to keep them. FileCrypto calls
+      // these in place of the host's /@<handle>/<objId> routes while the session is local; nothing else should.
+      //   libGet(objId)        -> the stored document, or null when this identity has none under that id
+      //   libPut(objId, doc)   -> true; doc.objId must be objId and doc.did the signed-in identity; the shell stores it as it is
+      // Not here: pictures and files (no blob store yet), signatures, a version history, sync.
+      libGet: function libGet(objId, thenDo) { this._run("library.get", { objId: objId }, 30000, thenDo); },
+      libPut: function libPut(objId, doc, thenDo) { this._run("library.put", { objId: objId, doc: doc }, 30000, thenDo); },
+
       // ─── direct connections to another device (shell/keo-p2p.js) ────────────────
       // Two devices connect by swapping two short codes by hand (paste, or later a QR); no server is involved, so it works
       // between devices that can reach each other directly. peerOffer makes an invitation, the other device takes it with

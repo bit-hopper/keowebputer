@@ -40,6 +40,7 @@ module('lively.identity.FileCrypto')
     'lively.identity.WebAuthn',
     'lively.identity.DID',
     'lively.identity.WebKey',
+    'lively.identity.LocalIdentity',
   )
   .toRun(function () {
 
@@ -57,6 +58,22 @@ module('lively.identity.FileCrypto')
     Object.subclass('lively.identity.FileCrypto',
 
     'kek', {
+
+      _needsHost: 'Sharing needs a host: nothing on this device is shared with anybody.',
+
+      // True while the signed-in identity is a LOCAL one (keo: made and held on this device, no host). Then the envelopes this
+      // module builds are kept by the shell instead of PUT to a host (see _getEnvelope/_putEnvelope), they are not signed (a host
+      // checks signatures; there is none to check them), and a folder is stored as a 'public' one: no folder key, because the shell
+      // already seals everything it keeps under the identity, and nothing is shared with anybody. Sharing, and a folder's
+      // visibility, therefore need a host and are refused here (see the three guards below).
+      // Also true inside keo while nobody is signed in yet: a world that is opened again asks for its saved library before the
+      // session has reached it, and there is no host to ask, so that call goes to the shell, which says to sign in (the app tries
+      // again when the identity arrives) instead of sending a request nobody can answer.
+      _local: function () {
+        if (!(lively.identity.localIdentity && lively.identity.localIdentity.isAvailable())) return false;
+        var u = lively.identity.did.currentUser();
+        return !u || !!u.local;
+      },
 
       // Same withKek pattern as PostCardEditor._saveNowPrivate: reuse the
       // session's cached KEK, otherwise prompt once (this may show a
@@ -93,6 +110,9 @@ module('lively.identity.FileCrypto')
       // silently producing an unsigned envelope the server's mandatory
       // signature check is guaranteed to 403.
       _signEnvelopeIfPossible: function (envelope, user, c, thenDo) {
+        // A local identity has no DID document to look a signing method up in (reading user.document would throw here, in a
+        // callback, and the save would never answer).
+        if (this._local()) return thenDo(null, envelope);
         var method = lively.identity.did.findMethodByCredentialId(user.document, user.credentialId);
         if (!method || !method.lively) return thenDo(null, envelope);
         var livelyMeta = method.lively;
@@ -319,6 +339,9 @@ module('lively.identity.FileCrypto')
       },
 
       _putEnvelope: function (handle, envelope, thenDo) {
+        if (this._local()) {
+          return lively.identity.localIdentity.libPut(envelope.objId, envelope, function (err) { thenDo(err || null, { ok: true }); });
+        }
         var base = lively.identity.did.baseUrl();
         fetch(base + '/@' + handle + '/' + envelope.objId, {
           method: 'PUT',
@@ -745,6 +768,13 @@ module('lively.identity.FileCrypto')
       // needs the raw envelope first, whereas fetchAndDecrypt's fetch is
       // file-specific and already covered by its own test path.
       _getEnvelope: function (handle, objId, thenDo) {
+        if (this._local()) {
+          return lively.identity.localIdentity.libGet(objId, function (err, doc) {
+            if (err) return thenDo(err);
+            if (!doc) return thenDo(new Error('Could not fetch envelope (not on this device)'));
+            thenDo(null, doc);
+          });
+        }
         var base = lively.identity.did.baseUrl();
         fetch(base + '/@' + handle + '/' + objId, { credentials: 'include' })
           .then(function (res) {
@@ -844,7 +874,11 @@ module('lively.identity.FileCrypto')
         var user = lively.identity.did.currentUser();
         if (!user) return thenDo(new Error('createFolder: no identity session active'));
         opts = opts || {};
-        var isPublic = opts.visibility === 'public';
+        // On this device a folder is always stored the 'public' way (see _local): its contents are sealed by the shell, and a
+        // folder that is to be shared with somebody needs a host.
+        var local = self._local();
+        if (local && (opts.recipients || []).length) return thenDo(new Error(self._needsHost));
+        var isPublic = opts.visibility === 'public' || local;
         var recipients = opts.recipients || [];
         var albums = opts.albums || [];
 
@@ -1223,6 +1257,7 @@ module('lively.identity.FileCrypto')
       // Calls thenDo(null, { objId, dek }) — dek is null for 'public'.
       setFolderVisibility: function (handle, folderObjId, newVisibility, opts, thenDo) {
         if (typeof opts === 'function') { thenDo = opts; opts = {}; }
+        if (this._local()) return thenDo(new Error(this._needsHost));
         opts = opts || {};
         var self = this;
         var c = lively.identity.crypto;
@@ -1374,6 +1409,7 @@ module('lively.identity.FileCrypto')
       // recipients: [{ did, x25519PublicKey }]. Calls thenDo(null, { objId, added }).
       shareFolder: function (handle, folderObjId, recipients, thenDo) {
         var self = this;
+        if (self._local()) return thenDo(new Error(self._needsHost));
         var c = lively.identity.crypto;
         self.fetchFolder(handle, folderObjId, function (err, folder) {
           if (err) return thenDo(err);
@@ -1414,6 +1450,7 @@ module('lively.identity.FileCrypto')
       // invalidate a dek they already obtained.
       revokeFolderRecipient: function (handle, folderObjId, did, thenDo) {
         var self = this;
+        if (self._local()) return thenDo(new Error(self._needsHost));
         self.fetchFolder(handle, folderObjId, function (err, folder) {
           if (err) return thenDo(err);
           if (!folder.isOwner) return thenDo(new Error('revokeFolderRecipient: only the owner can revoke access'));

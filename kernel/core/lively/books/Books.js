@@ -376,6 +376,13 @@ module("lively.books.Books")
           if (typeof lively === "undefined" || !lively.identity || !lively.identity.did) return null;
           return lively.identity.did.currentUser();
         },
+        // True while the signed-in identity is a local one (keo, no host). The library is then this person's own, kept on this
+        // device by FileCrypto: nothing is public or shared, reviews (which live on a host) are not offered, and a book is added by
+        // hand, because a search sends what was typed to other services and that is not done on a person's behalf.
+        _isLocal: function () {
+          var u = this._currentUser();
+          return !!(u && u.local);
+        },
         // Same gotcha/fix as Gallery.js's _worldName — $world.name is NOT
         // kept in sync with the real assigned display name; the actual
         // source of truth is document.title (IdentityServer.js's
@@ -543,6 +550,7 @@ module("lively.books.Books")
           this._dom.listChipRow = this._el("div", "chip-row", listsSection);
 
           var reviewsSection = this._el("div", "detail-section", body);
+          this._dom.reviewsSection = reviewsSection;
           var reviewsHdr = this._el("div", "reviews-hdr", reviewsSection);
           this._text("div", "detail-section-label", "Reviews & Notes", reviewsHdr);
           this._dom.detailPrivacyBtn = this._text("button", "privacy-pill", "", reviewsHdr);
@@ -589,7 +597,18 @@ module("lively.books.Books")
           queryInput.type = "text";
           queryInput.placeholder = "Search by title or author…";
           queryInput.addEventListener("input", function () { self._onAddQueryInput(queryInput.value); });
+          queryInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && self._isLocal()) self._addTypedBook(); });
           this._dom.addQueryInput = queryInput;
+
+          // Only shown for a local identity (see _isLocal): the book is typed in, title above and author here.
+          var authorInput = this._el("input", "input", box);
+          authorInput.type = "text";
+          authorInput.placeholder = "Author…";
+          authorInput.style.marginTop = "8px";
+          authorInput.style.display = "none";
+          authorInput.addEventListener("input", function () { self.state.addAuthor = authorInput.value; self.state.addResults = []; self._lastSearch = null; self._renderAddResults(); });
+          authorInput.addEventListener("keydown", function (e) { if (e.key === "Enter") self._addTypedBook(); });
+          this._dom.addAuthorInput = authorInput;
 
           this._dom.addHint = this._text("div", "add-hint", "Searching Google Books and Open Library…", box);
           this._dom.addResultsEl = this._el("div", null, box);
@@ -807,7 +826,9 @@ module("lively.books.Books")
           this.state.addOpen = true;
           this.state.addQuery = "";
           this.state.addResults = [];
+          this.state.addAuthor = "";
           this._dom.addQueryInput.value = "";
+          this._dom.addAuthorInput.value = "";
           this._renderAddModal();
         },
         _closeAddModal: function () {
@@ -816,29 +837,40 @@ module("lively.books.Books")
         },
         _onAddQueryInput: function (value) {
           this.state.addQuery = value;
+          if (this._isLocal()) { this.state.addResults = []; this._lastSearch = null; this._renderAddResults(); return; }
           var self = this;
           clearTimeout(this._addSearchTimer);
           var q = value.trim();
           if (!q) { this.state.addResults = []; this._renderAddResults(); return; }
           this._addSearchTimer = setTimeout(function () { self._searchBooks(q); }, 400);
         },
+        // For a local identity: what was typed (title, then author), sent to Open Library only when the person presses the button.
+        _searchOnline: function () {
+          var t = this._typedBook();
+          if (!t) return;
+          this._searchBooks((t.title + (t.author !== "Unknown" ? " " + t.author : "")).trim());
+        },
         _searchBooks: function (q) {
           var self = this;
+          var local = this._isLocal();
+          this._lastSearch = q;
           this.state.addSearching = true;
+          if (local) this.state.addResults = [];
           this._renderAddResults();
           var merged = [];
-          var remaining = 2;
+          var remaining = local ? 1 : 2;
           function done() {
             if (--remaining === 0) {
               self.state.addSearching = false;
-              if (self.state.addQuery.trim() === q) {
+              if (local ? self._lastSearch === q : self.state.addQuery.trim() === q) {
                 self.state.addResults = merged;
                 self._renderAddResults();
               }
             }
           }
 
-          fetch("/nodejs/GoogleBooksProxyServer/search?q=" + encodeURIComponent(q) + "&maxResults=8", { credentials: "include" })
+          // Google Books is reached through the host's proxy, which a local identity has none of.
+          if (!local) fetch("/nodejs/GoogleBooksProxyServer/search?q=" + encodeURIComponent(q) + "&maxResults=8", { credentials: "include" })
             .then(function (r) { return r.ok ? r.json() : { items: [] }; })
             .then(function (data) {
               (data.items || []).forEach(function (it) {
@@ -876,12 +908,22 @@ module("lively.books.Books")
               });
             }).catch(function () {}).then(done);
         },
+        // The book typed into the Add box of a local identity: a title, and an author if there is one.
+        _typedBook: function () {
+          var title = (this.state.addQuery || "").trim();
+          if (!title) return null;
+          return { title: title, author: (this.state.addAuthor || "").trim() || "Unknown", description: "", isbn: null, coverUrl: null, coverSource: null };
+        },
+        _addTypedBook: function () {
+          var b = this._typedBook();
+          if (b) this._addBookFromResult(b);
+        },
         _addBookFromResult: function (result) {
           var self = this;
           var data = {
             title: result.title, author: result.author, shelf: "want", rating: 0,
             description: result.description, coverUrl: result.coverUrl, coverSource: result.coverSource,
-            isbn: result.isbn, isPublic: true,
+            isbn: result.isbn, isPublic: !this._isLocal(),
           };
           lively.identity.fileCrypto.createBook(data, function (err, created) {
             if (err) { console.warn("[Books] could not create book:", err.message); return; }
@@ -909,7 +951,7 @@ module("lively.books.Books")
           this.state.commentDraft = "";
           this._dom.commentInput.value = "";
           this._renderDetailModal();
-          this._loadComments(objId);
+          if (!this._isLocal()) this._loadComments(objId);
         },
         _closeBook: function () {
           this.state.detailObjId = null;
@@ -1224,9 +1266,9 @@ module("lively.books.Books")
             var active = self.state.filterType === "list" && self.state.filterKey === l.objId;
             var item = self._el("button", active ? "side-item is-active" : "side-item", listRow);
             self._text("span", "side-name", l.name, item);
-            var badge = self._text("span", "vis-badge " + l.visibility, VIS_LABEL[l.visibility], item);
+            if (!self._isLocal()) self._text("span", "vis-badge " + l.visibility, VIS_LABEL[l.visibility], item);
             item.addEventListener("click", function () { self._setFilter("list", l.objId); });
-            item.title = l.name + " · " + VIS_LABEL[l.visibility];
+            item.title = self._isLocal() ? l.name : l.name + " · " + VIS_LABEL[l.visibility];
           });
 
           this._dom.newListBtn.style.display = this.state.isOwner ? "" : "none";
@@ -1246,11 +1288,14 @@ module("lively.books.Books")
               if (e.key === "Escape") self._cancelNewList();
             });
 
-            var visRow = this._el("div", "newlist-vis-row", form);
-            ["private", "shared", "public"].forEach(function (v) {
-              var b = self._text("button", self.state.newListVisibility === v ? "btn btn-outline is-active" : "btn btn-outline", VIS_LABEL[v], visRow);
-              b.addEventListener("click", function () { self._setNewListVisibility(v); });
-            });
+            // A local identity shares nothing, so there is no visibility to choose (FileCrypto stores the list for this device).
+            if (!this._isLocal()) {
+              var visRow = this._el("div", "newlist-vis-row", form);
+              ["private", "shared", "public"].forEach(function (v) {
+                var b = self._text("button", self.state.newListVisibility === v ? "btn btn-outline is-active" : "btn btn-outline", VIS_LABEL[v], visRow);
+                b.addEventListener("click", function () { self._setNewListVisibility(v); });
+              });
+            }
 
             if (this.state.newListVisibility === "shared") {
               var shareWrap = this._el("div", null, form);
@@ -1298,7 +1343,7 @@ module("lively.books.Books")
           this._dom.selectionTitle.textContent = filterList ? filterList.name : SHELF_LABELS[this.state.filterKey] || "All Books";
           this._dom.selectionCount.textContent = list.length + (list.length === 1 ? " book" : " books");
 
-          if (filterList && this.state.isOwner) {
+          if (filterList && this.state.isOwner && !this._isLocal()) {
             this._dom.listPrivacyBtn.style.display = "";
             this._dom.listPrivacyBtn.textContent = VIS_LABEL[filterList.visibility];
             this._dom.listPrivacyBtn.className = "privacy-pill vis-badge " + filterList.visibility;
@@ -1397,7 +1442,7 @@ module("lively.books.Books")
           this._clear(this._dom.listChipRow);
           this.state.lists.forEach(function (l) {
             var member = l.bookEntries.some(function (e) { return e.bookObjId === book.objId; });
-            var chip = self._text("button", member ? "btn btn-outline is-active" : "btn btn-outline", l.name + " · " + VIS_LABEL[l.visibility], self._dom.listChipRow);
+            var chip = self._text("button", member ? "btn btn-outline is-active" : "btn btn-outline", self._isLocal() ? l.name : l.name + " · " + VIS_LABEL[l.visibility], self._dom.listChipRow);
             chip.style.fontSize = "11.5px";
             if (!self.state.isOwner) chip.disabled = true;
             chip.addEventListener("click", function () { self._toggleBookInList(l.objId); });
@@ -1448,6 +1493,7 @@ module("lively.books.Books")
           this._dom.commentForm.style.display = canSeeReviews ? "" : "none";
           if (!canSeeReviews) this._text("div", "text-faint", "Reviews & notes aren't visible here.", this._dom.commentList);
 
+          this._dom.reviewsSection.style.display = this._isLocal() ? "none" : "";
           this._dom.deleteBtn.style.display = this.state.isOwner ? "" : "none";
         },
 
@@ -1461,8 +1507,35 @@ module("lively.books.Books")
 
         _renderAddResults: function () {
           var self = this;
-          this._dom.addHint.textContent = this.state.addSearching ? "Searching…" : "Searching Google Books and Open Library…";
+          var local = this._isLocal();
+          this._dom.addAuthorInput.style.display = local ? "" : "none";
+          this._dom.addQueryInput.placeholder = local ? "Title…" : "Search by title or author…";
           this._clear(this._dom.addResultsEl);
+          if (local) {
+            this._dom.addHint.textContent = this.state.addSearching
+              ? "Searching Open Library…"
+              : "Type the title and author to add a book by hand. Nothing leaves this device unless you press Search Open Library, which sends what you typed to openlibrary.org. A book you add from there is copied to this device.";
+            var typed = this._typedBook();
+            if (typed) {
+              var trow = this._el("div", "add-result", this._dom.addResultsEl);
+              var tcover = this._el("div", "add-result-cover", trow);
+              tcover.style.background = this._coverColorFor(typed.title);
+              var tcol = this._el("div", null, trow);
+              tcol.style.flex = "1"; tcol.style.minWidth = "0";
+              this._text("div", "add-result-title", typed.title, tcol);
+              this._text("div", "add-result-author", typed.author, tcol);
+              var tadd = this._text("button", "btn btn-primary", "Add", trow);
+              tadd.style.flexShrink = "0";
+              tadd.addEventListener("click", function () { self._addTypedBook(); });
+            }
+            var sbtn = this._text("button", "btn btn-outline", "Search Open Library", this._dom.addResultsEl);
+            sbtn.style.margin = "10px 0";
+            sbtn.disabled = !typed || !!this.state.addSearching;
+            sbtn.title = "Sends what you typed to openlibrary.org";
+            sbtn.addEventListener("click", function () { self._searchOnline(); });
+          } else {
+            this._dom.addHint.textContent = this.state.addSearching ? "Searching…" : "Searching Google Books and Open Library…";
+          }
           this.state.addResults.forEach(function (item) {
             var row = self._el("div", "add-result", self._dom.addResultsEl);
             var cover = self._el("div", "add-result-cover", row);
@@ -1478,6 +1551,7 @@ module("lively.books.Books")
             self._text("div", "add-result-src", "via " + (item.coverSource === "google" ? "Google Books" : "Open Library"), col);
             var addBtn = self._text("button", "btn btn-primary", "Add", row);
             addBtn.style.flexShrink = "0";
+            if (local) addBtn.title = "Copies this book's details to your library on this device";
             addBtn.addEventListener("click", function () { self._addBookFromResult(item); });
           });
         },

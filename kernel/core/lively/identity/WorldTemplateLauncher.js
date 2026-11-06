@@ -178,6 +178,16 @@ module("lively.identity.WorldTemplateLauncher")
       // action: fetch the existing envelope for the prevCid chain, sign,
       // PUT in place.
       _saveCurrentWorld: function _saveCurrentWorld() {
+        // A local identity (keo, no host) has no /@handle/objId address to PUT to. Its worlds are saved on this device by the
+        // runtime's own save, which keo routes to the shell, so that is what is called here: the apps ask for this once their
+        // backing store exists (Books: its library folder), and the id has to be in the saved world or the next opening
+        // would make another.
+        var local = lively.identity.did.currentUser();
+        if (local && local.local) {
+          var w = lively.morphic.World.current();
+          if (w && w.saveWorld) w.saveWorld(function () {});
+          return;
+        }
         var parsed = lively.identity.webKey.parseObjectUrl(window.location.href);
         if (!parsed || !parsed.objId) return;
         var user = lively.identity.did.currentUser();

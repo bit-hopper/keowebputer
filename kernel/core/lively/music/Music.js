@@ -357,6 +357,13 @@ module("lively.music.Music")
           if (typeof lively === "undefined" || !lively.identity || !lively.identity.did) return null;
           return lively.identity.did.currentUser();
         },
+        // True while the signed-in identity is a local one (keo, no host). The library is then this person's own, kept on this
+        // device by FileCrypto: nothing is public or shared, there are no reviews or link embeds (they need a host), an album is added
+        // by hand, and the catalogue is searched only when the person presses "Search online".
+        _isLocal: function () {
+          var u = this._currentUser();
+          return !!(u && u.local);
+        },
         // $world.name isn't kept in sync with the assigned display name;
         // document.title is the real source of truth (see Books.js).
         _worldName: function () {
@@ -560,6 +567,23 @@ module("lively.music.Music")
           input.style.cssText = "padding-left:42px; height:46px";
           input.addEventListener("input", function () { self._onAddQuery(input.value); });
           this._dom.addInput = input;
+          // Only shown for a local identity (see _isLocal): the album typed in by hand, the title being the box above.
+          var extra = this._el("div", null, dlg);
+          extra.style.cssText = "display:none; flex-wrap:wrap; gap:8px; margin-top:10px";
+          this._dom.addExtra = extra;
+          var artistIn = this._el("input", null, extra);
+          artistIn.type = "text"; artistIn.placeholder = "Artist…"; artistIn.style.flex = "2 1 200px";
+          artistIn.addEventListener("input", function () { self.state.addArtist = artistIn.value; self._clearOnlineResults(); self._renderAddResults(); });
+          this._dom.addArtist = artistIn;
+          var yearIn = this._el("input", null, extra);
+          yearIn.type = "text"; yearIn.placeholder = "Year"; yearIn.style.flex = "0 1 90px";
+          yearIn.addEventListener("input", function () { self.state.addYear = yearIn.value; });
+          this._dom.addYear = yearIn;
+          var tracksIn = this._el("textarea", null, extra);
+          tracksIn.placeholder = "Tracks, one per line (optional)"; tracksIn.rows = 4;
+          tracksIn.style.cssText = "flex:1 1 100%; padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:var(--surf); color:var(--text); font:inherit; resize:vertical";
+          tracksIn.addEventListener("input", function () { self.state.addTracks = tracksIn.value; });
+          this._dom.addTracks = tracksIn;
           this._dom.addResults = this._el("div", null, dlg);
         },
 
@@ -859,7 +883,7 @@ module("lively.music.Music")
             objId: folder.objId,
             libraryPointerId: pointerId,
             name: folder.name,
-            visibility: folder.envelope.visibility,
+            visibility: this._isLocal() ? "private" : folder.envelope.visibility,
             recipients: (folder.envelope.record.recipients || []).map(function (r) { return r.did; }),
             entries: folder.files.filter(function (f) { return f.type === "track"; }),
             wantShared: false,
@@ -1169,7 +1193,7 @@ module("lively.music.Music")
             }
             var data = {
               title: cat.title, artist: cat.artist, year: cat.year, coverUrl: cat.coverUrl, coverSource: "itunes",
-              ids: { itunes: cat.catalogId }, storeUrl: cat.storeUrl, tracks: tracks, shelf: shelf, rating: 0, isPublic: true,
+              ids: { itunes: cat.catalogId }, storeUrl: cat.storeUrl, tracks: tracks, shelf: shelf, rating: 0, isPublic: !self._isLocal(),
             };
             lively.identity.fileCrypto.createAlbum(data, function (err1, created) {
               if (err1) { self.state.addingKey = null; self._toast("Couldn't save: " + err1.message); self._renderAddResults(); return; }
@@ -1458,7 +1482,9 @@ module("lively.music.Music")
           this.state.addSongs = [];
           this.state.addError = "";
           this.state.addPick = null;
+          this.state.addArtist = ""; this.state.addYear = ""; this.state.addTracks = ""; this.state.addSearched = false;
           this._dom.addInput.value = "";
+          this._dom.addArtist.value = ""; this._dom.addYear.value = ""; this._dom.addTracks.value = "";
           this._renderAdd();
           this._dom.addInput.focus();
         },
@@ -1466,9 +1492,49 @@ module("lively.music.Music")
           this.state.addOpen = false;
           this._renderAdd();
         },
+        // The results of an online search belong to what was typed when it was pressed; typing more clears them.
+        _clearOnlineResults: function () {
+          this._searchSeq++;
+          this.state.addAlbums = []; this.state.addSongs = []; this.state.addSearching = false; this.state.addError = ""; this.state.addSearched = false;
+        },
+        // For a local identity: what was typed (album, then artist), sent to the catalogue only when the person presses the button.
+        _searchOnline: function () {
+          var s = this.state;
+          var q = ((s.addQ || "").trim() + " " + (s.addArtist || "").trim()).trim();
+          if (!q) return;
+          s.addSearched = true;
+          this._searchCatalog(q);
+        },
+        // An album typed in, filed on a shelf: title from the Add box, artist, year, and tracks one per line. Nothing is fetched.
+        _addAlbumByHand: function (shelf) {
+          var self = this, s = this.state;
+          var title = (s.addQ || "").trim();
+          if (!title || !s.isOwner || s.addingKey) return;
+          var year = parseInt((s.addYear || "").trim(), 10);
+          var tracks = (s.addTracks || "").split("\n").map(function (l) { return l.trim(); }).filter(Boolean).slice(0, 200)
+            .map(function (t, i) { return { n: i + 1, title: t, durationMs: 0, previewUrl: null, ids: {} }; });
+          var data = { title: title, artist: (s.addArtist || "").trim() || "Unknown", year: isNaN(year) ? null : year, coverUrl: null, coverSource: null,
+            ids: {}, storeUrl: null, tracks: tracks, shelf: shelf, rating: 0, isPublic: false };
+          s.addingKey = "hand";
+          lively.identity.fileCrypto.createAlbum(data, function (err1, created) {
+            if (err1) { s.addingKey = null; self._toast("Couldn't save: " + err1.message); return; }
+            self._serial(self.musicLibraryObjId, function (done) {
+              lively.identity.fileCrypto.addPointerToFolder(self.musicLibraryHandle, self.musicLibraryObjId, { refType: "album", refObjId: created.objId }, function (err2, ptr) {
+                done();
+                s.addingKey = null;
+                if (err2) { self._toast("Couldn't add to library: " + err2.message); return; }
+                s.albums.unshift(Object.assign({ objId: created.objId, libraryPointerId: ptr.id }, data));
+                s.addOpen = false;
+                self._toast("Added to " + SHELF_LABELS[shelf]);
+                self._renderAll();
+              });
+            });
+          });
+        },
         _onAddQuery: function (value) {
           var self = this;
           this.state.addQ = value;
+          if (this._isLocal()) { this._clearOnlineResults(); this._renderAddResults(); return; }
           clearTimeout(this._addSearchTimer);
           var q = value.trim();
           this._searchSeq++;
@@ -1512,7 +1578,7 @@ module("lively.music.Music")
           this.state.commentDraft = "";
           this._dom.dRevInput.value = "";
           this._renderAlbum();
-          this._loadComments(objId);
+          if (!this._isLocal()) this._loadComments(objId);
         },
         _closeAlbum: function () {
           this.state.albumOpen = null;
@@ -1914,7 +1980,7 @@ module("lively.music.Music")
           this._dom.titleEl.textContent = this._worldName();
           var handle = this.musicLibraryHandle;
           var parts = [];
-          if (handle) parts.push("@" + handle);
+          if (handle && !this._isLocal()) parts.push("@" + handle);
           if (s.loaded) {
             var showAlbums = this._canSeeLibrary();
             if (showAlbums) parts.push(s.albums.length + (s.albums.length === 1 ? " album" : " albums"));
@@ -1929,8 +1995,9 @@ module("lively.music.Music")
           var pub = this._libPublic();
           this._dom.libBtn.firstChild.textContent = pub ? "public" : "lock";
           this._dom.libBtnLabel.textContent = "Library: " + (pub ? "Public" : "Private");
-          this._dom.libBtn.style.display = s.isOwner ? "" : "none";
+          this._dom.libBtn.style.display = s.isOwner && !this._isLocal() ? "" : "none";
           this._dom.addBtn.style.display = s.isOwner ? "" : "none";
+          this._dom.pbEmbedBtn.style.display = this._isLocal() ? "none" : "";
           this._renderLibMenu();
         },
 
@@ -2009,6 +2076,7 @@ module("lively.music.Music")
               if (e.key === "Escape") { s.newPlOpen = false; self._renderSide(); }
             });
             this._dom.newPlInput = input;
+            if (!this._isLocal()) {
             var vrow = this._el("div", null, form);
             vrow.style.cssText = "display:flex; flex-wrap:wrap; gap:6px";
             ["private", "public"].forEach(function (v) {
@@ -2017,6 +2085,7 @@ module("lively.music.Music")
             });
             var hint = this._text("div", null, "Share with specific people after it's created.", form);
             hint.style.cssText = "font-size:11.5px; color:var(--faint)";
+            }
             var brow = this._el("div", null, form);
             brow.style.cssText = "display:flex; gap:8px";
             this._btn("btn acc sm", "Create", null, brow, function () { self._confirmNewPlaylist(); });
@@ -2081,7 +2150,7 @@ module("lively.music.Music")
             box.style.maxWidth = "460px";
             var t = this._text("div", "display", "Nothing on this shelf yet", box);
             t.style.cssText = "font-size:20px; font-weight:700";
-            var d = this._text("div", null, s.isOwner ? "Search the catalog and file albums here as you hear them." : "Nothing here yet.", box);
+            var d = this._text("div", null, s.isOwner ? (this._isLocal() ? "Add an album by hand, or search the catalog, and file it here as you hear it." : "Search the catalog and file albums here as you hear them.") : "Nothing here yet.", box);
             d.style.cssText = "color:var(--mute); margin-top:6px";
             if (s.isOwner) {
               var b = this._btn("btn acc", "Add music", "add", box, function () { self._openAdd(); });
@@ -2156,16 +2225,18 @@ module("lively.music.Music")
           h1.style.cssText = "margin:4px 0 12px; font-size:44px; letter-spacing:-.015em; line-height:1.05";
           var meta = this._el("div", null, col);
           meta.style.cssText = "display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px";
-          var vis = pl.visibility;
-          var chip = this._el(owner ? "button" : "span", "vis", meta);
-          chip.style.background = VIS_COLOR[vis];
-          if (owner) chip.type = "button";
-          this._icon(VIS_ICON[vis], 16, chip);
-          chip.appendChild(document.createTextNode(VIS_LABEL[vis]));
-          if (owner) {
-            this._icon("expand_more", 16, chip);
-            chip.setAttribute("aria-expanded", s.visMenuOpen ? "true" : "false");
-            chip.addEventListener("click", function () { s.visMenuOpen = !s.visMenuOpen; self._renderMain(); });
+          if (!this._isLocal()) {
+            var vis = pl.visibility;
+            var chip = this._el(owner ? "button" : "span", "vis", meta);
+            chip.style.background = VIS_COLOR[vis];
+            if (owner) chip.type = "button";
+            this._icon(VIS_ICON[vis], 16, chip);
+            chip.appendChild(document.createTextNode(VIS_LABEL[vis]));
+            if (owner) {
+              this._icon("expand_more", 16, chip);
+              chip.setAttribute("aria-expanded", s.visMenuOpen ? "true" : "false");
+              chip.addEventListener("click", function () { s.visMenuOpen = !s.visMenuOpen; self._renderMain(); });
+            }
           }
           var total = this._entryTotalSeconds(items);
           this._text("span", null, items.length + (items.length === 1 ? " track" : " tracks") + (items.length ? " · " + fmtTime(total) : ""), meta).style.cssText = "color:var(--mute); font-size:13.5px";
@@ -2202,6 +2273,22 @@ module("lively.music.Music")
           }
 
           if (s.exportOpen) this._renderExportPanel(main, pl);
+          if (owner && this._isLocal()) {
+            // a track typed in: its title, and an artist if there is one (an album's tracks and a catalogue search are the other ways in)
+            var tform = this._el("div", null, main);
+            tform.style.cssText = "display:flex; flex-wrap:wrap; gap:8px; margin-top:20px; max-width:560px";
+            var ti = this._el("input", null, tform);
+            ti.type = "text"; ti.placeholder = "Track title"; ti.style.flex = "2 1 180px";
+            var ai = this._el("input", null, tform);
+            ai.type = "text"; ai.placeholder = "Artist"; ai.style.flex = "1 1 140px";
+            var addTyped = function () {
+              var t = ti.value.trim();
+              if (!t) return;
+              self._addTracksToPlaylist(pl, [{ title: t, artist: ai.value.trim() || "Unknown", albumTitle: "", coverUrl: null, previewUrl: null, durationMs: 0, ids: {} }]);
+            };
+            [ti, ai].forEach(function (inp) { inp.addEventListener("keydown", function (e) { if (e.key === "Enter") addTyped(); }); });
+            this._btn("btn", "Add track", "add", tform, addTyped, 18).style.height = "42px";
+          }
           if (owner && (pl.visibility === "shared" || (pl.wantShared && pl.visibility !== "public"))) this._renderSharePanel(main, pl);
 
           var list = this._el("div", null, main);
@@ -2327,7 +2414,7 @@ module("lively.music.Music")
           var h = this._text("h2", null, album.title, info);
           h.style.cssText = "margin:4px 0 2px; font-size:38px; letter-spacing:-.015em; line-height:1.05; padding-right:44px";
           this._text("div", null, album.artist, info).style.cssText = "font-size:17px; color:var(--mute)";
-          this._text("div", null, "Catalog snapshot taken when added · " + (album.tracks || []).length + " tracks", info).style.cssText = "margin-top:6px; font-size:12.5px; color:var(--faint)";
+          this._text("div", null, (album.coverSource === "itunes" ? "Catalog snapshot taken when added" : "Added by hand") + " · " + (album.tracks || []).length + " tracks", info).style.cssText = "margin-top:6px; font-size:12.5px; color:var(--faint)";
 
           var shelfRow = this._el("div", null, info);
           shelfRow.setAttribute("role", "group");
@@ -2396,6 +2483,13 @@ module("lively.music.Music")
           var canSee = owner || album.isPublic !== false;
           var user = this._currentUser();
 
+          if (this._isLocal()) {
+            this._clear(this._dom.dRevHead);
+            this._clear(this._dom.dRevList);
+            this._dom.dRevForm.style.display = "none";
+            this._dom.dRevNote.textContent = "";
+            return;
+          }
           var head = this._dom.dRevHead;
           this._clear(head);
           this._text("h3", null, "Reviews & notes", head).style.fontSize = "20px";
@@ -2442,8 +2536,30 @@ module("lively.music.Music")
         },
 
         _renderAdd: function () {
+          var local = this._isLocal();
           this._dom.addScrim.style.display = this.state.addOpen ? "" : "none";
+          this._dom.addExtra.style.display = local ? "flex" : "none";
+          this._dom.addInput.placeholder = local ? "Album title…" : "Search albums, songs, artists…";
           this._renderAddResults();
+        },
+
+        // The local Add box: file the typed album on a shelf, or press Search online (which says where it sends the text).
+        _renderAddByHand: function (box, q) {
+          var self = this, s = this.state;
+          var note = this._text("div", null, "Type the album and its artist to add it by hand. Nothing leaves this device unless you press Search online, which sends what you typed to Apple's music catalogue (itunes.apple.com). An album you add from there is copied to this device.", box);
+          note.style.cssText = "margin-top:12px; font-size:12.5px; color:var(--mute)";
+          var row = this._el("div", null, box);
+          row.style.cssText = "display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px";
+          this._text("span", null, "Add by hand, on:", row).style.cssText = "font-size:13px; color:var(--mute)";
+          SHELF_KEYS.forEach(function (k) {
+            var b = self._btn("pill", SHELF_LABELS[k], SHELF_ICONS[k], row, function () { self._addAlbumByHand(k); }, 16);
+            b.disabled = !q;
+          });
+          var srow = this._el("div", null, box);
+          srow.style.marginTop = "12px";
+          var sb = this._btn("btn", "Search online", "search", srow, function () { self._searchOnline(); }, 18);
+          sb.disabled = !q || !!s.addSearching;
+          sb.title = "Sends what you typed to itunes.apple.com";
         },
 
         _renderAddResults: function () {
@@ -2453,6 +2569,9 @@ module("lively.music.Music")
           this._clear(box);
           if (!s.addOpen) return;
           var q = (s.addQ || "").trim();
+          var local = this._isLocal();
+          if (local) this._renderAddByHand(box, q);
+          if (local && !s.addSearched) return;
 
           if (!q) {
             var hint = this._el("div", null, box);
@@ -2733,16 +2852,18 @@ module("lively.music.Music")
             input.disabled = saving;
             input.addEventListener("input", function () { if (g0) s.importNames[g0.key] = input.value; });
           }
-          var vis = this._el("span", null, row);
-          vis.setAttribute("role", "group");
-          vis.setAttribute("aria-label", "Visibility");
-          vis.style.cssText = "display:inline-flex; flex-wrap:wrap; gap:6px";
-          ["private", "public"].forEach(function (v) {
-            var on = s.importVis === v;
-            var b = self._btn("pill" + (on ? " on" : ""), VIS_LABEL[v], VIS_ICON[v], vis, function () { s.importVis = v; self._renderImportSave(); }, 14);
-            b.setAttribute("aria-pressed", on ? "true" : "false");
-            b.disabled = saving;
-          });
+          if (!this._isLocal()) {
+            var vis = this._el("span", null, row);
+            vis.setAttribute("role", "group");
+            vis.setAttribute("aria-label", "Visibility");
+            vis.style.cssText = "display:inline-flex; flex-wrap:wrap; gap:6px";
+            ["private", "public"].forEach(function (v) {
+              var on = s.importVis === v;
+              var b = self._btn("pill" + (on ? " on" : ""), VIS_LABEL[v], VIS_ICON[v], vis, function () { s.importVis = v; self._renderImportSave(); }, 14);
+              b.setAttribute("aria-pressed", on ? "true" : "false");
+              b.disabled = saving;
+            });
+          }
           var sp = this._el("span", null, row);
           sp.style.flex = "1";
           var label = saving ? "Saving…" : "Import " + tracks + (tracks === 1 ? " track" : " tracks") + (lists > 1 ? " into " + lists + " playlists" : "");

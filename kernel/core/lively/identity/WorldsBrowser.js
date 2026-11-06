@@ -668,7 +668,7 @@ module("lively.identity.WorldsBrowser")
       // list, the parts catalogue) and, opened here, show an empty or "loading" screen for good, so they are listed but not offered.
       // Found by launching each one into a local world (2026-11): Diary and Shop draw and work on their own; Gallery, Books and Music
       // stay on "Loading ..."; Game and Inventory ask a host for their data. Change this list when a preset learns to work locally.
-      _localTemplates: function _localTemplates() { return { shop: true, diary: true }; },
+      _localTemplates: function _localTemplates() { return { shop: true, diary: true, books: true, music: true }; },
 
       // ── history view ──────────────────────────────────────────────────────────
 
