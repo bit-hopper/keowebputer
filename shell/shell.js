@@ -117,6 +117,17 @@
     // `doc` is one object the world built; the shell checks whose it is and what kind, and stores it as it is.
     'library.get': function (a) { return window.keoLibrary.get({ objId: a.objId }); },
     'library.put': function (a) { return window.keoLibrary.put({ objId: a.objId, doc: a.doc }); },
+    // Files the apps keep by their hash (a picture, say): the bytes go in and out as an ArrayBuffer, and the shell checks the hash.
+    'library.blobPut': function (a) { return window.keoLibrary.putBlob({ cid: a.cid, bytes: a.bytes }); },
+    'library.blobGet': function (a) { return window.keoLibrary.getBlob({ cid: a.cid }); },
+    'library.blobRemove': function (a) { return window.keoLibrary.removeBlob({ cid: a.cid }); },
+    // A read of the music catalogue's search or lookup (keo-catalog.js): the world cannot read it itself, the shell can. Signed in only.
+    'catalog.get': function (a) {
+      return window.keoIdentity.current().then(function (s) {
+        if (!s) throw new Error('Sign in to look something up.');
+        return window.keoCatalog.get({ url: a.url });
+      });
+    },
     // The identity's own small settings (encrypted with its worlds): only the names keo-worlds.js allows.
     'prefs.get': function () { return window.keoWorlds.prefsGet(); },
     'prefs.set': function (a) { return window.keoWorlds.prefsSet({ key: a.key, value: a.value }); },

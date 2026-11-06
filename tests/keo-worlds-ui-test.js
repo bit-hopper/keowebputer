@@ -58,6 +58,18 @@ const hasText = (frame, src) => frame.evaluate((s) => { const re = new RegExp(s)
 const click = async (page, r, opts) => { await page.mouse.click(r.x + r.w / 2, r.y + r.h / 2, opts); };
 const okRect = (page, frame) => rectOf(page, frame, () => { let found = null; (function walk(m) { if (found) return; if (m instanceof lively.morphic.Button && /^(OK|Yes)$/i.test(String(m.getLabel ? m.getLabel() : ''))) found = m; (m.submorphs || []).forEach(walk); })($world); return found; });
 const names = (rows) => rows.map((r) => r.name);
+// Answers a prompt of the runtime. The prompt shows its question first and builds its text field when a module it needs has loaded, so
+// for a moment nothing has focus; a key pressed then goes nowhere (seen: the first letter of an answer lost). So wait for a field to have
+// focus, as a person would by starting to type only when the cursor is there.
+const answerPrompt = async (page, frame, text) => {
+  await until(() => frame.evaluate(() => !!document.activeElement && document.activeElement !== document.body), 8000);
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type(text);
+  await page.keyboard.press('Enter');
+};
+
+// what is on screen when a prompt did not do what was typed into it: the texts that mention the world or the question, and what has focus
+const promptDiag = (frame) => frame.evaluate(() => { const out = []; (function walk(m, d) { if (d > 8) return; if (typeof m.textString === 'string' && /Budget|New name/.test(m.textString)) out.push(m.textString.slice(0, 60)); (m.submorphs || []).forEach((x) => walk(x, d + 1)); })($world, 0); const a = document.activeElement; return { texts: out.slice(0, 8), active: a ? a.tagName + '.' + String(a.className).slice(0, 40) : null }; });
 
 (async () => {
   fs.mkdirSync(WORK, { recursive: true });
@@ -69,6 +81,8 @@ const names = (rows) => rows.map((r) => r.name);
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message.slice(0, 200)));
+    const fontService = [];
+    page.on('request', (r) => { if (/fonts\.(googleapis|gstatic)\.com/.test(r.url())) fontService.push(r.url().slice(0, 120)); });
     const cdp = await ctx.newCDPSession(page);
     await cdp.send('WebAuthn.enable', { enableUI: false });
     await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
@@ -140,16 +154,16 @@ const names = (rows) => rows.map((r) => r.name);
     check('row menu: the "⋯" opens Rename, Tags & note, Copy and Delete', !!menuItems && !!(await textRect(page, frame, 'Tags & note…')) && !!(await textRect(page, frame, 'Copy…')) && !!(await textRect(page, frame, 'Delete…')), menuDiag);
     await click(page, await textRect(page, frame, 'Rename…'));
     check('rename: a question with the old name opens', !!(await until(() => hasText(frame, 'New name for .Budget'), 6000)));
-    await page.keyboard.press('Control+A'); await page.keyboard.type('Budget 2026'); await page.keyboard.press('Enter');
+    await answerPrompt(page, frame, 'Budget 2026');
     win = await until(async () => { const s = await readWin(frame); return s && names(s.rows).includes('Budget 2026') ? s : null; });
-    check('rename: the list shows the new name and not the old', win && !names(win.rows).includes('Budget'), win);
+    check('rename: the list shows the new name and not the old', win && !names(win.rows).includes('Budget'), win || { diag: await promptDiag(frame), shell: (await keoCall(frame, 'world.list')).r.map((w) => w.name) });
     check('rename: the shell has it under the new name', (await keoCall(frame, 'world.has', { name: 'Budget 2026' })).r === true && (await keoCall(frame, 'world.has', { name: 'Budget' })).r === false);
 
     r = await rowPart(page, frame, 'Budget 2026', 'worldMore'); await click(page, r);
     await until(() => textRect(page, frame, 'Rename…'), 5000);
     await click(page, await textRect(page, frame, 'Rename…'));
     await until(() => hasText(frame, 'New name for'), 6000);
-    await page.keyboard.press('Control+A'); await page.keyboard.type('Trip'); await page.keyboard.press('Enter');
+    await answerPrompt(page, frame, 'Trip');
     win = await until(async () => { const s = await readWin(frame); return s && /already exists/.test(s.status) ? s : null; });
     check('rename: onto a taken name says so in the line under the list, and both worlds are still there', !!win && win.rows.length === 3 && names(win.rows).includes('Trip') && names(win.rows).includes('Budget 2026'), win);
 
@@ -157,9 +171,9 @@ const names = (rows) => rows.map((r) => r.name);
     await until(() => textRect(page, frame, 'Tags & note…'), 5000);
     await click(page, await textRect(page, frame, 'Tags & note…'));
     check('tags: the first question asks for the tags', !!(await until(() => hasText(frame, 'Tags for'), 6000)));
-    await page.keyboard.press('Control+A'); await page.keyboard.type('money, yearly'); await page.keyboard.press('Enter');
+    await answerPrompt(page, frame, 'money, yearly');
     check('tags: the second asks for a note', !!(await until(() => hasText(frame, 'A note about'), 6000)));
-    await page.keyboard.press('Control+A'); await page.keyboard.type('check monthly'); await page.keyboard.press('Enter');
+    await answerPrompt(page, frame, 'check monthly');
     win = await until(async () => { const s = await readWin(frame); const b = s && s.rows.find((x) => x.name === 'Budget 2026'); return b && /#money #yearly/.test(b.meta) ? s : null; });
     check('tags: the row shows the tags, and the note where a snippet would be', !!win && win.rows.find((x) => x.name === 'Budget 2026').snippet === 'check monthly', win);
     r = await byName(page, frame, 'searchInput'); await click(page, r);
@@ -273,9 +287,24 @@ const names = (rows) => rows.map((r) => r.name);
     win = await until(async () => { const s = await readWin(frame); return s && /already exists/.test(s.createStatus) ? s : null; });
     check('create: a name that is taken is refused with a sentence, and this world keeps running', !!win && (await frame.evaluate(() => window.keo.init.startup.name)) === 'My books', win);
     await click(page, await byName(page, frame, 'createNameInput'));
-    await page.keyboard.press('Control+A'); await page.keyboard.type('Fresh start', { delay: 25 });
+    // Replacing the old text: the first letter goes in, and the field must show it before the rest follows. Seen twice in seven runs
+    // with all letters sent 25 ms apart: the caret went to the start of the field after the first letter, giving "resh startF".
+    const fieldText = (f) => f.evaluate(() => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); const i = w && w.get('createNameInput'); return i ? String(i.textString) : null; });
+    await page.keyboard.press('Control+A'); await page.keyboard.type('F');
+    await until(async () => (await fieldText(frame)) === 'F', 4000);
+    await page.keyboard.type('resh start', { delay: 25 });
+    await until(async () => (await fieldText(frame)) === 'Fresh start', 4000);
+    // what the Create page holds, so a restart that never comes says which step failed: the name typed, the click, or the restart itself
+    const createDiag = (f) => f.evaluate(() => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); const inp = w && w.get('createNameInput'); let dom = null; try { const i = inp.renderContext().shapeNode.querySelector('input,textarea'); dom = i ? i.value : null; } catch (e) {} return { window: !!w, input: inp ? String(inp.textString) : null, dom, status: w && w._createStatusText ? String(w._createStatusText.textString) : null, startup: window.keo && window.keo.init && window.keo.init.startup }; });
+    const beforeSubmit = await createDiag(frame).catch((e) => ({ err: e.message }));
     await click(page, await byName(page, frame, 'createSubmitBtn'));
-    frame = await waitForWorld(page, 'blank', 'Fresh start');
+    try { frame = await waitForWorld(page, 'blank', 'Fresh start'); }
+    catch (e) {
+      const now = worldFrame(page) ? await createDiag(worldFrame(page)).catch((x) => ({ err: x.message })) : 'no world frame';
+      const shellNames = await page.evaluate(() => window.keoWorlds.list().then((l) => l.map((w) => w.name))).catch((x) => 'list failed: ' + x.message);
+      console.log('DIAG create step: before submit', JSON.stringify(beforeSubmit), '| after the wait', JSON.stringify(now), '| shell list', JSON.stringify(shellNames), '| page errors', JSON.stringify(errors));
+      throw e;
+    }
     const fl = (await keoCall(frame, 'world.list')).r.find((w) => w.name === 'Fresh start');
     check('create: the blank world restarts under that name and is in the library, with no template', !!fl && fl.template === null, fl);
 
@@ -303,6 +332,7 @@ const names = (rows) => rows.map((r) => r.name);
     frame = await waitForWorld(page, 'world', 'Alpha notes');
     check('palette: Enter on that row opens the world', (await frame.evaluate(() => window.keo.init.startup.name)) === 'Alpha notes');
 
+    check('fonts: the Shop, Books and Diary screens asked no font service for anything (their fonts are files of the package)', fontService.length === 0, fontService);
     check('no errors came from the page', errors.length === 0, errors);
   } catch (e) {
     check('the run finished', false, e.stack || String(e));

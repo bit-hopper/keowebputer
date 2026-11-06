@@ -127,7 +127,7 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
 
   // 4. shell page, the vault page and the manifest
   put('start.html', fs.readFileSync(path.join(SHELL, 'start.html')));
-  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-hello.js', 'keo-identity.js', 'keo-p2p.js', 'keo-callsdp.js', 'keo-identicon.js', 'keo-confirm.js', 'keo-call.js', 'keo-dm.js', 'keo-chatlog.js', 'keo-contacts.js', 'keo-wordlist.js', 'keo-fingerprint.js', 'keo-friend.js', 'keo-status.js', 'keo-worldtext.js', 'keo-worlds.js', 'keo-library.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
+  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-hello.js', 'keo-identity.js', 'keo-p2p.js', 'keo-callsdp.js', 'keo-identicon.js', 'keo-confirm.js', 'keo-call.js', 'keo-dm.js', 'keo-chatlog.js', 'keo-contacts.js', 'keo-wordlist.js', 'keo-fingerprint.js', 'keo-friend.js', 'keo-status.js', 'keo-worldtext.js', 'keo-worlds.js', 'keo-library.js', 'keo-catalog.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
   // The vault page as the server builds it (IdentityServer.js buildIdentityVaultPage), with the shell's origin as the one
   // app origin it will answer. Relative script paths: this page lives at the package root.
   put('vault.html', '<!DOCTYPE html><html><head><meta charset="utf-8">' +
@@ -152,6 +152,9 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
     manifest_version: 3, name: 'keo (prototype)', version: VERSION, description: 'keo world from the package, no server. Prototype.',
     key: der.toString('base64'), icons, action: { default_title: 'keo', default_popup: 'popup.html', default_icon: icons },
     sandbox: { pages: ['world.html'] },
+    // The one site the shell may read for the world (shell/keo-catalog.js, which checks what it is asked): the music catalogue, whose
+    // answers the browser refuses to the world's origin. Shown to the person installing the package.
+    host_permissions: ['https://itunes.apple.com/*'],
     // Extension pages (shell, vault): the default script-src plus 'wasm-unsafe-eval', which libsodium's WebAssembly needs.
     // (The extension-page CSP is a separate setting from the sandbox one below.)
     // Default sandbox CSP plus blob: workers (the runtime's workers have to be created from blobs here, see 9.4h).

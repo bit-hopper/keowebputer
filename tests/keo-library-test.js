@@ -74,17 +74,24 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     page.on('console', (m) => { if (m.type() === 'error' && /keo-library|shell\.js/.test(m.location().url || '')) errors.push('console: ' + m.text().slice(0, 200)); });
     // anything aimed at a host or at a search service
     const hostish = /\/@did:|\/nodejs\/|\/dids\/|\/blobs\//;
+    const outsideFrame = [];      // [address, the page that made the request] for each
     const outside = [];           // requests to the public catalogues (answered by the mock below, never by the real ones)
     const fonts = new Set();
-    page.on('request', (r) => { if (/^https:\/\/(openlibrary\.org|itunes\.apple\.com)\//.test(r.url())) outside.push(r.url()); });
+    const faceFiles = [];         // the font files the pages did load: where from
+    page.on('request', (r) => { if (/\.woff2(\?|$)/.test(r.url()) && /app-fonts/.test(r.url())) faceFiles.push(r.url()); });
+    page.on('request', (r) => { if (/^https:\/\/(openlibrary\.org|covers\.openlibrary\.org|itunes\.apple\.com|is1-ssl\.mzstatic\.com|musicbrainz\.org|coverartarchive\.org)\//.test(r.url())) { outside.push(r.url()); outsideFrame.push([r.url(), r.frame().url()]); } });
     page.on('request', (r) => { if (/fonts\.(googleapis|gstatic)\.com/.test(r.url())) fonts.add(new URL(r.url()).host); else if (hostish.test(r.url())) requests.push(r.url()); });
     // The public catalogues are answered here, so the test needs no network and says exactly what was asked of them.
     const CORS = { 'access-control-allow-origin': '*', 'content-type': 'application/json' };
-    await ctx.route(/^https:\/\/(openlibrary\.org|itunes\.apple\.com)\//, (route) => {
+    const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+    await ctx.route(/^https:\/\/(openlibrary\.org|covers\.openlibrary\.org|itunes\.apple\.com|is1-ssl\.mzstatic\.com|musicbrainz\.org|coverartarchive\.org)\//, (route) => {
       const u = new URL(route.request().url());
+      if (u.hostname === 'coverartarchive.org') return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'content-type': 'image/png' }, body: PNG });
+      if (u.hostname === 'musicbrainz.org') return route.fulfill({ status: 200, headers: CORS, body: JSON.stringify({ releases: [{ id: 'aaaaaaaa-0000-0000-0000-000000000001' }, { id: 'aaaaaaaa-0000-0000-0000-000000000002' }] }) });
+      if (/\.(jpg|png)$/.test(u.pathname)) return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'content-type': 'image/png' }, body: PNG });
       let body = {};
-      if (u.hostname === 'openlibrary.org') body = { docs: [{ title: 'Dune', author_name: ['Frank Herbert'], isbn: ['9780441013593'], cover_i: 0 }] };
-      else if (u.pathname === '/search' && u.searchParams.get('entity') === 'album') body = { results: [{ wrapperType: 'collection', collectionId: 111, collectionName: 'Kind of Blue', artistName: 'Miles Davis', releaseDate: '1959-08-17T07:00:00Z', artworkUrl100: 'https://art.invalid/100x100bb.jpg', trackCount: 2, collectionViewUrl: 'https://music.invalid/album/111' }] };
+      if (u.hostname === 'openlibrary.org') body = { docs: [{ title: 'Dune', author_name: ['Frank Herbert'], isbn: ['9780441013593'], cover_i: 123 }] };
+      else if (u.pathname === '/search' && u.searchParams.get('entity') === 'album') body = { results: [{ wrapperType: 'collection', collectionId: 111, collectionName: 'Kind of Blue', artistName: 'Miles Davis', releaseDate: '1959-08-17T07:00:00Z', artworkUrl100: 'https://is1-ssl.mzstatic.com/art/100x100bb.jpg', trackCount: 2, collectionViewUrl: 'https://music.invalid/album/111' }] };
       else if (u.pathname === '/search') body = { results: [{ wrapperType: 'track', trackId: 222, trackName: 'So What', artistName: 'Miles Davis', collectionName: 'Kind of Blue', previewUrl: 'https://art.invalid/p.m4a', trackTimeMillis: 540000 }] };
       else if (u.pathname === '/lookup') body = { results: [{ wrapperType: 'collection', collectionId: 111 }, { wrapperType: 'track', trackId: 222, trackName: 'So What', trackNumber: 1, discNumber: 1, trackTimeMillis: 540000, previewUrl: 'https://art.invalid/p.m4a' }, { wrapperType: 'track', trackId: 223, trackName: 'Freddie Freeloader', trackNumber: 2, discNumber: 1, trackTimeMillis: 590000, previewUrl: 'https://art.invalid/q.m4a' }] };
       route.fulfill({ status: 200, headers: CORS, body: JSON.stringify(body) });
@@ -130,6 +137,55 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     check('store: something that is not an object is refused', !r.ok, r);
     check('store: the refused puts changed nothing', (await lib(page, 'get', { objId: idA })).r.state.name === 'Library' && (await rawDocs(page)).length === 2);
 
+    // ---- 1b. files (blobs): kept by their hash, sealed, limited
+    const sha = (bytes) => page.evaluate(async (b) => window.keoDid.b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(b)))), Array.from(bytes));
+    const blob = (fn, args) => page.evaluate(([f, a]) => window.keoLibrary[f](a).then((r) => ({ ok: true, r: r instanceof ArrayBuffer ? Array.from(new Uint8Array(r)) : r }), (e) => ({ ok: false, e: e.message })), [fn, args]);
+    const putB = (cid, arr) => page.evaluate(([c, a]) => window.keoLibrary.putBlob({ cid: c, bytes: new Uint8Array(a).buffer }).then((r) => ({ ok: true, r }), (e) => ({ ok: false, e: e.message })), [cid, Array.from(arr)]);
+    const secret = Array.from(Buffer.from('PNGSECRETMARK-the-picture-of-a-private-book'));
+    const cidA = await sha(secret);
+    check('files: the id is the base64url SHA-256, 43 characters', /^[A-Za-z0-9_-]{43}$/.test(cidA), cidA);
+    check('files: a file that was never put is null', (await blob('getBlob', { cid: cidA })).r === null);
+    check('files: put says true', (await putB(cidA, secret)).r === true);
+    const gotA = await blob('getBlob', { cid: cidA });
+    check('files: what comes back is what went in', gotA.ok && JSON.stringify(gotA.r) === JSON.stringify(secret), gotA);
+    r = await putB(cidA, [1, 2, 3]);
+    check('files: an id that is not the hash of the bytes is refused', !r.ok && /hash of its bytes/.test(r.e), r);
+    r = await putB('short', secret);
+    check('files: an id that is not 43 characters of the id alphabet is refused', !r.ok && /valid file id/.test(r.e), r);
+    r = await blob('putBlob', { cid: cidA, bytes: 'not bytes' });
+    check('files: something that is not bytes is refused', !r.ok && /must be bytes/.test(r.e), r);
+    const bigCid = await page.evaluate(async () => { const big = new Uint8Array(25 * 1024 * 1024 + 1); window.__big = big; return window.keoDid.b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', big))); });
+    r = await page.evaluate((c) => window.keoLibrary.putBlob({ cid: c, bytes: window.__big }).then((x) => ({ ok: true, r: x }), (e) => ({ ok: false, e: e.message })), bigCid);
+    check('files: a file over 25 MB is refused', !r.ok && /at most 25 MB/.test(r.e), r);
+    await putB(cidA, secret);
+    const blobRaw = () => page.evaluate(() => new Promise((res) => { const q = indexedDB.open('keo-library'); q.onsuccess = () => { const db = q.result, t = db.transaction(['blobs', 'blobtotal']); const a = t.objectStore('blobs').getAll(), b = t.objectStore('blobtotal').getAll(); t.oncomplete = () => { db.close(); res({ blobs: a.result.map((x) => ({ id: x.id, did: x.did, iv: x.iv, ct: Array.from(x.ct) })), totals: b.result }); }; }; }));
+    let br = await blobRaw();
+    check('files: the same bytes put twice are kept once, and counted once', br.blobs.length === 1 && br.totals.length === 1 && br.totals[0].total === secret.length, br.totals);
+    check('files: nothing of the file can be read from disk, and its record names only the identity, the id, an iv and sealed bytes', Object.keys(br.blobs[0]).sort().join() === 'ct,did,id,iv' && !/PNGSECRETMARK/.test(String.fromCharCode.apply(null, br.blobs[0].ct)) && br.blobs[0].ct.length === secret.length + 16, br.blobs[0].ct.length);
+    await page.evaluate(([id]) => new Promise((res) => { const q = indexedDB.open('keo-library'); q.onsuccess = () => { const db = q.result, t = db.transaction('blobs', 'readwrite'), st = t.objectStore('blobs'); const g = st.get(id); g.onsuccess = () => { const v = g.result; v.ct[2] ^= 1; st.put(v); }; t.oncomplete = () => { db.close(); res(); }; }; }), [DID + '|' + cidA]);
+    r = await blob('getBlob', { cid: cidA });
+    check('files: a file with one changed byte is refused', !r.ok && /could not be decrypted/.test(r.e), r);
+    await blob('removeBlob', { cid: cidA });
+    await putB(cidA, secret);
+    // a record copied under another id is refused (the id is part of what is sealed)
+    const cidB = await sha([9, 9, 9]);
+    await page.evaluate(([from, to, did]) => new Promise((res) => { const q = indexedDB.open('keo-library'); q.onsuccess = () => { const db = q.result, t = db.transaction('blobs', 'readwrite'), st = t.objectStore('blobs'); const g = st.get(from); g.onsuccess = () => { const v = g.result; st.put({ id: to, did: did, iv: v.iv, ct: v.ct }); }; t.oncomplete = () => { db.close(); res(); }; }; }), [DID + '|' + cidA, DID + '|' + cidB, DID]);
+    r = await blob('getBlob', { cid: cidB });
+    check('files: a file record copied under another id is refused', !r.ok && /could not be decrypted/.test(r.e), r);
+    await page.evaluate(([id]) => new Promise((res) => { const q = indexedDB.open('keo-library'); q.onsuccess = () => { const db = q.result, t = db.transaction('blobs', 'readwrite'); t.objectStore('blobs').delete(id); t.oncomplete = () => { db.close(); res(); }; }; }), [DID + '|' + cidB]);
+    check('files: removing one says true, then it is gone, and removing it again says false', (await blob('removeBlob', { cid: cidA })).r === true && (await blob('getBlob', { cid: cidA })).r === null && (await blob('removeBlob', { cid: cidA })).r === false);
+    br = await blobRaw();
+    check('files: and the running total is back to nothing', br.blobs.length === 0 && br.totals[0].total === 0, br.totals);
+    // the total limit: set the running total just under it, then put a file that does not fit
+    await page.evaluate(([did]) => new Promise((res) => { const q = indexedDB.open('keo-library'); q.onsuccess = () => { const db = q.result, t = db.transaction('blobtotal', 'readwrite'); t.objectStore('blobtotal').put({ did: did, total: 1024 * 1024 * 1024 - 10 }); t.oncomplete = () => { db.close(); res(); }; }; }), [DID]);
+    r = await putB(cidA, secret);
+    check('files: when the identity\'s files would pass 1 GB together the put is refused', !r.ok && /library is full/.test(r.e), r);
+    await page.evaluate(([did]) => new Promise((res) => { const q = indexedDB.open('keo-library'); q.onsuccess = () => { const db = q.result, t = db.transaction('blobtotal', 'readwrite'); t.objectStore('blobtotal').put({ did: did, total: 0 }); t.oncomplete = () => { db.close(); res(); }; }; }), [DID]);
+    // through the bridge, as the apps do (an ArrayBuffer made in the world)
+    const viaBridgeB = await frame.evaluate(async () => { const b = new Uint8Array([5, 6, 7, 8]); const cid = lively.identity.crypto.base64urlEncode(new Uint8Array(await crypto.subtle.digest('SHA-256', b))); const put = await window.keo.call('library.blobPut', { cid: cid, bytes: b.buffer }, 30000).then((r) => r, (e) => e.message); const got = await window.keo.call('library.blobGet', { cid: cid }, 30000).then((r) => Array.from(new Uint8Array(r)), (e) => e.message); const rm = await window.keo.call('library.blobRemove', { cid: cid }, 30000).then((r) => r, (e) => e.message); return { put, got, rm }; });
+    check('bridge: the world puts, gets and removes a file, and the hash the runtime makes is the one the shell checks', viaBridgeB.put === true && JSON.stringify(viaBridgeB.got) === '[5,6,7,8]' && viaBridgeB.rm === true, viaBridgeB);
+    await putB(cidA, secret);
+
     // what is on disk
     const raw = await rawDocs(page);
     const rawText = JSON.stringify(raw);
@@ -150,7 +206,8 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     check('bridge: and the same refusals apply to it', !noKey.ok && /signed-in identity/.test(noKey.e), noKey);
     // clear this test data before the app makes its own
     await page.evaluate((d) => window.keoLibrary.purge(d), DID);
-    check('purge: removing the identity\'s library leaves nothing, found by the identity and needing no key', (await rawDocs(page)).length === 0 && (await lib(page, 'get', { objId: idB })).r === null);
+    br = await blobRaw();
+    check('purge: removing the identity\'s library leaves nothing, files and running total included, found by the identity and needing no key', (await rawDocs(page)).length === 0 && (await lib(page, 'get', { objId: idB })).r === null && br.blobs.length === 0 && br.totals.length === 0, br);
 
     // ---- 2. Books, used by a person
     await keoCall(frame, 'world.go', { kind: 'blank', name: 'Reading', template: 'books' }).catch(() => {});
@@ -201,6 +258,11 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     const stored2 = await lib(page, 'get', { objId: bookId });
     check('books: and are in the store; each change names the version before it (two changes since it was added)', stored2.r.record.payload.shelf === 'reading' && stored2.r.record.payload.rating === 4 && !!stored2.r.record.prevCid && stored2.r.record.prevCid !== stored.r.record.cid && stored2.r.record.cid !== stored.r.record.cid, stored2.r && stored2.r.record);
 
+    // three changes to different fields of one book in the same instant must all be kept (each save reads the book before it writes)
+    await frame.evaluate(() => { const m = $world.submorphs.find((x) => x.name === 'Books'); m._patchCurrentBook({ shelf: 'read' }); m._patchCurrentBook({ rating: 5 }); m._patchCurrentBook({ description: 'Gethen' }); });
+    const rapid = await until(async () => { const d = await lib(page, 'get', { objId: bookId }); const pl = d.r && d.r.record.payload; return pl && pl.shelf === 'read' && pl.rating === 5 && pl.description === 'Gethen' ? pl : null; }, 8000);
+    check('books: three changes made at once to one book are all kept (the saves wait for each other)', !!rapid, (await lib(page, 'get', { objId: bookId })).r.record.payload);
+
     // a list: no visibility to choose, no "Public" badge
     await clickEl(page, frame.locator('.detail-title').locator('xpath=ancestor::div[contains(@class,"detail-top")]').locator('.btn-ghost'));
     await clickEl(page, frame.locator('.side-newbtn'));
@@ -236,7 +298,7 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     await keoCall(frame, 'world.go', { kind: 'world', name: 'Reading' }).catch(() => {});
     frame = await waitForWorld(page, 'world', 'Reading');
     st = await until(async () => { const s = await booksState(frame); return s && s.loaded && s.books.length === 2 ? s : null; }, 30000);
-    check('reopen: the same two books are on the shelves, with their shelf and rating', !!st && st.books.find((b) => /Left Hand/.test(b.title)).shelf === 'reading' && st.books.find((b) => /Left Hand/.test(b.title)).rating === 4, st);
+    check('reopen: the same two books are on the shelves, with their shelf and rating', !!st && st.books.find((b) => /Left Hand/.test(b.title)).shelf === 'read' && st.books.find((b) => /Left Hand/.test(b.title)).rating === 5, st);
     check('reopen: the same library is used (no second one was made), and the list and its book are back', !!st && st.lib === lib1 && st.lists.length === 1 && st.lists[0].entries === 1, st);
     const docsNow = await rawDocs(page);
     check('reopen: the store holds exactly the library, two books and the list (no orphans)', docsNow.length === 4, docsNow.map((d) => d.id));
@@ -266,7 +328,7 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     check('online: the box says where the text would go, and the button is there', /openlibrary\.org/.test(await frame.locator('.add-hint').innerText()) && (await frame.locator('.add-box button[title*="openlibrary.org"]').isEnabled()));
     await clickEl(page, frame.locator('.add-box button[title*="openlibrary.org"]'));
     await until(async () => (await frame.locator('.add-result', { hasText: 'Frank Herbert' }).count()) === 1, 15000);
-    check('online: pressing it asks the catalogue once, with what was typed', outside.length === 1 && /openlibrary\.org\/search\.json\?q=Dune/.test(outside[0]), outside);
+    check('online: pressing it asks the catalogue for a search once, with what was typed (and the results show its thumbnail, as a search is meant to)', outside.filter((u) => /openlibrary\.org\/search\.json\?q=Dune/.test(u)).length === 1 && outside.every((u) => /search\.json|covers\.openlibrary\.org/.test(u)), outside);
     check('online: what it found is shown beside the typed title, naming where it came from', /^via .+/.test(await frame.locator('.add-result-src').innerText()));
     await clickEl(page, frame.locator('.add-result', { hasText: 'Frank Herbert' }).locator('.btn-primary'));
     st = await until(async () => { const s = await booksState(frame); return s && s.books.length === 2 ? s : null; }, 10000);
@@ -274,7 +336,11 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     check('online: "Add" on a result adds the book, not public', !!dune && dune.author === 'Frank Herbert' && dune.isPublic === false, st);
     const duneDoc = dune ? await lib(page, 'get', { objId: dune.objId }) : null;
     check('online: and its details are copied into the store on this device', !!duneDoc && duneDoc.r.record.payload.isbn === '9780441013593' && duneDoc.r.record.payload.coverSource === 'openlibrary' && duneDoc.r.did === DID, duneDoc && duneDoc.r);
-    check('online: nothing else was asked of the catalogue', outside.length === 1, outside);
+    check('online: the book\'s picture was copied on adding (a second request for it after the thumbnail), and stored sealed on this device, and the catalogue\'s address is not kept', outside.length === 3 && outside.filter((u) => /covers\.openlibrary\.org\/b\/id\/123-M\.jpg/.test(u)).length === 2 && !!duneDoc && /^[A-Za-z0-9_-]{43}$/.test(duneDoc.r.record.payload.coverBlob || '') && duneDoc.r.record.payload.coverMime === 'image/png' && duneDoc.r.record.payload.coverUrl === null && !/https?:/.test(JSON.stringify(duneDoc.r)), { outside, payload: duneDoc && duneDoc.r.record.payload });
+    const coverBytes = duneDoc ? await blob('getBlob', { cid: duneDoc.r.record.payload.coverBlob }) : null;
+    check('online: the copy in the store is the picture the catalogue sent', !!coverBytes && coverBytes.ok && Array.from(PNG).join() === coverBytes.r.join(), coverBytes && coverBytes.r && coverBytes.r.length);
+    const duneCover = await frame.evaluate(() => { const m = $world.submorphs.find((x) => x.name === 'Books'); const b = m.state.books.find((x) => x.title === 'Dune'); const tile = Array.from(document.querySelectorAll('.book-tile')).find((t) => /Dune/.test(t.innerText)); return { url: b.coverUrl, bg: tile ? tile.querySelector('.book-cover').style.backgroundImage : null }; });
+    check('online: the book is drawn from that copy (a local address), not from the catalogue', /^blob:/.test(duneCover.url || '') && /blob:/.test(duneCover.bg || ''), duneCover);
 
     // ---- 6. Music
     await keoCall(frame, 'world.go', { kind: 'homestar' }).catch(() => {});
@@ -287,6 +353,10 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     const lib2 = ms && ms.lib;
     const savedM = await until(async () => { const d = (await keoCall(frame, 'world.load', { name: 'Listening' })).r; return d && d.doc && d.doc.indexOf(lib2) >= 0 ? d : null; }, 20000);
     check('music: the saved world remembers its library', !!savedM);
+    const loadedFaces = await frame.evaluate(() => document.fonts.ready.then(() => Array.from(document.fonts).filter((f) => f.status === 'loaded').map((f) => f.family.replace(/["']/g, ''))));
+    check('fonts: the faces Music uses are loaded, from the package (DM Sans or Bricolage Grotesque)', loadedFaces.some((f) => /DM Sans|Bricolage Grotesque/.test(f)), loadedFaces);
+    await sleep(500);
+    check('fonts: and they were read from files of the package itself', faceFiles.length > 0 && faceFiles.every((n) => /^chrome-extension:\/\//.test(n)), faceFiles);
     const base = outside.length;
     await clickEl(page, frame.locator('button', { hasText: 'Add music' }).first());
     await until(async () => (await frame.locator('.dlg input:visible').count()) >= 3, 6000);
@@ -345,14 +415,42 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     check('catalogue: typing the title sends nothing', outside.length === base, outside.slice(base));
     await clickEl(page, frame.locator('.dlg:visible button', { hasText: 'Search online' }));
     await until(async () => (await frame.locator('.dlg:visible', { hasText: 'Miles Davis' }).count()) > 0 && (await frame.locator('.dlg:visible button.sm', { hasText: 'Add' }).count()) > 0, 20000);
-    await until(async () => outside.length >= base + 2, 10000);   // the song search follows the album search, paced apart
-    check('catalogue: pressing it asks the catalogue for albums and songs, with what was typed', outside.length === base + 2 && outside.slice(base).every((u) => /itunes\.apple\.com\/search\?term=Kind%20of%20Blue/.test(u)), outside.slice(base));
+    await until(async () => outside.slice(base).filter((u) => /itunes\.apple\.com\/search/.test(u)).length >= 2, 10000);   // the song search follows the album search, paced apart
+    check('catalogue: pressing it asks the catalogue for albums and for songs, with what was typed', outside.slice(base).filter((u) => /itunes\.apple\.com\/search\?term=Kind%20of%20Blue&entity=(album|song)/.test(u)).length === 2 && outside.slice(base).every((u) => /itunes\.apple\.com\/search|mzstatic/.test(u)), outside.slice(base));
     await clickEl(page, frame.locator('.dlg:visible button.sm', { hasText: 'Add' }).first());
     await clickEl(page, frame.locator('.dlg:visible button', { hasText: 'Listening' }).last());
     ms = await until(async () => { const s = await musicState(frame); return s && s.albums.length === 2 ? s : null; }, 20000);
     const kob = ms && ms.albums.find((a) => a.title === 'Kind of Blue');
     check('catalogue: adding it keeps a copy on this device, with its tracklist, not public', !!kob && kob.itunes === '111' && kob.src === 'itunes' && kob.tracks === 2 && kob.isPublic === false && kob.shelf === 'listening', ms);
-    check('catalogue: only the search (two requests) and the tracklist lookup (one) went out', outside.length === base + 3 && /itunes\.apple\.com\/lookup\?id=111/.test(outside[outside.length - 1]), outside.slice(base));
+    const mine = outside.slice(base);
+    check('catalogue: only the two searches, the tracklist lookup, and the album\'s picture (the result row\'s thumbnail, then the copy) went out', mine.length === 5 && mine.filter((u) => /itunes\.apple\.com\/search/.test(u)).length === 2 && mine.filter((u) => /itunes\.apple\.com\/lookup\?id=111/.test(u)).length === 1 && mine.filter((u) => /is1-ssl\.mzstatic\.com\/art\/300x300bb\.jpg/.test(u)).length === 2, mine);
+    const kobDoc = kob ? await lib(page, 'get', { objId: kob.objId }) : null;
+    check('catalogue: the album keeps its picture on this device and the catalogue\'s address is not kept anywhere in it', !!kobDoc && /^[A-Za-z0-9_-]{43}$/.test(kobDoc.r.record.payload.coverBlob || '') && kobDoc.r.record.payload.coverUrl === null && !/mzstatic/.test(JSON.stringify(kobDoc.r)), kobDoc && kobDoc.r.record.payload);
+    check('catalogue: and it is drawn from that copy', await frame.evaluate(() => { const m = $world.submorphs.find((x) => x.name === 'Music'); const a = m.state.albums.find((x) => x.title === 'Kind of Blue'); return /^blob:/.test(a.coverUrl || ''); }));
+    // tracks added to a playlist from the catalogue keep their picture on the device too (the same picture is stored once)
+    const plTrack = await frame.evaluate(() => new Promise((res) => { const m = $world.submorphs.find((x) => x.name === 'Music'); const pl = m.state.playlists[0]; m._addTracksToPlaylist(pl, [{ title: 'Freddie Freeloader', artist: 'Miles Davis', albumTitle: 'Kind of Blue', coverUrl: 'https://is1-ssl.mzstatic.com/art/300x300bb.jpg', previewUrl: 'https://is1-ssl.mzstatic.com/p.m4a', durationMs: 1000, ids: { itunes: '223' } }], () => res(pl.entries.map((e) => ({ title: e.title, url: e.coverUrl })))); }));
+    check('catalogue: a track added to a playlist is drawn from a local copy of its picture', plTrack.length === 2 && /^blob:/.test((plTrack.find((e) => e.title === 'Freddie Freeloader') || {}).url || ''), plTrack);
+    const plDoc2 = await lib(page, 'get', { objId: (await musicState(frame)).playlists[0].objId });
+    const trackRec = plDoc2.r.record.payload.files.find((f) => f.title === 'Freddie Freeloader');
+    check('catalogue: and the playlist keeps only the copy\'s id, not the address', !!trackRec && trackRec.coverUrl === null && trackRec.coverBlob === kobDoc.r.record.payload.coverBlob && !/mzstatic\.com\/art/.test(JSON.stringify(plDoc2.r)), trackRec);
+    let picturesAfter = outside.length;
+
+    // the catalogue is read by the shell page (it alone has the manifest permission); the world cannot use it for anything else
+    const itunesFrames = outsideFrame.filter(([u]) => /itunes\.apple\.com\/(search|lookup)/.test(u));
+    check('catalogue: the music catalogue was read by the shell page, not by the world (that site refuses the world\'s origin)', itunesFrames.length === 3 && itunesFrames.every(([, f]) => /\/start\.html$/.test(f)), itunesFrames);
+    const pictureFrames = outsideFrame.filter(([u]) => /mzstatic/.test(u));
+    check('catalogue: the pictures are read by the world itself (their host sends the permission), never by the shell', pictureFrames.length > 0 && pictureFrames.every(([, f]) => /\/world\.html$/.test(f)), pictureFrames);
+    const manifest = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
+    check('manifest: the one host permission is the music catalogue, and there is no other permission', JSON.stringify(manifest.host_permissions) === JSON.stringify(['https://itunes.apple.com/*']) && !manifest.permissions, { host: manifest.host_permissions, permissions: manifest.permissions });
+    const beforeRefusals = outside.length;
+    const refused = ['http://itunes.apple.com/search?term=a', 'https://itunes.apple.com.evil.example/search?term=a', 'https://example.com/search?term=a', 'https://itunes.apple.com/other?term=a', 'https://user:pw@itunes.apple.com/search?term=a', 'https://itunes.apple.com:8443/search?term=a', 'https://itunes.apple.com/search?term=a#x', 'https://itunes.apple.com/search?term=' + 'a'.repeat(700), 'itunes.apple.com/search', 42];
+    const refusals = await page.evaluate((list) => Promise.all(list.map((u) => window.keoCatalog.get({ url: u }).then(() => 'allowed', (e) => e.message))), refused);
+    check('catalogue: the shell refuses every address that is not a search or lookup of that one site over https, and sends nothing for them', refusals.every((m) => /not one the catalogue lookup may read|not a valid catalogue address/.test(m)) && outside.length === beforeRefusals, refusals);
+    const worldAsks = await keoCall(frame, 'catalog.get', { url: 'https://example.com/search?term=a' });
+    check('catalogue: the same refusal reaches the world through the bridge op', !worldAsks.ok && /not one the catalogue lookup may read/.test(worldAsks.e), worldAsks);
+    const worldOk = await keoCall(frame, 'catalog.get', { url: 'https://itunes.apple.com/lookup?id=111&entity=song' });
+    check('catalogue: and a lookup the world is allowed to ask for comes back as plain data', worldOk.ok && Array.isArray(worldOk.r.results), worldOk);
+    picturesAfter = outside.length;     // the lookup just made is not part of showing pictures
 
     // close the world and open it again
     await sleep(1500);
@@ -361,12 +459,65 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     await keoCall(frame, 'world.go', { kind: 'world', name: 'Listening' }).catch(() => {});
     frame = await waitForWorld(page, 'world', 'Listening');
     ms = await until(async () => { const s = await musicState(frame); return s && s.loaded && s.albums.length === 2 ? s : null; }, 30000);
-    check('music reopen: both albums, the rating and the playlist with its track are back, in the same library', !!ms && ms.lib === lib2 && ms.albums.find((a) => a.title === 'Blue Train').rating === 4 && ms.playlists.length === 1 && ms.playlists[0].entries.length === 1, ms);
+    check('music reopen: both albums, the rating and the playlist with its two tracks are back, in the same library', !!ms && ms.lib === lib2 && ms.albums.find((a) => a.title === 'Blue Train').rating === 4 && ms.playlists.length === 1 && ms.playlists[0].entries.length === 2, ms);
+    await sleep(1500);
+    check('music reopen: the pictures are drawn from the copies, and nothing was asked of any catalogue to show them', outside.length === picturesAfter && await frame.evaluate(() => { const m = $world.submorphs.find((x) => x.name === 'Music'); return /^blob:/.test(m.state.albums.find((a) => a.title === 'Kind of Blue').coverUrl || '') && (() => { const withPic = m.state.playlists[0].entries.filter((e) => e.coverBlob); return withPic.length === 1 && withPic.every((e) => /^blob:/.test(e.coverUrl || '')); })(); }), outside.slice(picturesAfter));
     await page.screenshot({ path: path.join(WORK, 'music-after.png') });
     check('music: after all this, still nothing was asked of a host', requests.length === 0, requests);
 
+    // Books again: its picture is drawn from the copy after the world is opened again, and nothing is asked of the catalogue for it
+    await keoCall(frame, 'world.go', { kind: 'homestar' }).catch(() => {});
+    frame = await waitForWorld(page, 'homestar');
+    await keoCall(frame, 'world.go', { kind: 'world', name: 'Reading' }).catch(() => {});
+    frame = await waitForWorld(page, 'world', 'Reading');
+    st = await until(async () => { const x = await booksState(frame); return x && x.loaded && x.books.length === 2 ? x : null; }, 30000);
+    await sleep(1500);
+    const duneAgain = await frame.evaluate(() => { const m = $world.submorphs.find((x) => x.name === 'Books'); const b = m.state.books.find((x) => x.title === 'Dune'); const tile = Array.from(document.querySelectorAll('.book-tile')).find((t) => /Dune/.test(t.innerText)); return { url: b && b.coverUrl, bg: tile ? tile.querySelector('.book-cover').style.backgroundImage : null }; });
+    check('books reopen: the book is drawn from the copy of its picture, and nothing was asked of any catalogue to show it', !!st && /^blob:/.test(duneAgain.url || '') && /blob:/.test(duneAgain.bg || '') && outside.length === picturesAfter, { duneAgain, extra: outside.slice(picturesAfter) });
+
+    // ---- 3c. a cover for something added by typing: looked up only when a button is pressed, from services that need no key
+    // Books (the world is open again): the typed book has no picture, the one from the catalogue has one
+    await clickEl(page, frame.locator('.book-tile', { hasText: 'Dune' }));
+    await until(async () => (await frame.locator('.detail-title').innerText().catch(() => '')) === 'Dune', 6000);
+    check('find cover: a book that has a picture does not offer to find one', !(await frame.locator('.detail-cover-pane button', { hasText: 'Find a cover online' }).isVisible()));
+    const closeDetail = () => clickEl(page, frame.locator('.detail-title').locator('xpath=ancestor::div[contains(@class,"detail-top")]').locator('.btn-ghost'));
+    await closeDetail();
+    await clickEl(page, frame.locator('.book-tile', { hasText: 'Left Hand' }));
+    await until(async () => (await frame.locator('.detail-title').innerText().catch(() => '')) === 'The Left Hand of Darkness', 6000);
+    const findBtn = frame.locator('.detail-cover-pane button', { hasText: 'Find a cover online' });
+    check('find cover: the typed book offers it, and the button says where the title and author go', await findBtn.isVisible() && /openlibrary\.org/.test(await findBtn.getAttribute('title')));
+    const beforeFind = outside.length;
+    await sleep(800);
+    check('find cover: having the book open sent nothing', outside.length === beforeFind, outside.slice(beforeFind));
+    await clickEl(page, findBtn);
+    const gotCover = await until(() => frame.evaluate(() => { const m = $world.submorphs.find((x) => x.name === 'Books'); const b = m.state.books.find((x) => /Left Hand/.test(x.title)); return b && b.coverBlob && /^blob:/.test(b.coverUrl || '') ? b.coverBlob : null; }), 15000);
+    check('find cover: pressing it looks the title and author up once and copies the picture it finds', !!gotCover && outside.slice(beforeFind).filter((u) => /openlibrary\.org\/search\.json.*The%20Left%20Hand%20of%20Darkness%20Ursula/.test(u)).length === 1 && outside.slice(beforeFind).filter((u) => /covers\.openlibrary\.org/.test(u)).length === 1 && outside.length === beforeFind + 2, outside.slice(beforeFind));
+    const lhDoc = await lib(page, 'get', { objId: bookId });
+    check('find cover: the book keeps the copy, not an address', lhDoc.r.record.payload.coverBlob === gotCover && lhDoc.r.record.payload.coverUrl === null && !/https?:/.test(JSON.stringify(lhDoc.r.record.payload)), lhDoc.r.record.payload);
+    check('find cover: and the button is gone now that it has a picture', await until(async () => !(await findBtn.isVisible()), 6000));
+    await closeDetail();
+    // Music: the typed album
+    await keoCall(frame, 'world.go', { kind: 'homestar' }).catch(() => {});
+    frame = await waitForWorld(page, 'homestar');
+    await keoCall(frame, 'world.go', { kind: 'world', name: 'Listening' }).catch(() => {});
+    frame = await waitForWorld(page, 'world', 'Listening');
+    ms = await until(async () => { const x = await musicState(frame); return x && x.loaded && x.albums.length === 2 ? x : null; }, 30000);
+    await clickEl(page, frame.getByText('Blue Train', { exact: true }).first());
+    const albumFind = frame.locator('.dlg:visible button', { hasText: 'Find a cover online' });
+    await until(async () => await albumFind.count() > 0, 6000);
+    check('find cover: the typed album offers it, and the button says where the album and artist go', await albumFind.isVisible() && /musicbrainz\.org/.test(await albumFind.getAttribute('title')));
+    const beforeAlbum = outside.length;
+    await clickEl(page, albumFind);
+    const gotAlbumCover = await until(() => frame.evaluate(() => { const m = $world.submorphs.find((x) => x.name === 'Music'); const a = m.state.albums.find((x) => x.title === 'Blue Train'); return a && a.coverBlob && /^blob:/.test(a.coverUrl || '') ? a.coverBlob : null; }), 15000);
+    check('find cover: pressing it asks for the album once and then for a front cover, and copies the picture', !!gotAlbumCover && outside.slice(beforeAlbum).filter((u) => /musicbrainz\.org\/ws\/2\/release\/.*Blue%20Train/.test(u)).length === 1 && outside.slice(beforeAlbum).filter((u) => /coverartarchive\.org\/release\/aaaaaaaa-0000-0000-0000-000000000001\/front-250/.test(u)).length === 1 && outside.length === beforeAlbum + 2, outside.slice(beforeAlbum));
+    const btAlbum = ms.albums.find((a) => a.title === 'Blue Train');
+    await sleep(800);
+    const btDoc = await lib(page, 'get', { objId: btAlbum.objId });
+    check('find cover: the album keeps the copy, not an address', btDoc.r.record.payload.coverBlob === gotAlbumCover && btDoc.r.record.payload.coverUrl === null && !/https?:/.test(JSON.stringify(btDoc.r.record.payload)), btDoc.r.record.payload);
+    check('find cover: and the button is gone from the album page', await until(async () => (await frame.locator('.dlg:visible button', { hasText: 'Find a cover online' }).count()) === 0, 6000));
+
     // ---- 4. nothing went to a host
-    console.log('INFO font requests made by the pages: ' + JSON.stringify(Array.from(fonts)));
+    check('fonts: no page asked a font service for anything (Books and Music, from the first load to the last)', fonts.size === 0, Array.from(fonts));
     const resources = await frame.evaluate(() => performance.getEntriesByType('resource').map((r) => r.name).filter((n) => /\/@did:|\/nodejs\/|\/dids\/|\/blobs\//.test(n)));
     check('no host: no request to a host route was made while using Books and Music', requests.length === 0 && resources.length === 0, { requests, resources });
     check('no errors came from the page', errors.length === 0, errors);
