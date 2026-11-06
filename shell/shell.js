@@ -76,12 +76,12 @@
         if (!rec) throw new Error('No such identity on this device.');
         return window.keoConfirm.ask({
           title: 'Remove this identity from this device?', did: rec.did, label: rec.label, yes: 'Remove', no: 'Keep',
-          text: 'The world you are in asked for this. Its keys, saved worlds and messages are deleted from this device and cannot be brought back. The passkey stays in your authenticator: a web page cannot delete it.'
+          text: 'The world you are in asked for this. Its keys, saved worlds, library items and messages are deleted from this device and cannot be brought back. The passkey stays in your authenticator: a web page cannot delete it.'
         });
       }).then(function (yes) {
         if (!yes) throw new Error('Not removed: it was not confirmed.');
         return window.keoIdentity.remove({ did: did });
-      }).then(function () { return window.keoWorlds.purge(did); }).then(function () { return window.keoChatLog.purge(did); }).then(function () { return window.keoContacts.purge(did); }).then(function () {
+      }).then(function () { return window.keoWorlds.purge(did); }).then(function () { return window.keoChatLog.purge(did); }).then(function () { return window.keoLibrary.purge(did); }).then(function () { return window.keoContacts.purge(did); }).then(function () {
         return window.keoIdentity.current();
       }).then(function (s) {
         if (!s || s.did !== did) return true;
@@ -113,6 +113,10 @@
     'world.meta': function (a) { return window.keoWorlds.setMeta({ name: a.name, tags: a.tags, note: a.note }); },
     'world.duplicate': function (a) { return window.keoWorlds.duplicate({ from: a.from, to: a.to }); },
     'world.search': function (a) { return window.keoWorlds.search({ query: a.query }); },
+    // The small objects the runtime's own apps keep (books, albums, folders), encrypted under the signed-in identity (keo-library.js).
+    // `doc` is one object the world built; the shell checks whose it is and what kind, and stores it as it is.
+    'library.get': function (a) { return window.keoLibrary.get({ objId: a.objId }); },
+    'library.put': function (a) { return window.keoLibrary.put({ objId: a.objId, doc: a.doc }); },
     // The identity's own small settings (encrypted with its worlds): only the names keo-worlds.js allows.
     'prefs.get': function () { return window.keoWorlds.prefsGet(); },
     'prefs.set': function (a) { return window.keoWorlds.prefsSet({ key: a.key, value: a.value }); },

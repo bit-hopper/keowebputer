@@ -198,9 +198,9 @@ const names = (rows) => rows.map((r) => r.name);
     await click(page, await textRect(page, frame, 'Template'));
     win = await until(async () => { const s = await readWin(frame); return s && s.all.includes('Choose a template') ? s : null; });
     const hostTags = win ? win.all.filter((t) => t === 'Needs a host').length : -1;
-    check('templates: all of them are listed; the five that keep their data on a host say "Needs a host"', !!win && ['Shop', 'Import from Inventory', 'Gallery', 'Movie', 'Books', 'Game', 'Music', 'Diary'].every((t) => win.all.includes(t)) && hostTags === 5 && win.all.includes('Coming soon'), { hostTags, all: win && win.all });
+    check('templates: all of them are listed; the three that still keep their data on a host say "Needs a host"', !!win && ['Shop', 'Import from Inventory', 'Gallery', 'Movie', 'Books', 'Game', 'Music', 'Diary'].every((t) => win.all.includes(t)) && hostTags === 3 && win.all.includes('Coming soon'), { hostTags, all: win && win.all });
     await page.screenshot({ path: path.join(WORK, 'my-worlds-templates.png') });
-    await click(page, await textRect(page, frame, 'Books'));
+    await click(page, await textRect(page, frame, 'Gallery'));
     await sleep(800);
     win = await readWin(frame);
     check('templates: one that needs a host cannot be chosen (the list stays)', win.all.includes('Choose a template') && !win.all.includes('Name'), win.all);
@@ -239,6 +239,27 @@ const names = (rows) => rows.map((r) => r.name);
     const shopSaved = await until(async () => { const d = (await keoCall(frame, 'world.load', { name: 'My shop' })).r; return d && /Find something made with care/.test(d.doc); }, 20000);
     check('shop: what is saved holds the storefront', !!shopSaved);
 
+    // ---- a Books world, chosen from the picker: its library is made on this device and the saved world remembers it
+    await frame.evaluate(() => { const keo = $world.morphMenuItems().find((i) => i[0] === 'keo'); keo[1].find((i) => i[0] === 'My worlds')[1](); });
+    await until(async () => { const s = await readWin(frame); return s && s.rows.length >= 5; });
+    await click(page, await byName(page, frame, 'createBtn'));
+    await until(async () => (await textRect(page, frame, 'Template')) ? true : null, 6000);
+    await click(page, await textRect(page, frame, 'Template'));
+    await until(async () => (await textRect(page, frame, 'Books')) ? true : null, 6000);
+    await click(page, await textRect(page, frame, 'Books'));
+    win = await until(async () => { const s = await readWin(frame); return s && s.all.includes('New Books world') ? s : null; });
+    check('books: Books can be chosen (it needs no host here) and asks for a name', !!win, win && win.all);
+    await click(page, await byName(page, frame, 'createNameInput'));
+    await page.keyboard.type('My books', { delay: 25 });
+    await click(page, await byName(page, frame, 'createSubmitBtn'));
+    frame = await waitForWorld(page, 'blank', 'My books');
+    const booksLib = await until(() => frame.evaluate(() => { const m = $world.submorphs.find((x) => x.name === 'Books'); return m && m.state && m.state.loaded && m.booksLibraryObjId ? m.booksLibraryObjId : null; }), 25000);
+    check('books: the app is in the world and its library was made on this device', !!booksLib, booksLib);
+    const booksSaved = await until(async () => { const d = (await keoCall(frame, 'world.load', { name: 'My books' })).r; return d && booksLib && d.doc.indexOf(booksLib) >= 0 ? d : null; }, 20000);
+    check('books: what is saved holds the library id, so opening the world again does not make another', !!booksSaved);
+    const bl = (await keoCall(frame, 'world.list')).r.find((w) => w.name === 'My books');
+    check('books: the library lists it as made from that template', !!bl && bl.template === 'books', bl);
+
     // ---- a blank world from the Create page, by name; a name that is taken is refused and nothing restarts
     await frame.evaluate(() => { const keo = $world.morphMenuItems().find((i) => i[0] === 'keo'); keo[1].find((i) => i[0] === 'My worlds')[1](); });
     await until(async () => { const s = await readWin(frame); return s && s.rows.length >= 5; });
@@ -250,7 +271,7 @@ const names = (rows) => rows.map((r) => r.name);
     await page.keyboard.type('Trip', { delay: 25 });
     await click(page, await byName(page, frame, 'createSubmitBtn'));
     win = await until(async () => { const s = await readWin(frame); return s && /already exists/.test(s.createStatus) ? s : null; });
-    check('create: a name that is taken is refused with a sentence, and this world keeps running', !!win && (await frame.evaluate(() => window.keo.init.startup.name)) === 'My shop', win);
+    check('create: a name that is taken is refused with a sentence, and this world keeps running', !!win && (await frame.evaluate(() => window.keo.init.startup.name)) === 'My books', win);
     await click(page, await byName(page, frame, 'createNameInput'));
     await page.keyboard.press('Control+A'); await page.keyboard.type('Fresh start', { delay: 25 });
     await click(page, await byName(page, frame, 'createSubmitBtn'));
