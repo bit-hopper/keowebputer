@@ -92,7 +92,7 @@ module("lively.music.Music")
     // viewport node because the modals are siblings of the scrolling main
     // pane, not descendants of it.
     var MUSIC_CSS = "" +
-      "@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=DM+Sans:wght@400;500;600&family=DM+Mono&display=swap');" +
+      // The fonts this app uses are declared once for the world in core/styles/app-fonts.css (see StyleSheets.js).
       THEME_KEYS.map(themeCssBlock).join("") +
       ".lk-music-viewport { position:relative; display:flex; flex-direction:column; height:100%; overflow:hidden; background:var(--bg); color:var(--text);" +
       "  font-family:'DM Sans',system-ui,sans-serif; font-size:14px; line-height:1.4; box-sizing:border-box; transition:background .2s ease, color .2s ease; }" +
@@ -857,7 +857,11 @@ module("lively.music.Music")
               if (!err && result && result.album && !(result.envelope.state && result.envelope.state.deleted)) {
                 out[i] = Object.assign({ objId: result.objId, libraryPointerId: ptr.id }, result.album);
               }
-              if (--remaining === 0) thenDo(out.filter(Boolean).reverse()); // newest first
+              if (--remaining === 0) {
+                var albums = out.filter(Boolean).reverse(); // newest first
+                // a local identity's albums keep their picture on this device: draw that copy (a host's keep their address)
+                lively.identity.fileCrypto.resolveCovers(albums, function () { thenDo(albums); });
+              }
             });
           });
         },
@@ -873,7 +877,11 @@ module("lively.music.Music")
           pointers.forEach(function (ptr, i) {
             lively.identity.fileCrypto.fetchFolder(self.musicLibraryHandle, ptr.refObjId, function (err, folder) {
               if (!err && folder) out[i] = self._playlistFromFolder(folder, ptr.id);
-              if (--remaining === 0) thenDo(out.filter(Boolean));
+              if (--remaining === 0) {
+                var lists = out.filter(Boolean), tracks = [];
+                lists.forEach(function (p) { tracks = tracks.concat(p.entries); });
+                lively.identity.fileCrypto.resolveCovers(tracks, function () { thenDo(lists); });
+              }
             });
           });
         },
@@ -922,8 +930,11 @@ module("lively.music.Music")
             setTimeout(function () {
               if (isStale && isStale()) return thenDo(new Error("stale"));
               self._catalogLast = Date.now();
-              fetch(url)
-                .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+              // A local identity's lookups go through the shell: this site refuses the world's own origin, and the shell has the
+              // package's permission for it (and checks the address). A host's world reads the address itself, as before.
+              (self._isLocal()
+                ? new Promise(function (res, rej) { lively.identity.localIdentity.catalogGet(url, function (err, json) { if (err) rej(err); else res(json); }); })
+                : fetch(url).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }))
                 .then(function (json) { thenDo(null, json); })
                 .catch(function (e) {
                   if (n + 1 < MAX_TRIES) { if (onRetry) onRetry(n + 1, MAX_TRIES - 1); attempt(n + 1); }
@@ -1195,19 +1206,35 @@ module("lively.music.Music")
               title: cat.title, artist: cat.artist, year: cat.year, coverUrl: cat.coverUrl, coverSource: "itunes",
               ids: { itunes: cat.catalogId }, storeUrl: cat.storeUrl, tracks: tracks, shelf: shelf, rating: 0, isPublic: !self._isLocal(),
             };
-            lively.identity.fileCrypto.createAlbum(data, function (err1, created) {
-              if (err1) { self.state.addingKey = null; self._toast("Couldn't save: " + err1.message); self._renderAddResults(); return; }
-              self._serial(self.musicLibraryObjId, function (done) {
-              lively.identity.fileCrypto.addPointerToFolder(self.musicLibraryHandle, self.musicLibraryObjId, { refType: "album", refObjId: created.objId }, function (err2, ptr) {
-                done();
-                self.state.addingKey = null;
-                if (err2) { self._toast("Couldn't add to library: " + err2.message); self._renderAddResults(); return; }
-                self.state.albums.unshift(Object.assign({ objId: created.objId, libraryPointerId: ptr.id }, data));
-                self._toast("Added to " + SHELF_LABELS[shelf]);
-                self._renderAll();
+            var save = function () {
+              lively.identity.fileCrypto.createAlbum(data, function (err1, created) {
+                if (err1) { self.state.addingKey = null; self._toast("Couldn't save: " + err1.message); self._renderAddResults(); return; }
+                self._serial(self.musicLibraryObjId, function (done) {
+                lively.identity.fileCrypto.addPointerToFolder(self.musicLibraryHandle, self.musicLibraryObjId, { refType: "album", refObjId: created.objId }, function (err2, ptr) {
+                  done();
+                  self.state.addingKey = null;
+                  if (err2) { self._toast("Couldn't add to library: " + err2.message); self._renderAddResults(); return; }
+                  var item = Object.assign({ objId: created.objId, libraryPointerId: ptr.id }, data);
+                  lively.identity.fileCrypto.resolveCovers([item], function () {
+                    self.state.albums.unshift(item);
+                    self._toast("Added to " + SHELF_LABELS[shelf]);
+                    self._renderAll();
+                  });
+                });
+                });
               });
+            };
+            // On this device the picture is copied once, now, and the catalogue's address is not kept (FileCrypto.cacheImage). If it
+            // cannot be copied the album is added without one.
+            if (self._isLocal() && data.coverUrl) {
+              var cu = data.coverUrl;
+              data.coverUrl = null;
+              return lively.identity.fileCrypto.cacheImage(cu, function (e, img) {
+                if (img) { data.coverBlob = img.cid; data.coverMime = img.mime; }
+                save();
               });
-            });
+            }
+            save();
           });
         },
         _patchAlbum: function (objId, patch) {
@@ -1241,6 +1268,36 @@ module("lively.music.Music")
               else q.running = false;
             });
           })();
+        },
+        // For a local identity, when the button is pressed: looks the album up in MusicBrainz (title and artist: the only things sent), then
+        // asks the Cover Art Archive for the front cover of each of the first three matches in turn, and copies the first one found to
+        // this device. Neither site needs a key and both answer the world's origin. Nothing is looked up unless the person presses it.
+        _findAlbumCover: function (album) {
+          var self = this;
+          if (!this._isLocal() || !this.state.isOwner || this._coverBusy) return;
+          this._coverBusy = true;
+          this._toast("Looking for a cover…");
+          var clean = function (x) { return String(x || "").replace(/["\\]/g, " ").trim(); };
+          var q = 'release:"' + clean(album.title) + '"' + (album.artist && album.artist !== "Unknown" ? ' AND artist:"' + clean(album.artist) + '"' : "");
+          fetch("https://musicbrainz.org/ws/2/release/?fmt=json&limit=3&query=" + encodeURIComponent(q))
+            .then(function (r) { return r.ok ? r.json() : { releases: [] }; })
+            .then(function (data) {
+              var ids = (data.releases || []).map(function (r) { return r.id; }).filter(Boolean).slice(0, 3);
+              (function next(i) {
+                if (i >= ids.length) { self._coverBusy = false; return self._toast("No cover found"); }
+                lively.identity.fileCrypto.cacheImage("https://coverartarchive.org/release/" + ids[i] + "/front-250", function (err, img) {
+                  if (err) return next(i + 1);
+                  album.coverBlob = img.cid;
+                  album.coverMime = img.mime;
+                  lively.identity.fileCrypto.resolveCovers([album], function () {
+                    self._queueAlbumSave(album.objId, { coverBlob: img.cid, coverMime: img.mime, coverUrl: null });
+                    self._coverBusy = false;
+                    self._toast("Cover added");
+                    self._renderAll();
+                  });
+                });
+              })(0);
+            }).catch(function () { self._coverBusy = false; self._toast("Could not reach the catalogue"); });
         },
         _removeAlbum: function (objId) {
           var album = this._album(objId);
@@ -1295,6 +1352,35 @@ module("lively.music.Music")
           });
         },
         // Appends track items to a playlist in ONE folder write.
+        // For a local identity: copies each distinct picture the entries point at to this device (four at a time, at most 40), and
+        // gives each entry the copy instead of the address. An entry whose picture cannot be copied has none. Calls thenDo().
+        _cacheEntryCovers: function (entries, thenDo) {
+          var urls = [];
+          entries.forEach(function (e) { if (e.coverUrl && urls.indexOf(e.coverUrl) < 0) urls.push(e.coverUrl); });
+          var made = {}, next = 0, active = 0, cap = urls.slice(0, 40);
+          function finish() {
+            entries.forEach(function (e) {
+              var img = e.coverUrl && made[e.coverUrl];
+              e.coverUrl = null;
+              if (img) { e.coverBlob = img.cid; e.coverMime = img.mime; }
+            });
+            thenDo();
+          }
+          if (!cap.length) return finish();
+          function pump() {
+            while (active < 4 && next < cap.length) {
+              (function (u) {
+                active++; next++;
+                lively.identity.fileCrypto.cacheImage(u, function (err, img) {
+                  if (img) made[u] = img;
+                  active--;
+                  if (next >= cap.length && active === 0) finish(); else pump();
+                });
+              })(cap[next]);
+            }
+          }
+          pump();
+        },
         _addTracksToPlaylist: function (pl, items, thenDo) {
           var self = this;
           var entries = items.map(function (t) {
@@ -1303,14 +1389,25 @@ module("lively.music.Music")
               previewUrl: t.previewUrl || null, durationMs: t.durationMs || 0, ids: t.ids || {},
             };
           });
+          if (this._isLocal()) {
+            this._toast("Adding…");
+            return this._cacheEntryCovers(entries, function () { self._saveTracksToPlaylist(pl, entries, thenDo); });
+          }
+          this._saveTracksToPlaylist(pl, entries, thenDo);
+        },
+        _saveTracksToPlaylist: function (pl, entries, thenDo) {
+          var self = this;
           this._serial(pl.objId, function (done) {
             lively.identity.fileCrypto.addEntriesToFolder(self.musicLibraryHandle, pl.objId, entries, function (err, result) {
               done();
               if (err) { self._toast("Couldn't add: " + err.message); return thenDo && thenDo(err); }
-              entries.forEach(function (e, i) { e.id = result.ids[i]; e.addedAt = new Date().toISOString(); pl.entries.push(e); });
-              self._toast("Added " + entries.length + (entries.length === 1 ? " track" : " tracks") + " to " + pl.name);
-              self._renderAll();
-              if (thenDo) thenDo(null);
+              entries.forEach(function (e, i) { e.id = result.ids[i]; e.addedAt = new Date().toISOString(); });
+              lively.identity.fileCrypto.resolveCovers(entries, function () {
+                entries.forEach(function (e) { pl.entries.push(e); });
+                self._toast("Added " + entries.length + (entries.length === 1 ? " track" : " tracks") + " to " + pl.name);
+                self._renderAll();
+                if (thenDo) thenDo(null);
+              });
             });
           });
         },
@@ -2393,6 +2490,11 @@ module("lively.music.Music")
           if (owner) {
             var addAll = this._btn("btn", "Add all tracks to playlist", "add", acts, function () { self._openPick(items); }, 18);
             addAll.style.justifyContent = "center";
+          }
+          if (owner && this._isLocal() && !album.coverBlob) {
+            var findCover = this._btn("btn", "Find a cover online", "image_search", acts, function () { self._findAlbumCover(album); }, 18);
+            findCover.style.justifyContent = "center";
+            findCover.title = "Sends the album and artist to musicbrainz.org";
           }
           var links = this._dom.dLinks;
           this._clear(links);

@@ -135,9 +135,7 @@ module("lively.books.Books")
     // modals unthemed (same reasoning Gallery.js's own CSS already follows
     // for its lightbox).
     var BOOKS_CSS = "" +
-      "@import url('https://fonts.googleapis.com/css2?" +
-      THEME_KEYS.map(function (k) { return THEMES[k].fontImport; }).join("&") +
-      "&display=swap');" +
+      // The fonts this app uses are declared once for the world in core/styles/app-fonts.css (see StyleSheets.js).
       THEME_KEYS.map(themeCssBlock).join("") +
       ".lk-books-viewport {" +
       "  background:var(--b-bg); color:var(--b-text); font-family:var(--b-font-ui);" +
@@ -531,6 +529,13 @@ module("lively.books.Books")
           this._dom.detailCoverText = this._el("div", "detail-cover-text", this._dom.detailCover);
           this._dom.detailCoverAuthor = this._el("div", "detail-cover-author", this._dom.detailCoverText);
           this._dom.shelfPillRow = this._el("div", "shelf-pill-row", coverPane);
+          // Only for a local identity and a book without a picture: looks one up online when pressed (see _findCover).
+          var findBtn = this._text("button", "btn btn-outline", "Find a cover online", coverPane);
+          findBtn.style.display = "none";
+          findBtn.style.marginTop = "10px";
+          findBtn.title = "Sends the title and author to openlibrary.org";
+          findBtn.addEventListener("click", function () { self._findCover(); });
+          this._dom.findCoverBtn = findBtn;
 
           var body = this._el("div", "detail-body", box);
           var top = this._el("div", "detail-top", body);
@@ -700,7 +705,8 @@ module("lively.books.Books")
               if (!err && result && result.book && !(result.envelope.state && result.envelope.state.deleted)) {
                 out.push(Object.assign({ objId: result.objId, libraryPointerId: ptr.id }, result.book));
               }
-              if (--remaining === 0) thenDo(out);
+              // a local identity's books keep their picture on this device: draw that copy (a host's books keep their address)
+              if (--remaining === 0) lively.identity.fileCrypto.resolveCovers(out, function () { thenDo(out); });
             });
           });
         },
@@ -925,15 +931,35 @@ module("lively.books.Books")
             description: result.description, coverUrl: result.coverUrl, coverSource: result.coverSource,
             isbn: result.isbn, isPublic: !this._isLocal(),
           };
+          // On this device the picture is copied once, now, and the catalogue's address is not kept (FileCrypto.cacheImage). If it
+          // cannot be copied the book is added without one.
+          if (this._isLocal()) {
+            var cu = data.coverUrl;
+            data.coverUrl = null;
+            if (cu) {
+              this._dom.addHint.textContent = "Adding…";
+              return lively.identity.fileCrypto.cacheImage(cu, function (e, img) {
+                if (img) { data.coverBlob = img.cid; data.coverMime = img.mime; }
+                self._createBook(data);
+              });
+            }
+          }
+          this._createBook(data);
+        },
+        _createBook: function (data) {
+          var self = this;
           lively.identity.fileCrypto.createBook(data, function (err, created) {
             if (err) { console.warn("[Books] could not create book:", err.message); return; }
             lively.identity.fileCrypto.addPointerToFolder(self.booksLibraryHandle, self.booksLibraryObjId, { refType: "book", refObjId: created.objId }, function (err2, ptr) {
               if (err2) { console.warn("[Books] could not add to library:", err2.message); return; }
-              self.state.books.push(Object.assign({ objId: created.objId, libraryPointerId: ptr.id }, data));
-              self.state.addOpen = false;
-              self._renderAddModal();
-              self._renderSidebar();
-              self._renderGrid();
+              var item = Object.assign({ objId: created.objId, libraryPointerId: ptr.id }, data);
+              lively.identity.fileCrypto.resolveCovers([item], function () {
+                self.state.books.push(item);
+                self.state.addOpen = false;
+                self._renderAddModal();
+                self._renderSidebar();
+                self._renderGrid();
+              });
             });
           });
         },
@@ -963,9 +989,60 @@ module("lively.books.Books")
           Object.assign(book, patch);
           this._renderGrid();
           this._renderDetailModal();
-          lively.identity.fileCrypto.updateBook(this.booksLibraryHandle, book.objId, patch, function (err) {
-            if (err) console.warn("[Books] could not save book:", err.message);
-          });
+          this._queueBookSave(book.objId, patch);
+        },
+        // For a local identity, when the button is pressed: looks the open book up in Open Library (its title, then its author: the only
+        // things sent), copies the first cover it has to this device and keeps that. Nothing is looked up unless the person presses it.
+        _findCover: function () {
+          var self = this, book = this._currentBook();
+          if (!book || !this._isLocal() || !this.state.isOwner || this._coverBusy) return;
+          var btn = this._dom.findCoverBtn;
+          this._coverBusy = true;
+          btn.textContent = "Looking…";
+          function done(msg) {
+            self._coverBusy = false;
+            btn.textContent = msg;
+            setTimeout(function () { if (!self._coverBusy) btn.textContent = "Find a cover online"; }, 3000);
+          }
+          var q = (book.title + (book.author && book.author !== "Unknown" ? " " + book.author : "")).trim();
+          fetch("https://openlibrary.org/search.json?limit=5&fields=cover_i,title&q=" + encodeURIComponent(q))
+            .then(function (r) { return r.ok ? r.json() : { docs: [] }; })
+            .then(function (data) {
+              var hit = (data.docs || []).filter(function (d) { return d.cover_i; })[0];
+              if (!hit) return done("No cover found");
+              lively.identity.fileCrypto.cacheImage("https://covers.openlibrary.org/b/id/" + hit.cover_i + "-M.jpg", function (err, img) {
+                if (err) return done("Could not copy it");
+                book.coverBlob = img.cid;
+                book.coverMime = img.mime;
+                lively.identity.fileCrypto.resolveCovers([book], function () {
+                  self._queueBookSave(book.objId, { coverBlob: img.cid, coverMime: img.mime, coverUrl: null });
+                  self._coverBusy = false;
+                  self._renderGrid();
+                  self._renderDetailModal();
+                });
+              });
+            }).catch(function () { done("Could not reach the catalogue"); });
+        },
+        // updateBook is read-modify-write, so two saves in flight at once both read the same prior version and the later one silently
+        // drops the earlier one's fields (seen: a shelf change followed at once by a rating click kept only one of them; Music.js has
+        // the same queue for its albums). Saves for one book run one at a time, and patches that arrive meanwhile are merged into a
+        // single follow-up save.
+        _queueBookSave: function (objId, patch) {
+          var self = this;
+          this._bookSave = this._bookSave || {};
+          var q = this._bookSave[objId] || (this._bookSave[objId] = { running: false, pending: null });
+          q.pending = Object.assign(q.pending || {}, patch);
+          if (q.running) return;
+          q.running = true;
+          (function next() {
+            var p = q.pending;
+            q.pending = null;
+            lively.identity.fileCrypto.updateBook(self.booksLibraryHandle, objId, p, function (err) {
+              if (err) console.warn("[Books] could not save book:", err.message);
+              if (q.pending) next();
+              else q.running = false;
+            });
+          })();
         },
         _setRating: function (n) { this._patchCurrentBook({ rating: n }); },
         _setShelf: function (shelf) { this._patchCurrentBook({ shelf: shelf }); this._renderSidebar(); },
@@ -1494,6 +1571,8 @@ module("lively.books.Books")
           if (!canSeeReviews) this._text("div", "text-faint", "Reviews & notes aren't visible here.", this._dom.commentList);
 
           this._dom.reviewsSection.style.display = this._isLocal() ? "none" : "";
+          this._dom.findCoverBtn.style.display = this._isLocal() && this.state.isOwner && !book.coverBlob ? "" : "none";
+          if (!this._coverBusy) this._dom.findCoverBtn.textContent = "Find a cover online";
           this._dom.deleteBtn.style.display = this.state.isOwner ? "" : "none";
         },
 

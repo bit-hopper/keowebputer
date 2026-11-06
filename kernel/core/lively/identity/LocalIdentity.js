@@ -111,6 +111,15 @@ module("lively.identity.LocalIdentity")
       // Not here: pictures and files (no blob store yet), signatures, a version history, sync.
       libGet: function libGet(objId, thenDo) { this._run("library.get", { objId: objId }, 30000, thenDo); },
       libPut: function libPut(objId, doc, thenDo) { this._run("library.put", { objId: objId, doc: doc }, 30000, thenDo); },
+      // Files kept by their hash (a picture): libBlobPut(cid, bytes) -> true (cid must be the base64url SHA-256 of the bytes, which the shell
+      // checks; bytes an ArrayBuffer or typed array), libBlobGet(cid) -> an ArrayBuffer or null, libBlobRemove(cid) -> true when one was removed.
+      libBlobPut: function libBlobPut(cid, bytes, thenDo) { this._run("library.blobPut", { cid: cid, bytes: bytes }, 120000, thenDo); },
+      libBlobGet: function libBlobGet(cid, thenDo) { this._run("library.blobGet", { cid: cid }, 120000, thenDo); },
+      libBlobRemove: function libBlobRemove(cid, thenDo) { this._run("library.blobRemove", { cid: cid }, 30000, thenDo); },
+
+      // A read of the music catalogue's search or lookup address, made by the shell (the world's origin is refused by that site; the
+      // shell has permission for it and accepts only those two paths). thenDo(err, the parsed JSON).
+      catalogGet: function catalogGet(url, thenDo) { this._run("catalog.get", { url: url }, 30000, thenDo); },
 
       // ─── direct connections to another device (shell/keo-p2p.js) ────────────────
       // Two devices connect by swapping two short codes by hand (paste, or later a QR); no server is involved, so it works

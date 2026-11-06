@@ -306,6 +306,13 @@ module('lively.identity.FileCrypto')
       // Blob rather than a concatenated Uint8Array) to the content-addressed
       // blob store.
       _putBlob: function (handle, cid, bytes, thenDo) {
+        if (this._local()) {
+          // bytes is a Blob or a typed array; the shell wants the bytes themselves and checks that cid is their hash
+          var asBuffer = bytes && typeof bytes.arrayBuffer === 'function' ? bytes.arrayBuffer() : Promise.resolve(bytes);
+          return asBuffer.then(function (buf) {
+            lively.identity.localIdentity.libBlobPut(cid, buf, function (err) { thenDo(err || null, { ok: true }); });
+          }).catch(function (e) { thenDo(e); });
+        }
         var base = lively.identity.did.baseUrl();
         fetch(base + '/@' + handle + '/blobs/' + cid, {
           method: 'PUT',
@@ -326,6 +333,9 @@ module('lively.identity.FileCrypto')
       // Folder needs it to reclaim the original blob after re-encrypting the
       // file's bytes under the folder's own dek.
       _deleteBlob: function (handle, blobCid, thenDo) {
+        if (this._local()) {
+          return lively.identity.localIdentity.libBlobRemove(blobCid, function (err) { thenDo(err || null); });
+        }
         var base = lively.identity.did.baseUrl();
         fetch(base + '/@' + handle + '/blobs/' + blobCid, {
           method: 'DELETE',
@@ -639,6 +649,13 @@ module('lively.identity.FileCrypto')
       },
 
       _fetchBlobBytes: function (handle, blobCid, thenDo) {
+        if (this._local()) {
+          return lively.identity.localIdentity.libBlobGet(blobCid, function (err, buf) {
+            if (err) return thenDo(err);
+            if (!buf) return thenDo(new Error('Could not fetch blob ' + blobCid + ' (not on this device)'));
+            thenDo(null, new Uint8Array(buf));
+          });
+        }
         var base = lively.identity.did.baseUrl();
         fetch(base + '/@' + handle + '/blobs/' + blobCid, { credentials: 'include' })
           .then(function (res) {
@@ -653,6 +670,9 @@ module('lively.identity.FileCrypto')
       // of materializing it, for the chunked decrypt path (_decryptBlobChunked)
       // to stream incrementally via response.body.getReader().
       _fetchBlobResponse: function (handle, blobCid, thenDo) {
+        if (this._local()) {
+          return this._fetchBlobBytes(handle, blobCid, function (err, bytes) { thenDo(err, err ? undefined : new Response(new Blob([bytes]))); });
+        }
         var base = lively.identity.did.baseUrl();
         fetch(base + '/@' + handle + '/blobs/' + blobCid, { credentials: 'include' })
           .then(function (res) {
@@ -660,6 +680,65 @@ module('lively.identity.FileCrypto')
             thenDo(null, res);
           })
           .catch(function (e) { thenDo(e); });
+      },
+
+    },
+
+    // Pictures for the template apps while the session is local (see _local). A catalogue item is added by copying its picture to this
+    // device once, when the person adds it; after that the app draws the copy and never asks the catalogue's address again. Not for
+    // anything a host keeps: there the apps keep using the address, as before.
+    'local pictures', {
+
+      // Copies the picture at an https address into the library, if it is one (a type of picture, at most CACHE_IMAGE_MAX bytes).
+      // Calls thenDo(null, { cid, mime }), or thenDo(err) when it could not be copied (the item is then added without a picture:
+      // its address is not kept). The request carries no cookies and no referrer.
+      cacheImage: function (url, thenDo) {
+        var self = this, c = lively.identity.crypto;
+        if (!this._local()) return thenDo(new Error('Pictures are copied only to a library on this device.'));
+        if (!/^https:\/\//.test(String(url))) return thenDo(new Error('Not a picture address.'));
+        fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer' }).then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          var mime = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+          if (!/^image\/(jpeg|png|gif|webp|avif)$/.test(mime)) throw new Error('Not a picture (' + mime + ')');
+          return res.arrayBuffer().then(function (buf) {
+            if (buf.byteLength > 3 * 1024 * 1024) throw new Error('The picture is larger than 3 MB');
+            var bytes = new Uint8Array(buf);
+            c.sha256(bytes, function (err, cid) {
+              if (err) return thenDo(err);
+              self._putBlob(null, cid, bytes, function (err2) { thenDo(err2 || null, err2 ? undefined : { cid: cid, mime: mime }); });
+            });
+          });
+        }).catch(function (e) { thenDo(e); });
+      },
+
+      // An object URL for a picture kept by cacheImage, the same one every time. Calls thenDo(null, url).
+      imageUrl: function (cid, mime, thenDo) {
+        if (!this._urlCache) this._urlCache = {};
+        var key = 'image:' + cid;
+        if (this._urlCache[key]) return thenDo(null, this._urlCache[key]);
+        var self = this;
+        this._fetchBlobBytes(null, cid, function (err, bytes) {
+          if (err) return thenDo(err);
+          var url = URL.createObjectURL(new Blob([bytes], { type: mime || 'image/jpeg' }));
+          self._urlCache[key] = url;
+          thenDo(null, url);
+        });
+      },
+
+      // For items an app has just read (each { coverBlob, coverMime, ... }): sets item.coverUrl to the picture's object URL, so the
+      // app's own drawing code, which reads coverUrl, shows the copy. An item whose copy cannot be read is left as it was. Does
+      // nothing for a host's items. Calls thenDo() when all are done.
+      resolveCovers: function (items, thenDo) {
+        var self = this;
+        var todo = this._local() ? (items || []).filter(function (it) { return it && it.coverBlob; }) : [];
+        if (!todo.length) return thenDo();
+        var left = todo.length;
+        todo.forEach(function (it) {
+          self.imageUrl(it.coverBlob, it.coverMime, function (err, url) {
+            if (!err) it.coverUrl = url;
+            if (--left === 0) thenDo();
+          });
+        });
       },
 
     },

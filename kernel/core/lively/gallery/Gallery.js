@@ -114,9 +114,7 @@ module("lively.gallery.Gallery")
     // lightbox unthemed (same reasoning Shop.js's own CSS already follows
     // for its checkout dialog).
     var GALLERY_CSS = "" +
-      "@import url('https://fonts.googleapis.com/css2?" +
-      THEME_KEYS.map(function (k) { return THEMES[k].fontImport; }).join("&") +
-      "&display=swap');" +
+      // The fonts this app uses are declared once for the world in core/styles/app-fonts.css (see StyleSheets.js).
       THEME_KEYS.map(themeCssBlock).join("") +
       ".lk-gallery-viewport {" +
       "  background:var(--g-bg); color:var(--g-text); font-family:var(--g-font-body);" +

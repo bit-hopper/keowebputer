@@ -820,13 +820,5 @@ module("lively.media.Musicpod")
       return m;
     };
 
-    // Poppins / Roboto Mono, per design spec §4 — injected once, guarded
-    // so reopening/copying this morph doesn't pile up duplicate <link> tags.
-    if (!document.getElementById("musicpod-fonts")) {
-      var fontLink = document.createElement("link");
-      fontLink.id = "musicpod-fonts";
-      fontLink.rel = "stylesheet";
-      fontLink.href = "https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&family=Roboto+Mono:wght@400;500&display=swap";
-      document.head.appendChild(fontLink);
-    }
+    // Poppins / Roboto Mono, per design spec §4: declared once for the world in core/styles/app-fonts.css (see StyleSheets.js).
   }); // end module('lively.media.Musicpod')

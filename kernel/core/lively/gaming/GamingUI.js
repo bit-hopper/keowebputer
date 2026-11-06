@@ -147,17 +147,11 @@ module("lively.gaming.GamingUI")
 
       // ─── fonts and styles ────────────────────────────────────────────────
 
-      // Injects the web-font stylesheet <link> (Caprasimo for titles, Figtree for text) and the
-      // few global CSS rules the template needs, once per page. Safe to call again. The
-      // fonts load asynchronously: text built before they arrive is simply re-laid-out
-      // by the browser, but measure widths with textW (canvas), not from a live node.
+      // Injects the few global CSS rules the template needs, once per page. Safe to call again. Its fonts (Caprasimo for titles,
+      // Figtree for text) are declared once for the world in core/styles/app-fonts.css (see StyleSheets.js). They load
+      // asynchronously: text built before they arrive is simply re-laid-out by the browser, but measure widths with textW
+      // (canvas), not from a live node.
       ensureFonts: function () {
-        if (!document.getElementById("gaming-fonts")) {
-          var l = document.createElement("link");
-          l.id = "gaming-fonts"; l.rel = "stylesheet";
-          l.href = "https://fonts.googleapis.com/css2?family=Caprasimo&family=Figtree:wght@400;500;600;700&display=swap";
-          document.head.appendChild(l);
-        }
         if (!document.getElementById("gaming-style")) {
           var st = document.createElement("style");
           st.id = "gaming-style";

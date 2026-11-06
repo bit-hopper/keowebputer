@@ -83,7 +83,7 @@ module("lively.commerce.Shop")
     // Lively world. Custom properties live on the wrapper instead of
     // :root for the same reason.
     var SHOP_CSS = "" +
-      "@import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');" +
+      // The fonts this app uses are declared once for the world in core/styles/app-fonts.css (see StyleSheets.js).
       ".lk-shop-viewport {" +
       "  --color-bg:#fdf0f5; --color-surface:#fbe0ec; --color-text:#201e1d; --color-accent:#e8497e; --color-accent-2:#7cb342;" +
       "  --color-divider:color-mix(in srgb, #201e1d 16%, transparent);" +

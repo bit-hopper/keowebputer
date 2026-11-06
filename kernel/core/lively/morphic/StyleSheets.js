@@ -60,6 +60,15 @@ module('lively.morphic.StyleSheets').requires('lively.morphic.Core', 'apps.cssPa
         bodyFontEl.setAttribute('href', Config.codeBase + 'styles/atkinson-hyperlegible.css')
         document.getElementsByTagName('head')[0].appendChild(bodyFontEl);
         // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+        // The fonts of the template apps (Books, Gallery, Music, Shop, Games, Musicpod), vendored under core/lib/app-fonts/ and
+        // declared once here (core/styles/app-fonts.css), so an app no longer asks a font service for them on every page view.
+        // Same plain-<link> idiom as the fonts above: only @font-face at-rules. The files are fetched when a rule is first used.
+        var appFontsEl = document.createElement('link');
+        appFontsEl.setAttribute('rel', "stylesheet")
+        appFontsEl.setAttribute('type', "text/css")
+        appFontsEl.setAttribute('href', Config.codeBase + 'styles/app-fonts.css')
+        document.getElementsByTagName('head')[0].appendChild(appFontsEl);
+        // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
         // Vendored decorative/display Google Fonts (core/lib/google-fonts/,
         // one subdirectory per family with its own woff2 + upstream license
         // file), requested for the TextFormattingToolbar font-family picker
