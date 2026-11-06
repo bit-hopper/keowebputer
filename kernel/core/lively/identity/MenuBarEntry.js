@@ -198,7 +198,7 @@ module("lively.identity.MenuBarEntry")
             // is what a person reaches for: their page, and signing out.
             return [
               ["My homestar",        function () { self.openMyHomestar(); }],
-              ["Worlds ...",         function () { self.openWorldLibrary(); }],
+              ["My worlds",          function () { self.openMyWorlds(); }],
               ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
               ["Friends ...",        function () { self.openFriendsDialog(); }],
@@ -257,20 +257,6 @@ module("lively.identity.MenuBarEntry")
           });
         },
 
-        // The worlds saved on this device: search, open, name, tag, copy, delete (inside keo only: they live in its shell). One window
-        // at a time: asking again brings the open one forward.
-        openWorldLibrary: function openWorldLibrary() {
-          // Looked for again once the module has loaded: a second request made while it was still loading would otherwise see no
-          // window yet and open another.
-          lively.require("lively.identity.WorldLibrary").toRun(function () {
-            var open = $world.submorphs.filter(function (m) { return m.name === "IdentityWorldLibrary"; })[0];
-            if (open) { open.comeForward(); open.focusSearch(); return; }
-            var w = lively.BuildSpec("lively.identity.WorldLibrary").createMorph();
-            w.openInWorldCenter();
-            w.focusSearch();
-          });
-        },
-
         // The devices this identity has added as friends (inside keo only: the list lives in its shell).
         openFriendsDialog: function openFriendsDialog() {
           lively.require("lively.identity.FriendsDialog").toRun(function () {
@@ -309,8 +295,12 @@ module("lively.identity.MenuBarEntry")
           }, u.displayLabel);
         },
 
+        // One window at a time (the window finds itself by name): asking again brings the open one forward. Looked for once the module
+        // has loaded, because a second request made while it was still loading would otherwise see no window yet and open another.
         openMyWorlds: function openMyWorlds() {
           lively.require("lively.identity.WorldsBrowser").toRun(function () {
+            var open = $world.submorphs.filter(function (m) { return m.name === "WorldsBrowser"; })[0];
+            if (open) return open.comeForward();
             lively.BuildSpec("lively.identity.WorldsBrowser").createMorph().openInWorldCenter();
           });
         },

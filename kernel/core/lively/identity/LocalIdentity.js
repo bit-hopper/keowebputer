@@ -76,13 +76,20 @@ module("lively.identity.LocalIdentity")
       // ─── the worlds saved on this device (shell/keo-worlds.js) ──────────────────
       // All of it is the signed-in identity's own; the shell keeps the worlds encrypted and does the searching, so nothing here
       // sees a key. A name that is taken is refused by the shell (rename, duplicate, and go("blank", name)).
-      //   worldList()                -> [{ name, savedAt, createdAt, bytes, tags, note, last }], newest first
+      //   worldList()                -> [{ name, savedAt, createdAt, bytes, tags, note, template, last }], newest first (template: the
+      //                                 preset a world was started from, or null)
       //   worldSearch(query)         -> { hits: [{ ...the same, score, where: ["name"|"tags"|"note"|"text"], snippet }], skipped }
       //                                 every word has to be found (any order), "quoted phrases"; skipped counts records that
       //                                 could not be read
       //   worldRename(from, to), worldDuplicate(from, to), worldMeta(name, tags, note), worldRemove(name)
       //                              tags is a list (or comma-separated text), note is text; a field left undefined stays as it is
+      //   goNew(name, template)      a new world under that name, optionally from a preset ("shop", "inventory", "gallery", "books",
+      //                              "game", "music", "diary"); the shell refuses a name that is taken, and the world is in the
+      //                              library as soon as it is up. Restarts the world frame.
       // A change tells the page ("keo-worlds-changed" on window) so the lists that copy the library (the world menu) read it again.
+      goNew: function goNew(name, template, thenDo) {
+        this._run("world.go", { kind: "blank", name: name, template: template || undefined }, 120000, thenDo || function () {});
+      },
       worldList: function worldList(thenDo) { this._run("world.list", {}, 30000, thenDo); },
       worldSearch: function worldSearch(query, thenDo) { this._run("world.search", { query: query }, 60000, thenDo); },
       worldRename: function worldRename(from, to, thenDo) { this._runChange("world.rename", { from: from, to: to }, thenDo); },

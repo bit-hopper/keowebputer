@@ -36,6 +36,7 @@ module("lively.identity.WorldsBrowser")
     "lively.identity.DID",
     "lively.identity.WebKey",
     "lively.identity.SignedSerializer",
+    "lively.identity.LocalIdentity",
     "lively.persistence.BuildSpec",
     "lively.morphic.Complete",
   )
@@ -97,6 +98,29 @@ module("lively.identity.WorldsBrowser")
         this.titleBar = this.addMorph(titleBar);
         this.buildUI();
         this.loadWorlds();
+        // Inside keo the worlds are on this device, not on a host: a change made anywhere (the world's own save, another window)
+        // tells the page, and the list is read again while it is showing.
+        if (this.isLocal()) {
+          var self = this;
+          this._onChanged = function () { if (self.world()) self.refreshLocal(); };
+          window.addEventListener("keo-worlds-changed", this._onChanged);
+        }
+      },
+
+      remove: function remove() {
+        if (this._onChanged) window.removeEventListener("keo-worlds-changed", this._onChanged);
+        this._onChanged = null;
+        clearTimeout(this._debounce);
+        this._seq = (this._seq || 0) + 1;     // an answer still on its way is for a window that is gone
+        $super();
+      },
+
+      // True inside keo with a local identity signed in: the worlds are saved on this device (shell/keo-worlds.js), searched and
+      // changed through the shell, and nothing is asked of a host. Everywhere else this window works as it always did.
+      isLocal: function isLocal() {
+        var li = lively.identity.localIdentity, did = lively.identity.did;
+        var user = did && did.isLoggedIn() && did.currentUser();
+        return !!(li && li.isAvailable && li.isAvailable() && user && user.local);
       },
 
       buildUI: function buildUI() {
@@ -125,6 +149,24 @@ module("lively.identity.WorldsBrowser")
         });
         searchInput.beInputLine();
         content.addMorph(searchInput);
+        var local = this.isLocal();
+        this._query = "";
+        if (local) {
+          // Searched as the person types (a short pause after the last key): the DOM's own `input` event, read from the field's text,
+          // because a Text morph's onKeyUp can miss keys typed straight after the window opens. The browser's own focus ring (a black
+          // box) is replaced by the accent colour on the field's border.
+          var inputNode = searchInput.renderContext().shapeNode;
+          inputNode.addEventListener("input", function () { self.setQuery(inputNode.textContent); });
+          if (!document.getElementById("worlds-browser-style")) {
+            var st = document.createElement("style");
+            st.id = "worlds-browser-style";
+            st.textContent = ".worlds-browser-input, .worlds-browser-input * { outline: none !important; }";
+            document.head.appendChild(st);
+          }
+          inputNode.classList.add("worlds-browser-input");
+          inputNode.addEventListener("focusin", function () { inputNode.style.borderColor = "rgb(240,26,105)"; });
+          inputNode.addEventListener("focusout", function () { inputNode.style.borderColor = "rgb(190,190,190)"; });
+        }
 
         var searchIcon = new lively.morphic.Text(lively.rect(pad + 6, y + 5, 16, 16), "search");
         searchIcon.applyStyle({
@@ -144,6 +186,7 @@ module("lively.identity.WorldsBrowser")
         searchIcon.renderContext().shapeNode.style.pointerEvents = "none";
 
         var createBtn = new lively.morphic.Text(lively.rect(pad + searchW + 8, y, createBtnW, 26), "Create");
+        createBtn.name = "createBtn";
         createBtn.applyStyle({
           allowInput: false, fontSize: 13, fontWeight: "bold", textColor: Color.rgb(240, 26, 105),
           fill: Color.rgb(255, 240, 247), borderWidth: 1, borderColor: Color.rgb(240, 190, 210),
@@ -162,7 +205,9 @@ module("lively.identity.WorldsBrowser")
         content.addMorph(createBtn);
         y += 34;
 
-        var listH = content.getExtent().y - y - pad;
+        // Locally, a line under the list says what a change did (renamed, already exists, ...): a host-less list has no page to
+        // navigate to that would show it.
+        var listH = content.getExtent().y - y - pad - (local ? 22 : 0);
         var listBox = new lively.morphic.Box(lively.rect(pad, y, w, listH));
         listBox.name = "worldsList";
         listBox.applyStyle({
@@ -174,11 +219,19 @@ module("lively.identity.WorldsBrowser")
         });
         content.addMorph(listBox);
         self.styleScrollList(listBox);
+        if (local) {
+          var statusText = new lively.morphic.Text(lively.rect(pad, y + listH + 3, w, 16), "");
+          statusText.name = "worldsStatus";
+          statusText.applyStyle({ allowInput: false, fontSize: 10, textColor: Color.rgb(140, 140, 140), fill: null, borderWidth: 0, borderColor: null });
+          statusText.eventsAreIgnored = true;
+          content.addMorph(statusText);
+        }
 
         lively.bindings.connect(searchInput, "savedTextString", self, "filterWorlds");
       },
 
       loadWorlds: function loadWorlds() {
+        if (this.isLocal()) return this.loadLocal();
         var self = this;
         var did = lively.identity.did;
         if (!did || !did.isLoggedIn()) {
@@ -202,7 +255,47 @@ module("lively.identity.WorldsBrowser")
           });
       },
 
+      // ── this device's worlds (inside keo) ─────────────────────────────────────
+
+      // Reads the library, or the search of it, from the shell. Every answer carries the number of the request that asked for it;
+      // one that is no longer the latest (the person typed on) is dropped.
+      loadLocal: function loadLocal() {
+        var self = this, li = lively.identity.localIdentity, q = (this._query || "").trim();
+        var seq = this._seq = (this._seq || 0) + 1;
+        function done(err, items, skipped) {
+          if (seq !== self._seq || !self.world() || !self.get("worldsList")) return;
+          if (err) return self.showMessage("Could not load worlds: " + (err.message || err));
+          self._worlds = items || [];
+          self.renderLocalWorlds(self._worlds);
+          if (skipped) self.setLocalStatus(skipped + (skipped === 1 ? " world" : " worlds") + " could not be read for the search.", true);
+        }
+        if (q) li.worldSearch(q, function (err, r) { done(err, r && r.hits, r && r.skipped); });
+        else li.worldList(function (err, l) { done(err, l, 0); });
+      },
+
+      // The search field's text changed. A search opens every world's text in the shell, so it waits for a short pause in typing.
+      setQuery: function setQuery(q, now) {
+        var self = this;
+        this._query = String(q == null ? "" : q);
+        clearTimeout(this._debounce);
+        if (now) return this.loadLocal();
+        this._debounce = setTimeout(function () { if (self.world() && self.get("worldsList")) self.loadLocal(); }, 150);
+      },
+
+      // Reads the list again, but only while the list is what the window shows (not one of the Create pages).
+      refreshLocal: function refreshLocal() {
+        if (this.get("worldsList")) this.loadLocal();
+      },
+
+      setLocalStatus: function setLocalStatus(msg, isError) {
+        var t = this.get("worldsStatus");
+        if (!t) return;
+        t.setTextString(msg || "");
+        t.setTextColor(isError ? Color.rgb(200, 50, 50) : Color.rgb(140, 140, 140));
+      },
+
       filterWorlds: function filterWorlds(query) {
+        if (this.isLocal()) return this.setQuery(query, true);
         var self = this;
         var worlds = this._worlds || [];
         if (!query || !query.trim()) return this.renderWorlds(worlds);
@@ -291,6 +384,7 @@ module("lively.identity.WorldsBrowser")
       },
 
       renderWorlds: function renderWorlds(worlds) {
+        if (this.isLocal()) return this.renderLocalWorlds(worlds);
         var self = this;
         var listBox = this.get("worldsList");
         if (!listBox) return;
@@ -405,6 +499,176 @@ module("lively.identity.WorldsBrowser")
           y += rowH + 2;
         });
       },
+
+      // One row per world saved on this device. Same look as the host's rows (name, a grey line, "open"), with a "⋯" in the place of
+      // "history" (a save on this device replaces the world, it keeps no versions) that opens a small menu: rename, tags and note, copy,
+      // delete. While searching, a third line shows where the words were found, or the world's note.
+      renderLocalWorlds: function renderLocalWorlds(worlds) {
+        var self = this;
+        var listBox = this.get("worldsList");
+        if (!listBox) return;
+        listBox.removeAllMorphs();
+        this.setLocalStatus("");
+
+        if (!worlds || worlds.length === 0) {
+          var q = (this._query || "").trim();
+          return self.showMessage(q ? "No world matches “" + q + "”." : "No saved worlds yet. Choose Create to start one.");
+        }
+
+        var w = this.listInnerWidth(listBox);
+        var y = 4;
+        var PINK       = Color.rgb(240, 26, 105);
+        var PINK_HOVER = Color.rgb(190, 15, 82);
+        var GRAY       = Color.rgb(150, 150, 150);
+        var GRAY_HOVER = Color.rgb(90, 90, 90);
+        var ROW_HOVER  = Color.rgb(224, 247, 244);
+
+        function ago(iso) {
+          var s = (Date.now() - Date.parse(iso)) / 1000;
+          if (!(s >= 0)) return "";
+          if (s < 60) return "just now";
+          if (s < 3600) return Math.floor(s / 60) + " min ago";
+          if (s < 86400) return Math.floor(s / 3600) + " h ago";
+          if (s < 86400 * 30) return Math.floor(s / 86400) + " d ago";
+          return new Date(iso).toLocaleDateString();
+        }
+        function size(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+        function label(parent, str, x, yy, tw, h, size_, color, bold, name) {
+          var t = new lively.morphic.Text(lively.rect(x, yy, tw, h), str);
+          t.applyStyle({ allowInput: false, fontSize: size_, fontWeight: bold ? "bold" : "normal", textColor: color, fill: null, borderWidth: 0, borderColor: null });
+          t.eventsAreIgnored = true;
+          t.draggingEnabled = false; t.droppingEnabled = false; t.grabbingEnabled = false;
+          if (name) t.name = name;
+          parent.addMorph(t);
+          return t;
+        }
+        // `onUp`: act on the mouse button coming up, not going down. A menu opened on the way down is removed by the world's own
+        // handling of the same click before it has been placed (a null owner inside the menu's delayed positioning).
+        function link(parent, str, x, yy, tw, color, hover, onClick, font, onUp) {
+          var t = new lively.morphic.Text(lively.rect(x, yy, tw, 18), str);
+          var style = { allowInput: false, fontSize: font ? 16 : 12, textColor: color, fill: null, borderWidth: 0, borderColor: null };
+          if (font) style.fontFamily = font;
+          t.applyStyle(style);
+          t.draggingEnabled = false; t.droppingEnabled = false; t.grabbingEnabled = false;
+          t.renderContext().shapeNode.style.cursor = "pointer";
+          t.onMouseOver = function () { t.setTextColor(hover); };
+          t.onMouseOut  = function () { t.setTextColor(color); };
+          if (onUp) t.onMouseUp = function (evt) { onClick(); if (evt && evt.stop) evt.stop(); return true; };
+          else t.onMouseDown = onClick;
+          parent.addMorph(t);
+          return t;
+        }
+
+        worlds.forEach(function (it) {
+          var extra = it.snippet || it.note || "";
+          var rowH = extra ? 66 : 52;
+          var row = new lively.morphic.Box(lively.rect(0, y, w, rowH));
+          row.applyStyle({ fill: null, borderWidth: 0 });
+          row.name = "worldRow";
+          row.worldName = it.name;
+          row.draggingEnabled = false; row.droppingEnabled = false; row.grabbingEnabled = false;
+          row.onMouseOver = function () { row.setFill(ROW_HOVER); };
+          row.onMouseOut  = function () { row.setFill(null); };
+
+          label(row, it.name, 10, 7, w - 130, 20, 13, Color.rgb(40, 40, 40), true, "worldName");
+          var bits = [it.template ? "Template · " + it.template.charAt(0).toUpperCase() + it.template.slice(1) : "World"];
+          if (it.last) bits.push("last saved");
+          bits.push("saved " + ago(it.savedAt));
+          bits.push(size(it.bytes));
+          if (it.tags && it.tags.length) bits.push(it.tags.map(function (t) { return "#" + t; }).join(" "));
+          label(row, bits.join("  ·  "), 10, 29, w - 20, 14, 10, Color.rgb(170, 170, 170), false, "worldMeta");
+          if (extra) label(row, extra, 10, 45, w - 20, 14, 10, Color.rgb(110, 104, 134), false, "worldSnippet");
+
+          var more = link(row, "more_horiz", w - 76, 15, 26, GRAY, GRAY_HOVER, function () { self.openRowMenu(it); }, "'Material Symbols Rounded'", true);
+          more.name = "worldMore";
+          var open = link(row, "open", w - 42, 16, 34, PINK, PINK_HOVER, function () { self.localOpen(it.name); });
+          open.name = "worldOpen";
+
+          var sep = new lively.morphic.Box(lively.rect(10, rowH - 1, w - 20, 1));
+          sep.applyStyle({ fill: Color.rgb(225, 225, 225), borderWidth: 0 });
+          row.addMorph(sep);
+
+          listBox.addMorph(row);
+          y += rowH + 2;
+        });
+      },
+
+      openRowMenu: function openRowMenu(it) {
+        var self = this;
+        lively.morphic.Menu.openAtHand(it.name, [
+          ["Rename…",        function () { self.localRename(it); }],
+          ["Tags & note…",   function () { self.localMeta(it); }],
+          ["Copy…",          function () { self.localCopy(it); }],
+          ["Delete…",        function () { self.localDelete(it); }],
+        ]);
+      },
+
+      localOpen: function localOpen(name) {
+        var self = this;
+        this.setLocalStatus("Opening “" + name + "”…");
+        lively.identity.localIdentity.go("world", name, function (err) {
+          if (err && self.world()) self.setLocalStatus(err.message || String(err), true);
+        });
+      },
+
+      // The four actions ask in the runtime's own prompt boxes and answer in the line under the list. Cancelling a box changes nothing.
+      localRename: function localRename(it) {
+        var self = this;
+        $world.prompt("New name for “" + it.name + "”:", function (name) {
+          if (name === null || name === undefined || !String(name).trim() || String(name).trim() === it.name) return;
+          lively.identity.localIdentity.worldRename(it.name, String(name).trim(), function (err) {
+            if (!self.world()) return;
+            if (err) return self.setLocalStatus(err.message || String(err), true);
+            self.refreshLocal();
+          });
+        }, it.name);
+      },
+
+      // Two questions, one after the other: the tags (comma-separated), then the note. Cancelling the first leaves both as they were.
+      localMeta: function localMeta(it) {
+        var self = this;
+        $world.prompt("Tags for “" + it.name + "” (separate them with commas):", function (tags) {
+          if (tags === null || tags === undefined) return;
+          $world.prompt("A note about “" + it.name + "”:", function (note) {
+            if (note === null || note === undefined) return;
+            lively.identity.localIdentity.worldMeta(it.name, String(tags), String(note), function (err) {
+              if (!self.world()) return;
+              if (err) return self.setLocalStatus(err.message || String(err), true);
+              self.refreshLocal();
+            });
+          }, it.note || "");
+        }, (it.tags || []).join(", "));
+      },
+
+      localCopy: function localCopy(it) {
+        var self = this;
+        $world.prompt("Name for the copy of “" + it.name + "”:", function (name) {
+          if (name === null || name === undefined || !String(name).trim()) return;
+          lively.identity.localIdentity.worldDuplicate(it.name, String(name).trim(), function (err) {
+            if (!self.world()) return;
+            if (err) return self.setLocalStatus(err.message || String(err), true);
+            self.refreshLocal();
+          });
+        }, it.name + " copy");
+      },
+
+      localDelete: function localDelete(it) {
+        var self = this;
+        $world.confirm("Delete “" + it.name + "” from this device? This cannot be undone.", function (yes) {
+          if (!yes) return;
+          lively.identity.localIdentity.worldRemove(it.name, function (err) {
+            if (!self.world()) return;
+            if (err) return self.setLocalStatus(err.message || String(err), true);
+            self.refreshLocal();
+          });
+        });
+      },
+
+      // Presets that do something useful with no host. The others keep their data on a host (a library folder, the account's game
+      // list, the parts catalogue) and, opened here, show an empty or "loading" screen for good, so they are listed but not offered.
+      // Found by launching each one into a local world (2026-11): Diary and Shop draw and work on their own; Gallery, Books and Music
+      // stay on "Loading ..."; Game and Inventory ask a host for their data. Change this list when a preset learns to work locally.
+      _localTemplates: function _localTemplates() { return { shop: true, diary: true }; },
 
       // ── history view ──────────────────────────────────────────────────────────
 
@@ -599,6 +863,8 @@ module("lively.identity.WorldsBrowser")
           row.renderContext().shapeNode.style.cursor = "pointer";
           row.onMouseOver = function () { row.setFill(HOVER); };
           row.onMouseOut  = function () { row.setFill(Color.white); };
+        } else if (tagText === "Needs a host") {
+          row.renderContext().shapeNode.title = "Keeps its data on a host, so it would stay empty here";
         } else {
           row.renderContext().shapeNode.title = "Coming soon — not available yet";
         }
@@ -708,6 +974,8 @@ module("lively.identity.WorldsBrowser")
           { icon: "article",             title: "Wiki page",   subtitle: "Create a wiki page for your profile.", action: "wiki" },
           { icon: "dashboard_customize", title: "Template",    subtitle: "Start from a preset like Shop.",       action: "template" },
         ];
+        // Wiki pages are kept on a host; there is no wiki on this device, so the card is not offered there.
+        if (this.isLocal()) cards = cards.filter(function (c) { return c.action !== "wiki"; });
 
         var rowH = 62;
         var ry = 0;
@@ -800,10 +1068,16 @@ module("lively.identity.WorldsBrowser")
           { icon: "edit_note",      title: "Diary",                  subtitle: "Keep a private diary.",                    enabled: true,  key: "diary" },
         ];
 
+        // Locally, a preset that keeps its data on a host is listed but not offered (see _localTemplates); "Coming soon" stays as it is.
+        if (this.isLocal()) {
+          var works = this._localTemplates();
+          templates.forEach(function (t) { t.needsHost = t.enabled && !works[t.key]; if (t.needsHost) t.enabled = false; });
+        }
+
         var rowH = 58;
         var ry = 0;
         templates.forEach(function (t) {
-          var row = self._buildCreateCardRow(w, rowH, t.icon, t.title, t.subtitle, t.enabled, t.enabled ? null : "Coming soon");
+          var row = self._buildCreateCardRow(w, rowH, t.icon, t.title, t.subtitle, t.enabled, t.enabled ? null : (t.needsHost ? "Needs a host" : "Coming soon"));
           if (t.enabled) {
             row.onMouseDown = function () {
               var win = lively.morphic.World.current().get("WorldsBrowser");
@@ -849,6 +1123,7 @@ module("lively.identity.WorldsBrowser")
           : template === "inventory" ? "New world with Inventory"
           : template === "diary" ? "New Diary world"
           : template === "game" ? "New Game world"
+          : template ? "New " + template.charAt(0).toUpperCase() + template.slice(1) + " world"
           : "New blank world";
         var header = new lively.morphic.Text(lively.rect(pad, y, w, 18), titleStr);
         header.applyStyle({ allowInput: false, fontSize: 13, fontWeight: "bold", textColor: Color.rgb(40, 40, 40), fill: null, borderWidth: 0, borderColor: null });
@@ -872,6 +1147,7 @@ module("lively.identity.WorldsBrowser")
         y += 36;
 
         var createBtn = new lively.morphic.Text(lively.rect(pad, y, 90, 26), "Create");
+        createBtn.name = "createSubmitBtn";
         createBtn.applyStyle({
           allowInput: false, fontSize: 13, fontWeight: "bold", textColor: PINK,
           fill: Color.rgb(255, 240, 247), borderWidth: 1, borderColor: Color.rgb(240, 190, 210),
@@ -904,8 +1180,19 @@ module("lively.identity.WorldsBrowser")
       submitCreate: function submitCreate(template) {
         var name = ((this._createNameInput && this._createNameInput.textString) || "").trim();
         if (!name) return this.setCreateStatus("Enter a name first.", true);
+        if (this.isLocal()) return this.createLocal(name, template);
         this.setCreateStatus("Fetching template…");
         this.createWorld(name, template);
+      },
+
+      // A new world on this device: the shell makes it under the name (and refuses a name that is taken), restarts the world, and the
+      // world fills in the preset and saves itself once it is up. This window goes away with the old world; an error stays here.
+      createLocal: function createLocal(name, template) {
+        var self = this;
+        this.setCreateStatus("Creating…");
+        lively.identity.localIdentity.goNew(name, template || null, function (err) {
+          if (err && self.world()) self.setCreateStatus(err.message || String(err), true);
+        });
       },
 
       // Fetches blank.html's already-serialized empty-world JSO and reuses it
