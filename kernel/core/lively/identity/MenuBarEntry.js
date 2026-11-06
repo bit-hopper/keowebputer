@@ -198,6 +198,7 @@ module("lively.identity.MenuBarEntry")
             // is what a person reaches for: their page, and signing out.
             return [
               ["My homestar",        function () { self.openMyHomestar(); }],
+              ["Worlds ...",         function () { self.openWorldLibrary(); }],
               ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
               ["Friends ...",        function () { self.openFriendsDialog(); }],
@@ -253,6 +254,20 @@ module("lively.identity.MenuBarEntry")
         openPeerDialog: function openPeerDialog() {
           lively.require("lively.identity.PeerDialog").toRun(function () {
             lively.BuildSpec("lively.identity.PeerDialog").createMorph().openInWorldCenter();
+          });
+        },
+
+        // The worlds saved on this device: search, open, name, tag, copy, delete (inside keo only: they live in its shell). One window
+        // at a time: asking again brings the open one forward.
+        openWorldLibrary: function openWorldLibrary() {
+          // Looked for again once the module has loaded: a second request made while it was still loading would otherwise see no
+          // window yet and open another.
+          lively.require("lively.identity.WorldLibrary").toRun(function () {
+            var open = $world.submorphs.filter(function (m) { return m.name === "IdentityWorldLibrary"; })[0];
+            if (open) { open.comeForward(); open.focusSearch(); return; }
+            var w = lively.BuildSpec("lively.identity.WorldLibrary").createMorph();
+            w.openInWorldCenter();
+            w.focusSearch();
           });
         },
 

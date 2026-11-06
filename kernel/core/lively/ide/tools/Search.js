@@ -171,6 +171,8 @@ Object.extend(lively.ide.tools.Search, {
     var Search = lively.ide.tools.Search,
       did = lively.identity && lively.identity.did;
     if (!did || !did.isLoggedIn() || !window.fetch) return thenDo({ morphs: [], worlds: [], files: [] });
+    // Inside keo a local identity has no host: its worlds are on this device (localWorldItems), and the requests below would only fail.
+    if (Search.isLocal()) return thenDo({ morphs: [], worlds: [], files: [] });
     var handle = did.currentUser().handle,
       base = "/@" + encodeURIComponent(handle),
       counts = {}, registries = {}, morphs = [], files = [], worldList = [],
@@ -245,6 +247,35 @@ Object.extend(lively.ide.tools.Search, {
     if (wantWorlds) getJSON(base + "/worlds").then(function (body) {
       worldList = Array.isArray(body.worlds) ? body.worlds : [];
       done();
+    });
+  },
+
+  // True inside keo with a local identity signed in: saved worlds are then on this device, kept by the shell.
+  isLocal: function () {
+    var li = lively.identity && lively.identity.localIdentity, did = lively.identity && lively.identity.did;
+    return !!(li && li.isAvailable && li.isAvailable() && did && did.isLoggedIn() && did.currentUser() && did.currentUser().local);
+  },
+
+  // The worlds saved on this device that match a query, as palette items (group "worlds"). The shell does the matching: all the
+  // words, in any order, against a world's name, tags, note and the text written inside it; so these items are NOT filtered again
+  // by the palette's own substring match, and arrive already ranked. Calls thenDo(items), [] when not local or on any failure.
+  localWorldItems: function (query, thenDo) {
+    var Search = lively.ide.tools.Search;
+    if (!Search.isLocal()) return thenDo([]);
+    lively.identity.localIdentity.worldSearch(query, function (err, r) {
+      if (err || !r || !Array.isArray(r.hits)) return thenDo([]);
+      thenDo(r.hits.map(function (h) {
+        var bits = [], when = Search.ago(h.savedAt);
+        if (h.where && h.where.length) bits.push("found in " + h.where.join(", "));
+        if (when) bits.push("saved " + when);
+        if (h.tags && h.tags.length) bits.push(h.tags.map(function (t) { return "#" + t; }).join(" "));
+        return {
+          type: "world", group: "worlds", name: h.name, cls: "World", text: h.snippet || h.note || "", world: null,
+          path: null, meta: bits.join("  ·  "), morph: null, url: null,
+          info: { morphs: null, visibility: "private", created: h.createdAt || null, thumb: null },
+          run: function () { lively.identity.localIdentity.go("world", h.name, function () {}); },
+        };
+      }));
     });
   },
 

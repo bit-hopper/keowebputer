@@ -73,6 +73,29 @@ module("lively.identity.LocalIdentity")
         this._run("world.go", { kind: kind, name: name }, 120000, thenDo || function () {});
       },
 
+      // ─── the worlds saved on this device (shell/keo-worlds.js) ──────────────────
+      // All of it is the signed-in identity's own; the shell keeps the worlds encrypted and does the searching, so nothing here
+      // sees a key. A name that is taken is refused by the shell (rename, duplicate, and go("blank", name)).
+      //   worldList()                -> [{ name, savedAt, createdAt, bytes, tags, note, last }], newest first
+      //   worldSearch(query)         -> { hits: [{ ...the same, score, where: ["name"|"tags"|"note"|"text"], snippet }], skipped }
+      //                                 every word has to be found (any order), "quoted phrases"; skipped counts records that
+      //                                 could not be read
+      //   worldRename(from, to), worldDuplicate(from, to), worldMeta(name, tags, note), worldRemove(name)
+      //                              tags is a list (or comma-separated text), note is text; a field left undefined stays as it is
+      // A change tells the page ("keo-worlds-changed" on window) so the lists that copy the library (the world menu) read it again.
+      worldList: function worldList(thenDo) { this._run("world.list", {}, 30000, thenDo); },
+      worldSearch: function worldSearch(query, thenDo) { this._run("world.search", { query: query }, 60000, thenDo); },
+      worldRename: function worldRename(from, to, thenDo) { this._runChange("world.rename", { from: from, to: to }, thenDo); },
+      worldDuplicate: function worldDuplicate(from, to, thenDo) { this._runChange("world.duplicate", { from: from, to: to }, thenDo); },
+      worldMeta: function worldMeta(name, tags, note, thenDo) { this._runChange("world.meta", { name: name, tags: tags, note: note }, thenDo); },
+      worldRemove: function worldRemove(name, thenDo) { this._runChange("world.remove", { name: name }, thenDo); },
+      _runChange: function _runChange(op, args, thenDo) {
+        this._run(op, args, 60000, function (err, result) {
+          if (!err) { try { window.dispatchEvent(new Event("keo-worlds-changed")); } catch (e) {} }
+          if (thenDo) thenDo(err, result);
+        });
+      },
+
       // ─── direct connections to another device (shell/keo-p2p.js) ────────────────
       // Two devices connect by swapping two short codes by hand (paste, or later a QR); no server is involved, so it works
       // between devices that can reach each other directly. peerOffer makes an invitation, the other device takes it with

@@ -155,6 +155,7 @@ module("lively.ide.tools.SearchPalette")
         P.current = null;
         s.closed = true;
         clearTimeout(s.codeTimer);
+        clearTimeout(s.savedTimer);
         clearTimeout(s.thumbTimer);
         document.removeEventListener("keydown", s.onDocKeydown, true);
         document.removeEventListener("selectionchange", s.onSelectionChange);
@@ -176,7 +177,9 @@ module("lively.ide.tools.SearchPalette")
           items: Search.worldItems(),   // live morphs; saved-world items join later
           codeItems: [],                // runtime code hits for the current query
           codeSeq: 0,
-          thumbs: {},                   // thumbnail per item key, kept while the palette is open
+          savedHits: [],                // saved worlds on this device that match the current query (keo only)
+          savedSeq: 0,
+          thumbs: {},                  // thumbnail per item key, kept while the palette is open
           thumbPending: {},             // keys being loaded right now
           closed: false,
         });
@@ -433,8 +436,30 @@ module("lively.ide.tools.SearchPalette")
         if (!s || s.query === q) return;
         s.query = q;
         s.codeItems = [];   // hits for the old query would be wrong now
+        s.savedHits = [];
         lively.ide.tools.SearchPalette.fetchCode();
+        lively.ide.tools.SearchPalette.fetchSavedHits();
         lively.ide.tools.SearchPalette.refresh();
+      },
+
+      // The worlds saved on this device that match the current query (keo with a local identity only), after a short pause in
+      // typing: the shell searches their names, tags, notes and the text inside, so it is not asked at every key. A late answer for
+      // an older query is dropped.
+      fetchSavedHits: function () {
+        var P = lively.ide.tools.SearchPalette, s = P.current;
+        if (!s) return;
+        clearTimeout(s.savedTimer);
+        s.savedSeq++;
+        var q = s.query.trim();
+        if (!q || !lively.ide.tools.Search.isLocal()) return;
+        var seq = s.savedSeq;
+        s.savedTimer = setTimeout(function () {
+          lively.ide.tools.Search.localWorldItems(q, function (items) {
+            if (s.closed || seq !== s.savedSeq) return;
+            s.savedHits = items;
+            P.refresh(true);
+          });
+        }, 200);
       },
 
       // Runtime code hits for the current query, after a short pause in typing.
@@ -493,7 +518,7 @@ module("lively.ide.tools.SearchPalette")
       refresh: function (keepSelection) {
         var P = lively.ide.tools.SearchPalette, s = P.current;
         if (!s || s.closed) return;
-        var matches = P.match(s.items, s.query).concat(s.codeItems || []);
+        var matches = P.match(s.items, s.query).concat(s.codeItems || [], s.savedHits || []);
         s.matches = matches;
         var counts = P.countsFor(matches);
 
