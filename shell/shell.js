@@ -100,7 +100,7 @@
     // Ends the session and shows the sign-in screen again. The world may ask: it only lowers what the world can do.
     'session.signOut': function () { return window.keoIdentity.signOut().then(function () { setTimeout(function () { location.reload(); }, 0); return true; }); },
     // Saved worlds, encrypted under the signed-in identity (keo-worlds.js). `doc` is the whole saved page as text.
-    'world.save': function (a) { return window.keoWorlds.save({ name: a.name, doc: a.doc }); },
+    'world.save': function (a) { return window.keoWorlds.save({ name: a.name, doc: a.doc, template: a.template }); },
     'world.list': function () { return window.keoWorlds.list(); },
     'world.load': function (a) { return window.keoWorlds.load({ name: a.name }); },
     'world.last': function () { return window.keoWorlds.last(); },
@@ -227,9 +227,13 @@
         // A blank world may be given its name up front ("New world"): the world then saves it under that name as soon as it is up,
         // so it is in the library at once. A name that is taken is refused here, so creating can never replace a saved world.
         if (a.name === undefined || a.name === null || a.name === '') return { kind: kind, session: session };
+        // `template` names a preset the world starts from; the world fills it in once it is up (world/keo-boot.js). Only the known names pass.
+        var template = window.keoWorlds.cleanTemplate(a.template);
         return window.keoWorlds.has({ name: a.name }).then(function (taken) {
           if (taken) throw new Error('A world named "' + String(a.name).trim() + '" already exists.');
-          return { kind: kind, session: session, name: String(a.name).replace(/\s+/g, ' ').trim().slice(0, 128) };
+          var next = { kind: kind, session: session, name: String(a.name).replace(/\s+/g, ' ').trim().slice(0, 128) };
+          if (template) next.template = template;
+          return next;
         });
       }
       if (kind !== 'world') throw new Error('Unknown page kind.');

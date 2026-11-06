@@ -9,7 +9,7 @@
 //     text of the world (keo-worldtext.js `extract`), kept so a search does not have to open every body. A world saved by an earlier
 //     version has none until the first search, which makes it (`ensureText`). A body and its text are always written together.
 //   - `index`: one record per identity, { did, iv, ct }. Its plaintext is { worlds: { <name>: { id, savedAt, bytes, createdAt, tags,
-//     note, t } }, last: <name or null>, prefs: { <key>: <value> } }. `t` says a text record exists for the world. `prefs` is the
+//     note, template?, t } }, last: <name or null>, prefs: { <key>: <value> } }. `t` says a text record exists for the world. `prefs` is the
 //     identity's own small settings (see PREF_KEYS): they are kept here because this record is already encrypted under the
 //     signed-in identity's key. The NAMES of worlds, their tags and notes are inside the encryption too, and so is which one was
 //     saved last, so what is readable without the key is only the identity's DID, record ids, ciphertext sizes and the order of writes.
@@ -25,6 +25,9 @@
   var DB_NAME = 'keo-worlds';
   var MAX_BYTES = 64 * 1024 * 1024;           // one serialized world; a guard against a runaway save, not a quota
   var MAX_TAGS = 16, MAX_TAG = 32, MAX_NOTE = 1000;
+  // The presets a new world can start from (the runtime's "My worlds" > Create > Template). Only these names are kept with a world:
+  // the world asks for one by name, and what it is shown as ("Template · Books") comes from here.
+  var TEMPLATES = ['shop', 'inventory', 'gallery', 'books', 'game', 'music', 'diary'];
   // The settings an identity may keep, and what a value may be. The world asks to set them, so nothing else gets in.
   //   homeTheme  the name of the theme of the home page (the home page is rebuilt on every visit, so a theme applied to it
   //              would otherwise be lost), or null for none
@@ -111,10 +114,16 @@
     if (n.length > MAX_NOTE) throw new Error('A note can be at most ' + MAX_NOTE + ' characters.');
     return n;
   }
+  // A template name, or null for none; anything that is not one of TEMPLATES is refused.
+  function cleanTemplate(t) {
+    if (t === undefined || t === null || t === '') return null;
+    if (typeof t !== 'string' || TEMPLATES.indexOf(t) < 0) throw new Error('Not a template: ' + String(t).slice(0, 40));
+    return t;
+  }
   // What the world may see of an entry. Entries made before tags and notes existed have none.
   function view(index, name) {
     var w = index.worlds[name];
-    return { name: name, savedAt: w.savedAt, createdAt: w.createdAt || w.savedAt, bytes: w.bytes, tags: w.tags || [], note: w.note || '', last: index.last === name };
+    return { name: name, savedAt: w.savedAt, createdAt: w.createdAt || w.savedAt, bytes: w.bytes, tags: w.tags || [], note: w.note || '', template: w.template || null, last: index.last === name };
   }
   function needText() {
     if (!wt) throw new Error('Searching saved worlds is not available here.');
@@ -135,6 +144,7 @@
       if (!bytes.length) throw new Error('Nothing to save.');
       if (bytes.length > MAX_BYTES) throw new Error('This world is too large to save here.');
       var tags = args.tags === undefined ? undefined : cleanTags(args.tags), note = args.note === undefined ? undefined : cleanNote(args.note);
+      var template = args.template === undefined ? undefined : cleanTemplate(args.template);
       var index = await readIndex(s);
       var prev = index.worlds[name];
       var id = prev ? prev.id : kd.b64u(crypto.getRandomValues(new Uint8Array(16)));
@@ -145,6 +155,8 @@
         id: id, savedAt: now, bytes: bytes.length, createdAt: prev ? (prev.createdAt || prev.savedAt) : now,
         tags: tags !== undefined ? tags : (prev && prev.tags) || [], note: note !== undefined ? note : (prev && prev.note) || '', t: true
       };
+      var kept = template !== undefined ? template : (prev && prev.template) || null;
+      if (kept) index.worlds[name].template = kept;
       index.last = name;
       var rec = await sealIndex(s, index);
       // body, text and index land together or not at all
@@ -238,6 +250,7 @@
       var body = await seal(s.key, enc.encode(src.doc), bodyAad(s.did, id));
       var text = await seal(s.key, enc.encode(needText().extract(src.doc)), textAad(s.did, id));
       index.worlds[to] = { id: id, savedAt: now, bytes: w.bytes, createdAt: now, tags: (w.tags || []).slice(), note: w.note || '', t: true };
+      if (w.template) index.worlds[to].template = w.template;
       var rec = await sealIndex(s, index);
       await tx(['bodies', 'texts', 'index'], 'readwrite', function (t) {
         t.objectStore('bodies').put({ id: id, did: s.did, iv: body.iv, ct: body.ct });
@@ -348,6 +361,7 @@
 
   window.keoWorlds = {
     save: save, list: list, has: has, load: load, last: last, setLast: setLast, remove: remove, purge: purge,
-    rename: rename, setMeta: setMeta, duplicate: duplicate, search: search, prefsGet: prefsGet, prefsSet: prefsSet
+    rename: rename, setMeta: setMeta, duplicate: duplicate, search: search, prefsGet: prefsGet, prefsSet: prefsSet,
+    cleanTemplate: cleanTemplate
   };
 })();

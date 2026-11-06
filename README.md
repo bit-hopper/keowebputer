@@ -26,7 +26,7 @@ A connection to another device proves which identity is at the other end, not th
 
 ### Worlds
 
-A world is saved on the device, encrypted under the signed-in identity (`shell/keo-worlds.js`); nothing is sent anywhere. Beside each saved world the shell keeps its readable text (`shell/keo-worldtext.js`), sealed the same way, so a world can be found by its name, its tags, its note or the words written inside it without opening every saved page. A world can be started under a name, renamed, copied, tagged and deleted from the Worlds window (identity menu, or the world's own keo menu), and the search palette lists matching saved worlds too. The names, tags, notes and text are inside the encryption; what is readable without the key is the identity's DID, record ids and sizes. A search reads text records only, never a whole saved page, except to make the text of a world saved by an earlier version.
+A world is saved on the device, encrypted under the signed-in identity (`shell/keo-worlds.js`); nothing is sent anywhere. Beside each saved world the shell keeps its readable text (`shell/keo-worldtext.js`), sealed the same way, so a world can be found by its name, its tags, its note or the words written inside it without opening every saved page. The runtime's "My worlds" window (identity menu, or the world's own keo menu) shows them: it searches as you type, opens a world, starts a blank world or one from a preset (Shop and Diary; the presets that keep their data on a host are listed but not offered), and a row's menu renames, copies, tags and deletes. A world has no version history on the device. The search palette lists matching saved worlds too. The names, tags, notes and text are inside the encryption; what is readable without the key is the identity's DID, record ids and sizes. A search reads text records only, never a whole saved page, except to make the text of a world saved by an earlier version.
 
 ### The pinned key
 
@@ -72,7 +72,7 @@ node tests/keo-identity-test.js . dist <work dir>    # identity creation end to 
 node tests/keo-session-test.js  . dist <work dir>    # the session, encrypted saved worlds, menu bar
 node tests/keo-gate-test.js     . dist <work dir>    # sign-in dialog inside the world, what starts when nobody is signed in
 node tests/keo-worlds-test.js   . dist <work dir>    # the worlds library: create by name, save, search, rename, copy, tags, delete, what is on disk, an older database
-node tests/keo-worlds-ui-test.js . dist <work dir>   # the Worlds window and the search palette, by real clicks and typing
+node tests/keo-worlds-ui-test.js . dist <work dir>   # "My worlds" and the search palette, by real clicks and typing: search, row menu, create blank and from presets
 node tests/keo-bridge-test.js   . dist <work dir>    # the shell <-> world bridge
 node tests/keo-p2p-test.js      . dist <work dir>    # two browsers: a direct connection by swapping two short codes, and file sharing
 node tests/keo-peer-dialog-test.js . dist <work dir> # two browsers: the "Connect a device" dialog, by real clicks, a real paste and a real download

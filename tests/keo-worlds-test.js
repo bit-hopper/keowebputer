@@ -144,6 +144,22 @@ const names = (l) => l.map((w) => w.name).sort();
     const r2 = await keoCall(frame, 'world.search', { query: 'quince' });
     check('duplicate: changing the copy leaves the original alone, and the search follows each', names(r.r.hits).includes('Picnic') && !names(r.r.hits).includes('Picnic copy') && names(r2.r.hits).join() === 'Picnic copy', { r, r2 });
 
+    // ---- 6b. templates: the preset a world was started from is kept with it, and only a known name is
+    const withTpl = await shellCall(page, 'save', { name: 'Diary one', doc, template: 'diary' });
+    l = (await keoCall(frame, 'world.list')).r.find((w) => w.name === 'Diary one');
+    check('template: a world saved with a preset keeps its name', withTpl.ok && l && l.template === 'diary', { withTpl, l });
+    await shellCall(page, 'save', { name: 'Diary one', doc });
+    l = (await keoCall(frame, 'world.list')).r.find((w) => w.name === 'Diary one');
+    check('template: saving again without one keeps it', l && l.template === 'diary', l);
+    check('template: a world made without one has none', (await keoCall(frame, 'world.list')).r.find((w) => w.name === 'Picnic').template === null);
+    const badTpl = await shellCall(page, 'save', { name: 'Odd', doc, template: 'not-a-template' });
+    check('template: a name that is not a preset is refused, and nothing was saved', !badTpl.ok && /Not a template/.test(badTpl.e) && !(await keoCall(frame, 'world.has', { name: 'Odd' })).r, badTpl);
+    const badGo = await keoCall(frame, 'world.go', { kind: 'blank', name: 'Odd two', template: '<script>' });
+    check('template: world.go refuses a name that is not a preset, and the world keeps running', !badGo.ok && /Not a template/.test(badGo.e) && (await frame.evaluate(() => window.keo.init.startup.name)) === 'Alpha notes', badGo);
+    const dupTpl = await keoCall(frame, 'world.duplicate', { from: 'Diary one', to: 'Diary two' });
+    check('template: a copy of a world made from a preset has it too', dupTpl.ok && dupTpl.r.template === 'diary', dupTpl);
+    await keoCall(frame, 'world.remove', { name: 'Diary one' }); await keoCall(frame, 'world.remove', { name: 'Diary two' });
+
     // ---- 7. concurrent changes are not lost
     const burst = await page.evaluate(async (d) => {
       const ps = []; for (let i = 0; i < 6; i++) ps.push(window.keoWorlds.save({ name: 'Burst ' + i, doc: d }).then(() => 'ok', (e) => e.message));

@@ -59,20 +59,31 @@
     return window.keo.call('world.list').then(function (l) { local.worlds = l; }, function () { local.worlds = []; });
   }
   function navigate(args) { window.keo.call('world.go', args, 120000).catch(function (e) { $world.inform(String(e && e.message || e)); }); }
-  // The window for searching, opening, naming, tagging and deleting saved worlds (kernel: lively.identity.WorldLibrary). The menu
-  // above only copies the library's names; this is where the library is worked with. A change made there tells the page, so the
+  // "My worlds" (kernel: lively.identity.WorldsBrowser), the one place the library is worked with: search, open, create (blank or from
+  // a template), rename, copy, tag, delete. The menu above only copies the library's names. A change made there tells the page, so the
   // copy is read again.
   function openLibrary() {
-    lively.require('lively.identity.WorldLibrary').toRun(function () {
+    lively.require('lively.identity.WorldsBrowser').toRun(function () {
       // looked for once the module has loaded: a second request made while it was loading would otherwise open another window
-      var open = $world.submorphs.filter(function (m) { return m.name === 'IdentityWorldLibrary'; })[0];
-      if (open) { open.comeForward(); open.focusSearch(); return; }
-      var w = lively.BuildSpec('lively.identity.WorldLibrary').createMorph();
-      w.openInWorldCenter();
-      w.focusSearch();
+      var open = $world.submorphs.filter(function (m) { return m.name === 'WorldsBrowser'; })[0];
+      if (open) return open.comeForward();
+      lively.BuildSpec('lively.identity.WorldsBrowser').createMorph().openInWorldCenter();
     });
   }
   window.addEventListener('keo-worlds-changed', function () { refreshList(); });
+  // Fills a new world from a preset. The preset's own launcher saves the world only on a host, so here the world is saved once the
+  // preset's morph is in it (the launcher says nothing when it is done, so what is waited for is that effect, not a time).
+  function launchTemplate(key, name) {
+    lively.require('lively.identity.WorldTemplateLauncher').toRun(function () {
+      var before = $world.submorphs.length, tries = 0;
+      lively.identity.WorldTemplateLauncher._launchTemplate(key);
+      (function wait() {
+        if ($world.submorphs.length > before) return $world.saveWorldAs(fileFor(name), false);
+        if (++tries < 100) setTimeout(wait, 100);
+        else console.warn('keo: the "' + key + '" template added nothing to the world, so it was not saved with it');
+      })();
+    });
+  }
 
   // Replaces how the runtime stores a saved page: instead of a PUT to a server it asks the shell, which encrypts it under the
   // signed-in identity. Without a session the shell refuses and the person is told so. Everything the original did after a
@@ -93,7 +104,10 @@
     W.checkIfPathExistsAndStoreDoc = function (doc, url, checkForOverwrites, thenDo) { this.storeDoc(doc, url, checkForOverwrites, thenDo); };
     W.storeDoc = function (doc, url, checkForOverwrites, thenDo) {
       var world = this, name = nameFromUrl(url);
-      window.keo.call('world.save', { name: name, doc: doc }, 120000).then(function (r) {
+      // the preset a world was started from is kept with it, for that world only (not for one it is later saved as)
+      var args = { name: name, doc: doc };
+      if (local.template && local.templateFor === name) args.template = local.template;
+      window.keo.call('world.save', args, 120000).then(function (r) {
         local.current = r.name;
         refreshList();
         lively.bindings.signal(world, 'savingDone', url);
@@ -115,7 +129,7 @@
       var opens = local.worlds.map(function (w) { return [w.name + (w.last ? '  (last)' : ''), function () { navigate({ kind: 'world', name: w.name }); }]; });
       var keoItems = [
         ['Home page', function () { navigate({ kind: 'homestar' }); }],
-        ['Worlds ...', openLibrary],
+        ['My worlds', openLibrary],
         ['New blank world', function () { navigate({ kind: 'blank' }); }],
         ['Save world as ...', function () {
           $world.prompt('Save this world on this device as:', function (name) {
@@ -193,7 +207,9 @@
         // and not only after the person remembers to save. The shell has already checked that the name is free.
         if (startup && startup.kind === 'blank' && startup.name) {
           local.current = startup.name;
+          if (startup.template) { local.template = startup.template; local.templateFor = startup.name; }
           $world.saveWorldAs(fileFor(startup.name), false);
+          if (startup.template) launchTemplate(startup.template, startup.name);
         }
         refreshList();
         if (startup && startup.kind === 'homestar') openHomestar(startup.session, startup.warning);
