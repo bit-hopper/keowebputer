@@ -47,15 +47,32 @@
   // keeps that name. `worlds` is a copy of the shell's list for the menu (a menu cannot wait for an answer).
   var local = { current: null, worlds: [], page: null };
   // What a page here is called when it is saved: the file name the runtime asks for, without its extension.
+  // A name is put into the address percent-encoded (fileFor), so a "/", "?" or "#" in it cannot be taken for part of the address.
   function nameFromUrl(url) {
     var m = /([^/?#]+?)(.[A-Za-z]*html)?(?:[?#].*)?$/.exec(String(url));
     var n = (m && m[1]) || 'world';
+    try { n = decodeURIComponent(n); } catch (e) { /* not encoded by us: use it as it is */ }
     return n === 'world' && local.current ? local.current : n;
   }
+  function fileFor(name) { return URL.root.withFilename(encodeURIComponent(name) + '.html'); }
   function refreshList() {
     return window.keo.call('world.list').then(function (l) { local.worlds = l; }, function () { local.worlds = []; });
   }
   function navigate(args) { window.keo.call('world.go', args, 120000).catch(function (e) { $world.inform(String(e && e.message || e)); }); }
+  // The window for searching, opening, naming, tagging and deleting saved worlds (kernel: lively.identity.WorldLibrary). The menu
+  // above only copies the library's names; this is where the library is worked with. A change made there tells the page, so the
+  // copy is read again.
+  function openLibrary() {
+    lively.require('lively.identity.WorldLibrary').toRun(function () {
+      // looked for once the module has loaded: a second request made while it was loading would otherwise open another window
+      var open = $world.submorphs.filter(function (m) { return m.name === 'IdentityWorldLibrary'; })[0];
+      if (open) { open.comeForward(); open.focusSearch(); return; }
+      var w = lively.BuildSpec('lively.identity.WorldLibrary').createMorph();
+      w.openInWorldCenter();
+      w.focusSearch();
+    });
+  }
+  window.addEventListener('keo-worlds-changed', function () { refreshList(); });
 
   // Replaces how the runtime stores a saved page: instead of a PUT to a server it asks the shell, which encrypts it under the
   // signed-in identity. Without a session the shell refuses and the person is told so. Everything the original did after a
@@ -98,10 +115,11 @@
       var opens = local.worlds.map(function (w) { return [w.name + (w.last ? '  (last)' : ''), function () { navigate({ kind: 'world', name: w.name }); }]; });
       var keoItems = [
         ['Home page', function () { navigate({ kind: 'homestar' }); }],
+        ['Worlds ...', openLibrary],
         ['New blank world', function () { navigate({ kind: 'blank' }); }],
         ['Save world as ...', function () {
           $world.prompt('Save this world on this device as:', function (name) {
-            if (name && name.trim()) $world.saveWorldAs(URL.root.withFilename(name.trim() + '.html'), false);
+            if (name && name.trim()) $world.saveWorldAs(fileFor(name.trim()), false);
           }, local.current || '');
         }],
         ['Open', opens.length ? opens : [['(nothing saved yet)', function () {}]]]
@@ -171,6 +189,12 @@
         rememberHomeTheme();
         if (startup && startup.session) syncSession(startup.session);
         if (startup && startup.kind === 'world') local.current = startup.name;
+        // A new world that was named when it was asked for: it takes that name and is saved once, so it is in the library now
+        // and not only after the person remembers to save. The shell has already checked that the name is free.
+        if (startup && startup.kind === 'blank' && startup.name) {
+          local.current = startup.name;
+          $world.saveWorldAs(fileFor(startup.name), false);
+        }
         refreshList();
         if (startup && startup.kind === 'homestar') openHomestar(startup.session, startup.warning);
         if (startup && startup.noLanding) openSignIn();

@@ -24,6 +24,10 @@ An identity is made on the device with a passkey and no server. Its DID is `did:
 
 A connection to another device proves which identity is at the other end, not that it is the person you mean. So files, messages and calls move only between **friends**, and the only thing a device that is not one can do is say whether it has added you. Two devices become friends when each person has added the other: in a dialog drawn by `shell/` (never by the world), the person reads their own eight words to the other and types the eight words they hear back; the dialog adds the device only when those match the identity that proved itself over the connection. The words (`shell/keo-fingerprint.js`, from the English word list of the BIP 39 mnemonic specification, MIT, in `shell/keo-wordlist.js`) are 88 bits of a hash of the whole DID: the short form shown beside a name is for recognising someone and is not a check. The devices you have added are kept encrypted under your identity (`shell/keo-contacts.js`); that the other side has added you is learned afresh on each connection and never remembered. The world can only ask for the dialog.
 
+### Worlds
+
+A world is saved on the device, encrypted under the signed-in identity (`shell/keo-worlds.js`); nothing is sent anywhere. Beside each saved world the shell keeps its readable text (`shell/keo-worldtext.js`), sealed the same way, so a world can be found by its name, its tags, its note or the words written inside it without opening every saved page. A world can be started under a name, renamed, copied, tagged and deleted from the Worlds window (identity menu, or the world's own keo menu), and the search palette lists matching saved worlds too. The names, tags, notes and text are inside the encryption; what is readable without the key is the identity's DID, record ids and sizes. A search reads text records only, never a whole saved page, except to make the text of a world saved by an earlier version.
+
 ### The pinned key
 
 `extension/extension-key.json` is the **public** key written into the extension manifest. It fixes the extension id, and the extension id is the origin and the passkey rpId on which every identity is made. Changing it orphans every passkey created under the old id, so do not regenerate it.
@@ -63,9 +67,12 @@ npm run test:release                                 # no browser: release signi
 npm run test:hello                                   # no browser: the short connection code and the signed peer proof
 npm run test:callsdp                                 # no browser: what a call description from the peer must look like
 npm run test:fingerprint                             # no browser: the eight words that stand for a DID
+npm run test:worldtext                               # no browser: the text that is searchable in a saved world, and the search
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator
 node tests/keo-session-test.js  . dist <work dir>    # the session, encrypted saved worlds, menu bar
 node tests/keo-gate-test.js     . dist <work dir>    # sign-in dialog inside the world, what starts when nobody is signed in
+node tests/keo-worlds-test.js   . dist <work dir>    # the worlds library: create by name, save, search, rename, copy, tags, delete, what is on disk, an older database
+node tests/keo-worlds-ui-test.js . dist <work dir>   # the Worlds window and the search palette, by real clicks and typing
 node tests/keo-bridge-test.js   . dist <work dir>    # the shell <-> world bridge
 node tests/keo-p2p-test.js      . dist <work dir>    # two browsers: a direct connection by swapping two short codes, and file sharing
 node tests/keo-peer-dialog-test.js . dist <work dir> # two browsers: the "Connect a device" dialog, by real clicks, a real paste and a real download

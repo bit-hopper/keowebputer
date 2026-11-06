@@ -106,6 +106,13 @@
     'world.last': function () { return window.keoWorlds.last(); },
     'world.setLast': function (a) { return window.keoWorlds.setLast({ name: a.name }); },
     'world.remove': function (a) { return window.keoWorlds.remove({ name: a.name }); },
+    // The library: whether a name is taken, a new name for a world, its tags and note, a copy, and a search over names, tags, notes
+    // and the text inside the worlds. All of it is the signed-in identity's own and returns plain data (names, tags, short snippets).
+    'world.has': function (a) { return window.keoWorlds.has({ name: a.name }); },
+    'world.rename': function (a) { return window.keoWorlds.rename({ from: a.from, to: a.to }); },
+    'world.meta': function (a) { return window.keoWorlds.setMeta({ name: a.name, tags: a.tags, note: a.note }); },
+    'world.duplicate': function (a) { return window.keoWorlds.duplicate({ from: a.from, to: a.to }); },
+    'world.search': function (a) { return window.keoWorlds.search({ query: a.query }); },
     // The identity's own small settings (encrypted with its worlds): only the names keo-worlds.js allows.
     'prefs.get': function () { return window.keoWorlds.prefsGet(); },
     'prefs.set': function (a) { return window.keoWorlds.prefsSet({ key: a.key, value: a.value }); },
@@ -215,7 +222,16 @@
       // 'enter': what the sign-in dialog does after a sign-in or a create. The world asks for it once the dialog has a
       // session; the choice of page stays with this page.
       if (kind === 'enter') return landing(session);
-      if (kind === 'homestar' || kind === 'blank') return { kind: kind, session: session };
+      if (kind === 'homestar') return { kind: kind, session: session };
+      if (kind === 'blank') {
+        // A blank world may be given its name up front ("New world"): the world then saves it under that name as soon as it is up,
+        // so it is in the library at once. A name that is taken is refused here, so creating can never replace a saved world.
+        if (a.name === undefined || a.name === null || a.name === '') return { kind: kind, session: session };
+        return window.keoWorlds.has({ name: a.name }).then(function (taken) {
+          if (taken) throw new Error('A world named "' + String(a.name).trim() + '" already exists.');
+          return { kind: kind, session: session, name: String(a.name).replace(/\s+/g, ' ').trim().slice(0, 128) };
+        });
+      }
       if (kind !== 'world') throw new Error('Unknown page kind.');
       return window.keoWorlds.load({ name: a.name }).then(function (w) {
         if (!w) throw new Error('No such saved world.');
