@@ -190,7 +190,8 @@ module("lively.identity.MenuBarEntry")
             return [
               ["sign in",         function () { self.openLoginDialog(); }],
               ["Create identity", function () { self.openRegisterDialog(); }],
-            ];
+            ].concat(lively.identity.localIdentity && lively.identity.localIdentity.isAvailable()
+              ? [["Link this webputer to an identity ...", function () { self.linkThisWebputer(); }]] : []);
           }
           if (lively.identity.did.currentUser().local) {
             var did = lively.identity.did.currentUser().did;
@@ -206,6 +207,7 @@ module("lively.identity.MenuBarEntry")
                 [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
                 ["Copy DID",           function () { self.copyDid(); }],
                 ["Rename this identity ...", function () { self.renameLocal(); }],
+                ["Link a new webputer ...", function () { self.linkNewWebputer(); }],
               ]],
               ["Sign out",           function () { self.signOut(); }],
             ];
@@ -247,6 +249,16 @@ module("lively.identity.MenuBarEntry")
             var d = lively.BuildSpec("lively.identity.PeerDialog").createMorph();
             d.openInWorldCenter();
             d.reconnectTo(did, name);
+          });
+        },
+
+        // Linking another webputer to the identity signed in here, and (nobody signed in) linking this one to an identity that lives
+        // elsewhere. The shell draws the dialog; these only ask for it and say so if it refuses.
+        linkNewWebputer: function linkNewWebputer() { this._askShellToLink("old"); },
+        linkThisWebputer: function linkThisWebputer() { this._askShellToLink("new"); },
+        _askShellToLink: function _askShellToLink(mode) {
+          lively.identity.localIdentity.enrollOpen(mode, function (err) {
+            if (err) $world.setStatusMessage(err.message || String(err), Color.red, 5);
           });
         },
 

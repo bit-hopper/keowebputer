@@ -73,6 +73,15 @@ module("lively.identity.LocalIdentity")
         this._run("world.go", { kind: kind, name: name }, 120000, thenDo || function () {});
       },
 
+      // ─── linking a webputer to an identity (shell/keo-enroll.js) ──────────────────
+      // Asks the shell to put its own dialog in front of the person; the world can only ASK, naming a side, and never sees the
+      // words, the codes or the passkey prompt (a hostile world must not be able to fill the dialog in or approve it). Not for
+      // anything that has to run without a person present.
+      //   enrollOpen("old")  the identity signed in here is to be linked to another webputer (needs someone signed in)
+      //   enrollOpen("new")  this webputer has no identity and asks for one to be linked to it
+      // thenDo(err): the shell refuses with a sentence when one is already open, was closed a moment ago, or nobody is signed in.
+      enrollOpen: function enrollOpen(mode, thenDo) { this._run("enroll.open", { mode: mode }, 30000, thenDo || function () {}); },
+
       // ─── the worlds saved on this device (shell/keo-worlds.js) ──────────────────
       // All of it is the signed-in identity's own; the shell keeps the worlds encrypted and does the searching, so nothing here
       // sees a key. A name that is taken is refused by the shell (rename, duplicate, and go("blank", name)).

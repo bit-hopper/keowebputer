@@ -20,7 +20,7 @@
  *     and saved to local lively.IndexedDB before completeAuthentication runs.
  *
  * Inside the keo app (lively.identity.localIdentity.isAvailable()) there is no server and no handle: the dialog lists the
- * identities made on this device by their label, and a click unlocks that one with its passkey (one prompt). The shell then
+ * identities made on this webputer by their label, and a click unlocks that one with its passkey (one prompt). The shell then
  * holds the session and decides the landing page (the world saved last, else the identity's home page); the dialog asks for it
  * with localIdentity.go("enter"). "New identity" leads to the local form of RegisterDialog. The server flow below is untouched.
  *
@@ -114,7 +114,7 @@ module("lively.identity.LoginDialog")
         if (!content) return;
         content.removeAllMorphs();
 
-        // Inside the keo app there is no server to sign in to: pick one of the identities on this device.
+        // Inside the keo app there is no server to sign in to: pick one of the identities on this webputer.
         if (lively.identity.localIdentity.isAvailable()) return this.buildLocalForm(content);
 
         var pad = 14;
@@ -268,11 +268,11 @@ module("lively.identity.LoginDialog")
         }
 
         if (list === null) {
-          addLabel("Looking for identities on this device…");
+          addLabel("Looking for identities on this webputer…");
         } else if (err) {
-          addLabel("Could not read the identities on this device.");
+          addLabel("Could not read the identities on this webputer.");
         } else if (list.length === 0) {
-          addLabel("There is no identity on this device yet.");
+          addLabel("There is no identity on this webputer yet.");
         } else {
           addLabel("Sign in as:");
           var labels = {};
@@ -297,6 +297,17 @@ module("lively.identity.LoginDialog")
             content.addMorph(av);
             y += ROW_H + 6;
           });
+        }
+
+        // For a webputer that has no identity (or not the one wanted): ask the shell for its dialog, which takes a code from a
+        // webputer that has the identity. Drawn also when the list is empty, which is when it is most needed.
+        if (list !== null) {
+          var linkBtn = new lively.morphic.Button(lively.rect(pad, y, w, 24), "Link this webputer to an identity ...");
+          linkBtn.name = "linkWebputerBtn";
+          content.addMorph(linkBtn);
+          paintButton(linkBtn, "rgb(214,214,214)", 1, 5, null);
+          lively.bindings.connect(linkBtn, "fire", self, "openLink");
+          y += 30;
         }
 
         y += 2;
@@ -345,6 +356,14 @@ module("lively.identity.LoginDialog")
           lively.identity.localIdentity.go("enter", undefined, function (goErr) {
             if (goErr) self.setStatus("Signed in, but could not open the page: " + (goErr.message || goErr), true);
           });
+        });
+      },
+
+      // The shell's dialog opens over the whole page; this window stays under it, so a refusal (one is already open) is shown here.
+      openLink: function openLink() {
+        var self = this;
+        lively.identity.localIdentity.enrollOpen("new", function (err) {
+          if (err) self.setStatus(err.message || String(err), true);
         });
       },
 
