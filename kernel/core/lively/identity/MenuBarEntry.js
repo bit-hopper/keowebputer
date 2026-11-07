@@ -208,6 +208,7 @@ module("lively.identity.MenuBarEntry")
                 ["Copy DID",           function () { self.copyDid(); }],
                 ["Rename this identity ...", function () { self.renameLocal(); }],
                 ["Link a new webputer ...", function () { self.linkNewWebputer(); }],
+                ["Move my data ...",   function () { self.moveMyData(); }],
               ]],
               ["Sign out",           function () { self.signOut(); }],
             ];
@@ -258,6 +259,14 @@ module("lively.identity.MenuBarEntry")
         linkThisWebputer: function linkThisWebputer() { this._askShellToLink("new"); },
         _askShellToLink: function _askShellToLink(mode) {
           lively.identity.localIdentity.enrollOpen(mode, function (err) {
+            if (err) $world.setStatusMessage(err.message || String(err), Color.red, 5);
+          });
+        },
+
+        // Saving this identity's saved worlds and library as a file, and adding such a file made on another webputer. The shell draws the
+        // dialog; this only asks for it and says so if it refuses.
+        moveMyData: function moveMyData() {
+          lively.identity.localIdentity.transferOpen(function (err) {
             if (err) $world.setStatusMessage(err.message || String(err), Color.red, 5);
           });
         },

@@ -82,6 +82,12 @@ module("lively.identity.LocalIdentity")
       // thenDo(err): the shell refuses with a sentence when one is already open, was closed a moment ago, or nobody is signed in.
       enrollOpen: function enrollOpen(mode, thenDo) { this._run("enroll.open", { mode: mode }, 30000, thenDo || function () {}); },
 
+      // ─── moving the identity's data to another webputer (shell/keo-transfer.js) ────────
+      // Asks the shell for its dialog, in which the person saves the signed-in identity's saved worlds and library as a file, or adds
+      // such a file made on another webputer for the same identity. The world can only ASK: it never sees the file, what is in it or
+      // what was added. thenDo(err): refused with a sentence when one is open, was closed a moment ago, or nobody is signed in.
+      transferOpen: function transferOpen(thenDo) { this._run("transfer.open", {}, 30000, thenDo || function () {}); },
+
       // ─── the worlds saved on this device (shell/keo-worlds.js) ──────────────────
       // All of it is the signed-in identity's own; the shell keeps the worlds encrypted and does the searching, so nothing here
       // sees a key. A name that is taken is refused by the shell (rename, duplicate, and go("blank", name)).
