@@ -84,8 +84,11 @@
     return Promise.resolve({ ok: true });
   }
 
-  var POPUP = chrome.runtime.getURL('popup.html');
-  chrome.runtime.onMessage.addListener(function (msg, sender, reply) {
+  // The popup is the browser extension's toolbar surface. Where there is no extension runtime (the desktop app) nothing asks, so nothing
+  // listens; window.keoStatus below is still built, because the shell hands the world's reconnect and open requests through it.
+  var hasRuntime = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage && typeof chrome.runtime.getURL === 'function';
+  var POPUP = hasRuntime ? chrome.runtime.getURL('popup.html') : null;
+  if (hasRuntime) chrome.runtime.onMessage.addListener(function (msg, sender, reply) {
     if (!msg || typeof msg.keo !== 'string' || msg.keo.indexOf('popup.') !== 0) return false;
     if (sender.id !== chrome.runtime.id || !sender.url || sender.url.split(/[?#]/)[0] !== POPUP) return false;
     if (msg.keo === 'popup.status') build().then(reply, function () { reply(null); });

@@ -1,6 +1,10 @@
 // Assemble the keo world extension: shell page start.html + sandboxed world.html + the static
 // files a plain boot of blank.html requests, so the world runs from the package with no server.
-// Usage: node build.js <output folder> [--version <release tag, e.g. v0 or v0.2.1>]
+// Usage: node build.js <output folder> [--version <release tag, e.g. v0 or v0.2.1>] [--desktop]
+//   --desktop build for the desktop app instead of the browser extension: the same files, but the origin is the app's own address
+//             (https://keo.test, passkey rpId keo.test) and there is no manifest, popup or icon; desktop.json carries the two page
+//             policies the app's main process sets as response headers. An identity's rpId is its origin, so these two values are the
+//             desktop app's permanent identity address: change them and every identity made there is orphaned.
 //   --version the release this package is, written as the extension's version (what the browser shows for it). A leading "v" is
 //             dropped; what is left must be one to four dot-separated whole numbers (0-65535), which is all the browser accepts.
 //             Also read from $KEO_VERSION. Without it the version is 0.0.0, so a local build is never taken for a release.
@@ -18,12 +22,13 @@ const { LISTED_DIRS } = require('./kernel-list');
 // --key <file>  a key file of the same shape as extension-key.json ({ spkiBase64 }). Another key is another extension id, which is
 //               another origin and another passkey rpId: it is how a test gets a SECOND origin to move an identity to. A package built
 //               this way is never a release.
-let OUT = null, VERSION_ARG = process.env.KEO_VERSION || null, KEY_FILE = path.join(__dirname, 'extension-key.json');
+let OUT = null, VERSION_ARG = process.env.KEO_VERSION || null, KEY_FILE = path.join(__dirname, 'extension-key.json'), DESKTOP = false;
 {
   const a = process.argv.slice(2);
   for (let i = 0; i < a.length; i++) {
     if (a[i] === '--version') VERSION_ARG = a[++i];
     else if (a[i] === '--key') KEY_FILE = path.resolve(a[++i] || '');
+    else if (a[i] === '--desktop') DESKTOP = true;
     else if (!OUT) OUT = a[i];
     else { console.error('unexpected argument: ' + a[i]); process.exit(1); }
   }
@@ -44,7 +49,12 @@ const MARKER = path.join(OUT, '.keo-world-build');
 // The public key pinned in the manifest fixes the extension id, which is the origin and the passkey rpId everywhere below.
 const der = Buffer.from(JSON.parse(fs.readFileSync(KEY_FILE, 'utf8')).spkiBase64, 'base64');
 const id = crypto.createHash('sha256').update(der).digest('hex').slice(0, 32).replace(/[0-9a-f]/g, (c) => String.fromCharCode(97 + parseInt(c, 16)));
-const EXT_ORIGIN = 'chrome-extension://' + id;
+// The origin every page of the package runs on, and the rpId its passkeys are made for. In the extension both come from the pinned key.
+// On the desktop the app answers https://keo.test itself (no socket, no DNS: the name is reserved and never resolves), which is the
+// kind of origin a passkey can be made on without a server; there the rpId is the bare host.
+const DESKTOP_HOST = 'keo.test';
+const EXT_ORIGIN = DESKTOP ? 'https://' + DESKTOP_HOST : 'chrome-extension://' + id;
+const RPID = DESKTOP ? DESKTOP_HOST : id;
 
 // Refuse to write into a folder that is not empty and not one of our own earlier builds.
 if (fs.existsSync(OUT) && fs.readdirSync(OUT).length && !fs.existsSync(MARKER)) {
@@ -92,8 +102,8 @@ const propfind = (rel) => {
   copySnapshot('');
   // localconfig.js is loaded at boot. Everything else takes the kernel's config.json defaults; this sets what makes the
   // identity code use the extension as its origin: the passkey rpId, and the shell as the vault host (see config.json)
-  put('core/lively/localconfig.js', `/* Written by the keo extension build; not the kernel's localconfig.js. */
-lively.Config.set('identityRpId', ${JSON.stringify(id)});
+  put('core/lively/localconfig.js', `/* Written by the keo package build; not the kernel's localconfig.js. */
+lively.Config.set('identityRpId', ${JSON.stringify(RPID)});
 lively.Config.set('identityOrigin', ${JSON.stringify(EXT_ORIGIN)});
 lively.Config.set('identityVaultOrigin', ${JSON.stringify(EXT_ORIGIN)});
 lively.Config.set('identityVaultTransport', 'parent');
@@ -145,25 +155,42 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
   if (fs.existsSync(updateKey)) put('update-key.json', fs.readFileSync(updateKey));
   else console.warn('no extension/update-key.json: this package will not take updates');
   put('keo-release.js', fs.readFileSync(path.join(SHELL, 'keo-release.js')));
-  // The toolbar icon opens a popup (popup.js) instead of a tab; a manifest popup and an onClicked handler cannot both be set, so
-  // there is no background worker. The popup shows the runtime's mascot from the snapshot, so the build checks it is there.
-  for (const f of ['popup.html', 'popup.css', 'popup.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
-  if (!fs.existsSync(path.join(OUT, 'core/media/face-masks/keo.png'))) throw new Error('core/media/face-masks/keo.png is missing from the snapshot: the popup draws it');
-  // The icon (toolbar, extensions page): the mascot on a round tile, drawn by make-icons.js and committed.
-  const ICON_SIZES = [16, 32, 48, 128], icons = {};
-  for (const n of ICON_SIZES) { icons[n] = 'icons/keo-' + n + '.png'; put(icons[n], fs.readFileSync(path.join(__dirname, 'icons', 'keo-' + n + '.png'))); }
-  put('manifest.json', JSON.stringify({
-    manifest_version: 3, name: 'keo (prototype)', version: VERSION, description: 'keo world from the package, no server. Prototype.',
-    key: der.toString('base64'), icons, action: { default_title: 'keo', default_popup: 'popup.html', default_icon: icons },
-    sandbox: { pages: ['world.html'] },
-    // The one site the shell may read for the world (shell/keo-catalog.js, which checks what it is asked): the music catalogue, whose
-    // answers the browser refuses to the world's origin. Shown to the person installing the package.
-    host_permissions: ['https://itunes.apple.com/*'],
-    // Extension pages (shell, vault): the default script-src plus 'wasm-unsafe-eval', which libsodium's WebAssembly needs.
-    // (The extension-page CSP is a separate setting from the sandbox one below.)
-    // Default sandbox CSP plus blob: workers (the runtime's workers have to be created from blobs here, see 9.4h).
-    content_security_policy: { extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'", sandbox: "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; child-src 'self' blob:;" },
-  }, null, 2));
+  if (DESKTOP) {
+    // No toolbar, so no popup and no icons. The app's main process serves the package and sets these two policies as response
+    // headers, the same two the extension's manifest declares: the shell and vault pages run with scripts from the package only (plus
+    // the WebAssembly libsodium needs), and the world page is sandboxed (an opaque origin) and may use eval and blob workers.
+    // They are read from here so that a new package can change them; the main process refuses a package without them.
+    put('desktop.json', JSON.stringify({
+      v: 1, origin: EXT_ORIGIN, host: DESKTOP_HOST, version: VERSION,
+      csp: { shell: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+             world: "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; child-src 'self' blob:;" },
+      sandboxedPages: ['world.html'],
+      // The one site the shell may read for the world (shell/keo-catalog.js): the extension asks for it as a host permission; the app's
+      // main process lets this one site answer the shell page across origins and no other.
+      catalogHosts: ['https://itunes.apple.com']
+    }, null, 2));
+  } else {
+    // The toolbar icon opens a popup (popup.js) instead of a tab; a manifest popup and an onClicked handler cannot both be set, so
+    // there is no background worker. The popup shows the runtime's mascot from the snapshot, so the build checks it is there.
+    for (const f of ['popup.html', 'popup.css', 'popup.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
+    if (!fs.existsSync(path.join(OUT, 'core/media/face-masks/keo.png'))) throw new Error('core/media/face-masks/keo.png is missing from the snapshot: the popup draws it');
+    // The icon (toolbar, extensions page): the mascot on a round tile, drawn by make-icons.js and committed.
+    const ICON_SIZES = [16, 32, 48, 128], icons = {};
+    for (const n of ICON_SIZES) { icons[n] = 'icons/keo-' + n + '.png'; put(icons[n], fs.readFileSync(path.join(__dirname, 'icons', 'keo-' + n + '.png'))); }
+    put('manifest.json', JSON.stringify({
+      manifest_version: 3, name: 'keo (prototype)', version: VERSION, description: 'keo world from the package, no server. Prototype.',
+      key: der.toString('base64'), icons, action: { default_title: 'keo', default_popup: 'popup.html', default_icon: icons },
+      sandbox: { pages: ['world.html'] },
+      // The one site the shell may read for the world (shell/keo-catalog.js, which checks what it is asked): the music catalogue, whose
+      // answers the browser refuses to the world's origin. Shown to the person installing the package.
+      host_permissions: ['https://itunes.apple.com/*'],
+      // Extension pages (shell, vault): the default script-src plus 'wasm-unsafe-eval', which libsodium's WebAssembly needs.
+      // (The extension-page CSP is a separate setting from the sandbox one below.)
+      // Default sandbox CSP plus blob: workers (the runtime's workers have to be created from blobs here, see 9.4h).
+      content_security_policy: { extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'", sandbox: "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; child-src 'self' blob:;" },
+    }, null, 2));
+
+  }
 
   // The package carries LivelyKernel's code. It is MIT licensed and its notice has to travel with it. So does the list of what
   // is known about the licences of the libraries it vendors, which is kernel/THIRD-PARTY-NOTICES.md and so is copied with the
@@ -194,7 +221,7 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
   //    from (see 5b). The shell does not read it (a package without one starts the blank world with the sign-in dialog open); it
   //    is there so a test, or a person looking at a package, can tell which of the two it is. Written after 5b for that.
   put('keo-build.json', JSON.stringify({
-    builtAt: new Date().toISOString(), version: VERSION, extensionId: id, bundleHash: hash,
+    builtAt: new Date().toISOString(), version: VERSION, target: DESKTOP ? 'desktop' : 'extension', extensionId: DESKTOP ? null : id, origin: EXT_ORIGIN, bundleHash: hash,
     kernel: { commit: SNAPSHOT.commit }, gateWorld: fs.existsSync(path.join(OUT, 'gate-world.html'))
   }, null, 2) + '\n');
 
@@ -202,5 +229,5 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
   //    security statement: whatever an update downloads is checked against the signed release, never against this.
   put('keo-files.json', JSON.stringify({ v: 1, files: listPackage(OUT) }) + '\n');
 
-  console.log('built ' + OUT + ': ' + files + ' files, ' + bytes + ' bytes, extension id ' + id + ', bundle ' + hash + ', kernel ' + SNAPSHOT.commit.slice(0, 7));
+  console.log('built ' + OUT + ': ' + files + ' files, ' + bytes + ' bytes, ' + (DESKTOP ? 'desktop origin ' + EXT_ORIGIN : 'extension id ' + id) + ', bundle ' + hash + ', kernel ' + SNAPSHOT.commit.slice(0, 7));
 })().catch((e) => { console.error(e); process.exit(1); });
