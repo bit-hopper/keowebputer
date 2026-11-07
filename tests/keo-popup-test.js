@@ -54,10 +54,17 @@ const settled = (p) => until(() => p.evaluate(() => !!document.querySelector('.p
     await pop.screenshot({ path: path.join(WORK, 'popup-first-run-light.png') });
     await pop.emulateMedia({ colorScheme: 'dark' });
     await pop.screenshot({ path: path.join(WORK, 'popup-first-run-dark.png') });
-    check('first run: the dark scheme changes the panel colour', await pop.evaluate(() => getComputedStyle(document.getElementById('popup')).backgroundColor) === 'rgb(36, 25, 40)');
-    check('first run: the content is a rounded card inset on a tinted ground', await pop.evaluate(() => {
+    // One look in both schemes: the card is the ambient presence panel's pink, the primary button is green with white text.
+    const look = () => pop.evaluate(() => { const c = getComputedStyle(document.getElementById('popup')), b = getComputedStyle(document.querySelector('.btn')); return { card: c.backgroundColor, btn: b.backgroundColor, btnText: b.color, body: getComputedStyle(document.body).color }; });
+    const dark = await look();
+    await pop.emulateMedia({ colorScheme: 'light' });
+    const light = await look();
+    check('first run: the card is the pink of the ambient presence panel, in both schemes', dark.card === 'rgb(232, 73, 126)' && light.card === 'rgb(232, 73, 126)', { dark, light });
+    check('the scrollbar is pink: a light pink thumb on a deeper pink track, inherited by the page', await pop.evaluate(() => getComputedStyle(document.documentElement).scrollbarColor) === 'rgb(255, 194, 214) rgb(189, 59, 102)', await pop.evaluate(() => getComputedStyle(document.documentElement).scrollbarColor));
+    check('first run: the primary button is green with white text, and text on the card is white', dark.btn === 'rgb(47, 158, 91)' && dark.btnText === 'rgb(255, 255, 255)' && dark.body === 'rgb(255, 255, 255)' && light.btn === dark.btn, { dark, light });
+    check('first run: the card fills the popup in one surface (no inset, no second frame, no rounded edge to show a square one behind it)', await pop.evaluate(() => {
       const c = getComputedStyle(document.getElementById('popup')), b = getComputedStyle(document.body);
-      return c.borderTopLeftRadius === '16px' && b.paddingLeft === '8px' && b.backgroundColor !== c.backgroundColor && document.body.getBoundingClientRect().width === 360;
+      return c.borderTopLeftRadius === '0px' && c.borderTopWidth === '0px' && b.paddingLeft === '0px' && b.backgroundColor === c.backgroundColor && document.body.getBoundingClientRect().width === 360;
     }));
     check('first run: no keo tab yet', shellPages(ctx).length === 0);
     await pop.locator('.btn').click();
@@ -98,6 +105,9 @@ const settled = (p) => until(() => p.evaluate(() => !!document.querySelector('.p
     // record of the tab can.)
     const isActive = () => keo.evaluate(() => chrome.tabs.getCurrent().then((t) => t.active));
     check('open: the keo tab is in the background while the popup tab is in front', await until(async () => (await isActive()) === false, 3000));
+    // The soft white lines must show on the pink: the dashed box of an empty list and the separators are 70% white.
+    const lines = await pop.evaluate(() => { const q = (s) => { const e = document.querySelector(s); return e ? getComputedStyle(e) : null; }; const em = q('.empty'), hd = q('.head'), ft = q('.foot'); return { empty: em && em.borderTopColor, emptyStyle: em && em.borderTopStyle, head: hd && hd.borderBottomColor, foot: ft && ft.borderTopColor }; });
+    check('open: the dashed box of an empty list and the separators are visible white lines', lines.empty === 'rgba(255, 255, 255, 0.7)' && lines.emptyStyle === 'dashed' && lines.head === 'rgba(255, 255, 255, 0.7)' && lines.foot === 'rgba(255, 255, 255, 0.7)', lines);
     await pop.screenshot({ path: path.join(WORK, 'popup-open.png') });
     const nTabs = shellPages(ctx).length;
     await pop.locator('.btn').click();

@@ -1,29 +1,29 @@
 /* The toolbar popup (popup.js). Plain CSS drawn to match the runtime's morphic look: it has to appear before any world exists, so
-   it cannot be morphic. Colours are the runtime's system theme: the menu bar's pink is the accent and is used for the primary
-   button, focus and selection only; state colours (good, warn, bad) are never pink. System fonts only: an extension page loads
-   nothing from the network. */
+   it cannot be morphic. The card is the ambient presence panel's pink and the primary button is green; state colours (good, warn,
+   bad) are never pink. System fonts only: an extension page loads nothing from the network. */
 :root {
-  color-scheme: light dark;
-  --idle: #6a6275; --btn-2: #ece9f2; --ground: #efecf3; --ink: #241928; --ink-2: #625a6c; --panel: #fbfaff; --panel-2: #f7f6f9; --panel-line: #e8e6ec; --tile: #e8e9ee;
-  --accent: #f01a69; --accent-fill: #c80f55; --on-accent: #ffffff;
-  --good: #1f7a46; --good-bg: #dff3e7; --warn: #8a5a00; --warn-bg: #fbecc9; --bad: #b02f22; --bad-bg: #fbe0dc;
+  color-scheme: dark;
+  /* One look in every scheme. The card is the pink of the ambient presence panel (#e8497e, PANEL_BG in the runtime); the ground is the same pink, so
+     there is no second frame. Text on the card is white, and the soft lines (the separators and the dashed box of an empty list) are 70% white so they show on the pink. Rows and pills are dark plum, so the state colours below
+     (which were chosen for a dark surface) stay readable on them. The primary button is green with white text (the same green as the shell's dialogs); the focus ring is white,
+     because a pink one would vanish on a pink card. */
+  --ground: #e8497e; --panel: #e8497e; --panel-line: rgba(255,255,255,.7); --panel-2: rgba(36,25,40,.72); --btn-2: rgba(255,255,255,.22);
+  --ink: #ffffff; --ink-2: #fff2f6; --tile: #e8e9ee; --idle: #9a90a6;
+  --thumb: #ffc2d6; --track: #bd3b66;      /* the scrollbar: a light pink thumb on a deeper pink track, so it shows on the pink card */
+  --go: #2f9e5b; --on-go: #ffffff; --focus: #ffffff;
+  --good: #6fd39a; --good-bg: #1c3a2b; --warn: #f1c27d; --warn-bg: #3b2f14; --bad: #f1948a; --bad-bg: #402220;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --idle: #9a90a6; --btn-2: #3a2d42; --ground: #17101b; --ink: #f4eef7; --ink-2: #b3a9bd; --panel: #241928; --panel-2: #2f2236; --panel-line: #43334b;
-    --accent: #ff4d8d; --accent-fill: #ff4d8d; --on-accent: #241928;
-    --good: #6fd39a; --good-bg: #1c3a2b; --warn: #f1c27d; --warn-bg: #3b2f14; --bad: #f1948a; --bad-bg: #402220;
-  }
-}
 * { box-sizing: border-box; }
-/* The browser draws the popup's own frame and its corners are not ours to round, so the content is a rounded card inset on a
-   tinted ground: the frame's corners then show the ground, not the card's edge. */
+:root { scrollbar-color: var(--thumb) var(--track); }   /* inherited, so every scrolling box in the popup has it */
+/* The browser draws the popup's own frame, and its square corners are not ours to round (a rounded card inside it leaves the browser's
+   square surface showing around the card). So the card fills the popup and the ground is the card's own colour: there is one pink
+   surface and no second, square frame around a rounded one. */
 html { background: var(--ground); }
-body { margin: 0; width: 360px; padding: 8px; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); }
-#popup { background: var(--panel); border: 1px solid var(--panel-line); border-radius: 16px; overflow: hidden; }
+body { margin: 0; width: 360px; padding: 0; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); }
+#popup { background: var(--panel); overflow: hidden; }
 button { font: inherit; color: inherit; cursor: pointer; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 .head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--panel-line); }
 .mask { background: var(--tile); border-radius: 50%; display: grid; place-items: center; flex: none; width: 44px; height: 44px; }
@@ -51,7 +51,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .banner { border-radius: 12px; padding: 9px 11px; font-size: 13px; background: var(--warn-bg); color: var(--warn); }
 .note { margin: 0; font-size: 13px; color: var(--ink-2); }
 
-.btn { width: 100%; border: 0; border-radius: 999px; padding: 10px 16px; font-weight: 600; background: var(--accent-fill); color: var(--on-accent); }
+.btn { width: 100%; border: 0; border-radius: 999px; padding: 10px 16px; font-weight: 600; background: var(--go); color: var(--on-go); }
 .btn:hover { filter: brightness(1.06); }
 /* a state is told by a word as well as a dot, so colour is never the only signal */
 .sec-h { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 6px; }
