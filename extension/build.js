@@ -15,11 +15,15 @@ const { listPackage } = require('./package-files');
 const { LISTED_DIRS } = require('./kernel-list');
 
 // ---- arguments
-let OUT = null, VERSION_ARG = process.env.KEO_VERSION || null;
+// --key <file>  a key file of the same shape as extension-key.json ({ spkiBase64 }). Another key is another extension id, which is
+//               another origin and another passkey rpId: it is how a test gets a SECOND origin to move an identity to. A package built
+//               this way is never a release.
+let OUT = null, VERSION_ARG = process.env.KEO_VERSION || null, KEY_FILE = path.join(__dirname, 'extension-key.json');
 {
   const a = process.argv.slice(2);
   for (let i = 0; i < a.length; i++) {
     if (a[i] === '--version') VERSION_ARG = a[++i];
+    else if (a[i] === '--key') KEY_FILE = path.resolve(a[++i] || '');
     else if (!OUT) OUT = a[i];
     else { console.error('unexpected argument: ' + a[i]); process.exit(1); }
   }
@@ -38,7 +42,7 @@ const SNAPSHOT = JSON.parse(fs.readFileSync(path.join(KERNEL, 'SNAPSHOT.json'), 
 const SHELL = path.join(ROOT, 'shell'), WORLD = path.join(ROOT, 'world');   // the two realms' sources; this folder holds the builder, the boot list and the pinned key
 const MARKER = path.join(OUT, '.keo-world-build');
 // The public key pinned in the manifest fixes the extension id, which is the origin and the passkey rpId everywhere below.
-const der = Buffer.from(JSON.parse(fs.readFileSync(path.join(__dirname, 'extension-key.json'), 'utf8')).spkiBase64, 'base64');
+const der = Buffer.from(JSON.parse(fs.readFileSync(KEY_FILE, 'utf8')).spkiBase64, 'base64');
 const id = crypto.createHash('sha256').update(der).digest('hex').slice(0, 32).replace(/[0-9a-f]/g, (c) => String.fromCharCode(97 + parseInt(c, 16)));
 const EXT_ORIGIN = 'chrome-extension://' + id;
 
@@ -127,7 +131,7 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
 
   // 4. shell page, the vault page and the manifest
   put('start.html', fs.readFileSync(path.join(SHELL, 'start.html')));
-  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-hello.js', 'keo-identity.js', 'keo-p2p.js', 'keo-callsdp.js', 'keo-identicon.js', 'keo-confirm.js', 'keo-call.js', 'keo-dm.js', 'keo-chatlog.js', 'keo-contacts.js', 'keo-wordlist.js', 'keo-fingerprint.js', 'keo-friend.js', 'keo-status.js', 'keo-worldtext.js', 'keo-worlds.js', 'keo-library.js', 'keo-catalog.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
+  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-hello.js', 'keo-identity.js', 'keo-p2p.js', 'keo-callsdp.js', 'keo-identicon.js', 'keo-confirm.js', 'keo-call.js', 'keo-dm.js', 'keo-chatlog.js', 'keo-contacts.js', 'keo-wordlist.js', 'keo-fingerprint.js', 'keo-friend.js', 'keo-enroll-code.js', 'keo-enroll.js', 'keo-status.js', 'keo-worldtext.js', 'keo-worlds.js', 'keo-library.js', 'keo-catalog.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
   // The vault page as the server builds it (IdentityServer.js buildIdentityVaultPage), with the shell's origin as the one
   // app origin it will answer. Relative script paths: this page lives at the package root.
   put('vault.html', '<!DOCTYPE html><html><head><meta charset="utf-8">' +

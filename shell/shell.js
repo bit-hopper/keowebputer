@@ -170,6 +170,10 @@
     'friend.list': function () { return window.keoFriend.list(); },
     'friend.words': function () { return window.keoFriend.myWords(); },
     'friend.remove': function (a) { return window.keoFriend.remove({ did: a.did }); },
+    // Adding an identity to a second device (keo-enroll.js). The world can only ASK for the dialog, naming which side it is: 'new' (this
+    // device wants an identity) or 'old' (the identity signed in here is to be added to another device). The words, the codes and the
+    // passkey prompt are all in this page's dialog; there is no op that fills it in, approves, or reads what is in it.
+    'enroll.open': function (a) { return window.keoEnroll.start({ mode: a.mode }); },
     // The vault asked to be shown (its "Unlock with passkey" button needs a click inside its own frame), or hidden again.
     'vault.frame': function (a) { vault.classList.toggle('shown', !!a.shown); return true; }
   };
@@ -181,6 +185,7 @@
   window.keoCall.onEvent(function (data) { toWorld({ keo: 1, event: 'call', data: data }); });
   window.keoDm.onEvent(function (data) { toWorld({ keo: 1, event: 'dm', data: data }); });
   window.keoFriend.onEvent(function (data) { toWorld({ keo: 1, event: 'friend', data: data }); });
+  window.keoEnroll.onEvent(function (data) { toWorld({ keo: 1, event: 'enroll', data: data }); });
   // The person asked, in the toolbar popup, to reconnect to a friend: {keo:1, event:'reconnect', data:{did, name}}. The world opens its
   // Connect a device window for it and makes the invitation (p2p.offer with `expect`); this page only says that it was asked.
   window.keoStatus.onReconnect(function (data) { toWorld({ keo: 1, event: 'reconnect', data: data }); });
@@ -190,7 +195,7 @@
   // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
   // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
   // connections were proven with that identity's device key, and the next one to sign in must not inherit them.
-  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoContacts.clear(); });
+  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoEnroll.reset(); window.keoContacts.clear(); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;

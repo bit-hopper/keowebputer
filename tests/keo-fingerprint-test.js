@@ -67,5 +67,23 @@ const other = (did) => {
   ok('empty, missing and non-text input match nothing', !(await fp.matches(d1, '')) && !(await fp.matches(d1, null)) && !(await fp.matches(d1, undefined)) && !(await fp.matches(d1, 12345)));
   ok('parse keeps order and spells the words as the list does', JSON.stringify(fp.parse('  ABANDON, Ability\nzoo ')) === JSON.stringify(['abandon', 'ability', 'zoo']));
 
+  // ---- the words for a request to add a device (not a DID)
+  const otherReq = (text) => {
+    const h = nodeCrypto.createHash('sha256').update('keo/enroll-fingerprint/v1\0' + text).digest();
+    let n = 0n; for (let i = 0; i < 11; i++) n = (n << 8n) | BigInt(h[i]);
+    const out = []; for (let i = 7; i >= 0; i--) out.push(WORDS[Number((n >> BigInt(i * 11)) & 2047n)]);
+    return out;
+  };
+  const reqText = '{"ecdh":{"x":"a"},"v":1}';
+  const rw = await fp.requestWords(reqText);
+  ok('request words: eight, from the list, and as an independent computation gives them', rw.length === 8 && JSON.stringify(rw) === JSON.stringify(otherReq(reqText)) && rw.every((w) => WORDS.includes(w)));
+  ok('request words: the same text gives the same words, another text other words', JSON.stringify(await fp.requestWords(reqText)) === JSON.stringify(rw) && JSON.stringify(await fp.requestWords(reqText + ' ')) !== JSON.stringify(rw));
+  ok('request words are never the words of a DID with the same text (the label differs)', JSON.stringify(await fp.requestWords(dids[0])) !== JSON.stringify(await fp.words(dids[0])));
+  ok('requestMatches: the right words match, in any case and spacing', await fp.requestMatches(reqText, rw.join(' ')) && await fp.requestMatches(reqText, rw.map((w) => w.toUpperCase()).join(',\n')));
+  ok('requestMatches: other words, fewer words, words of a DID, a slip, nothing', !(await fp.requestMatches(reqText, (await fp.requestWords('x')).join(' '))) && !(await fp.requestMatches(reqText, rw.slice(0, 7).join(' '))) &&
+    !(await fp.requestMatches(dids[0], (await fp.words(dids[0])).join(' '))) && !(await fp.requestMatches(reqText, rw.join(' ').replace(rw[0], 'zzzz'))) && !(await fp.requestMatches(reqText)) && !(await fp.requestMatches(reqText, '')));
+  let threw = 0; for (const bad of ['', null, undefined, 5]) { try { await fp.requestWords(bad); } catch (e) { threw++; } }
+  ok('requestWords refuses empty and non-text input', threw === 4);
+
   console.log(process.exitCode ? passed + ' checks passed, SOME FAILED' : passed + ' checks passed');
 })();

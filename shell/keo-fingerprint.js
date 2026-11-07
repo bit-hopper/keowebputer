@@ -31,9 +31,7 @@
 
   // The eight words for a DID, in order. Rejects anything that is not a well-formed DID: a fingerprint of a string that is not one
   // would look as good as any other and mean nothing.
-  async function words(did) {
-    if (!kd.parseDid(did)) throw new Error('That is not a keo identity.');
-    var h = new Uint8Array(await subtle.digest('SHA-256', enc.encode(LABEL + '\0' + did)));
+  function cut(h) {
     var out = [], acc = 0, have = 0, p = 0;
     while (out.length < COUNT) {
       while (have < BITS) { acc = (acc << 8) | h[p++]; have += 8; }
@@ -42,6 +40,19 @@
       acc &= (1 << have) - 1;
     }
     return out;
+  }
+  async function words(did) {
+    if (!kd.parseDid(did)) throw new Error('That is not a keo identity.');
+    return cut(new Uint8Array(await subtle.digest('SHA-256', enc.encode(LABEL + '\0' + did))));
+  }
+
+  // The same eight words for something that is not a DID: the request a new device makes to join an identity (keo-identity.js
+  // enrollRequest). `text` is what both ends hash (the canonical JSON of the request). It has a label of its own, so words that
+  // stand for a request can never be read as an identity's, and the other way round.
+  var REQUEST_LABEL = 'keo/enroll-fingerprint/v1';
+  async function requestWords(text) {
+    if (typeof text !== 'string' || !text) throw new Error('keoFingerprint: a request is a non-empty string');
+    return cut(new Uint8Array(await subtle.digest('SHA-256', enc.encode(REQUEST_LABEL + '\0' + text))));
   }
 
   // What the other person said, as typed: any case, any run of spaces, commas or line breaks between the words. Returns the
@@ -62,5 +73,14 @@
     return diff === 0;
   }
 
-  return { LABEL: LABEL, COUNT: COUNT, BITS: BITS, words: words, parse: parse, matches: matches };
+  function sameWords(said, mine) {
+    if (!said || said.length !== COUNT) return false;
+    var diff = 0;
+    for (var i = 0; i < COUNT; i++) diff |= (said[i] === mine[i]) ? 0 : 1;
+    return diff === 0;
+  }
+  // Does what was typed or read out match this request? (requestWords)
+  async function requestMatches(text, said) { return sameWords(parse(said), await requestWords(text)); }
+
+  return { LABEL: LABEL, COUNT: COUNT, BITS: BITS, words: words, parse: parse, matches: matches, requestWords: requestWords, requestMatches: requestMatches };
 });

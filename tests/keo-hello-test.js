@@ -128,13 +128,34 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
       const a = await assertion(authPair.privateKey, await kd.eventHash(cert));
       cert = Object.assign({}, cert, { assertion: { authenticatorData: a.authenticatorData, clientDataJSON: a.clientDataJSON, signature: a.signature } });
     }
-    return { did, inception, sigs, cert, device };
+    return { did, inception, sigs, cert, device, authPair, keyId };
+  }
+  // The same identity after a second passkey (made on another origin) was added by an event, as keo-identity.js enroll does it:
+  // returns what the NEW device holds. mode 'log': its device is listed by the event and the certificate is the event's own two
+  // signatures; mode 'signin': the event lists no device and the new passkey signs a certificate for a device key of its own.
+  async function addKey(id, mode, o) {
+    o = o || {};
+    const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const device = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+    const deviceJwk = plain(await subtle.exportKey('jwk', device.publicKey));
+    const key = { id: kd.b64u(crypto.getRandomValues(new Uint8Array(16))), jwk: plain(await subtle.exportKey('jwk', pair.publicKey)), rpId: 'keo.test', kind: 'platform', addedAt: new Date().toISOString() };
+    const dev = { id: kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson(deviceJwk)))), jwk: deviceJwk, addedAt: key.addedAt };
+    const e = await kd.addAuthorityEvent(id.inception, key, mode === 'log' ? dev : undefined);
+    const H = await kd.eventHash(e);
+    const oldSig = Object.assign({ keyId: id.keyId }, await assertion(id.authPair.privateKey, H));
+    const newSig = Object.assign({ keyId: key.id }, await assertion(pair.privateKey, H));
+    const events = [{ event: e, sigs: { authority: [oldSig], newKey: newSig } }];
+    const now = o.now || Date.now();
+    let cert = { v: 1, did: id.did, devicePubKeyJwk: deviceJwk, issuedAt: new Date(now).toISOString(), exp: new Date(now + 12 * 3600e3).toISOString(), aud: AUD, scope: ['world:read', 'world:write', 'sign'], authorityKeyId: key.id };
+    if (mode === 'log') cert = Object.assign({ via: 'log' }, cert, { assertion: newSig });
+    else { const a = await assertion(pair.privateKey, await kd.eventHash(cert)); cert = Object.assign({}, cert, { assertion: { authenticatorData: a.authenticatorData, clientDataJSON: a.clientDataJSON, signature: a.signature } }); }
+    return { did: id.did, inception: id.inception, sigs: id.sigs, events, cert, device };
   }
   // A proof message as it crosses the channel (JSON in, JSON out). `edit(hello)` changes the hello AFTER it is built and BEFORE it is
   // signed (a cheater signing something bad); `after(msg)` changes it after signing (tampering on the way).
   async function proofMsg(id, role, fps, o) {
     o = o || {};
-    const h = hello.proofBuild(role, fps, { did: id.did, inception: id.inception, sigs: id.sigs, cert: id.cert }, { name: o.name, now: o.now });
+    const h = hello.proofBuild(role, fps, { did: id.did, inception: id.inception, sigs: id.sigs, events: id.events, cert: id.cert }, { name: o.name, now: o.now });
     if (o.edit) o.edit(h);
     const sig = kd.b64u(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, (o.signWith || id).device.privateKey, hello.signedBytes(h)));
     const msg = JSON.parse(JSON.stringify({ hello: h, sig }));
@@ -172,6 +193,22 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await refused('a delegation of an unknown kind is refused', proofMsg(B, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.via = 'trust-me'; } }), 'offer', {}, /unknown kind/);
   await refused('a certificate naming an unknown authority key is refused', proofMsg(B, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.authorityKeyId = 'nope'; } }), 'offer', {}, /authority key/);
   await refused('a proof with no identity at all is refused without throwing', proofMsg(A, 'offer', FPS, { edit: (h) => { delete h.inception; delete h.inceptionSigs; delete h.cert; } }), 'offer', {}, /identity|could not be checked/);
+
+  // ---- a device whose passkey was added to the identity later (made on another origin)
+  ok('a proof with no events has no "events" member: the shape of an identity that never added a key is unchanged', !('events' in (await proofMsg(A, 'offer', FPS)).hello));
+  const A2 = await addKey(A, 'log'), A3 = await addKey(A, 'signin');
+  const vA2 = await verify(await proofMsg(A2, 'offer', FPS, { name: 'Maya at the desktop' }), 'offer');
+  ok('a device the log lists (added by an event both keys signed) verifies, under the same DID', vA2.ok && vA2.did === A.did, vA2);
+  const vA3 = await verify(await proofMsg(A3, 'offer', FPS), 'offer');
+  ok('a device on the added passkey with a sign-in certificate verifies', vA3.ok && vA3.did === A.did, vA3);
+  ok('the original device still verifies once the log has grown (its proof may carry the longer log)', (await verify(await proofMsg(Object.assign({}, A, { events: A2.events }), 'offer', FPS), 'offer')).ok === true);
+  await refused('the same proof WITHOUT the events is refused: the identity as first made does not know the added passkey', proofMsg(Object.assign({}, A2, { events: [] }), 'offer', FPS), 'offer', {}, /authority key/);
+  await refused('a sign-in certificate by the added passkey is refused without the events', proofMsg(Object.assign({}, A3, { events: [] }), 'offer', FPS), 'offer', {}, /authority key/);
+  await refused('an event edited after it was signed makes the identity fail', proofMsg(A2, 'offer', FPS, { edit: (h) => { h.events = JSON.parse(JSON.stringify(h.events)); h.events[0].event.add.key.rpId = 'evil.test'; } }), 'offer', {}, /identity does not verify/);
+  await refused('an event that adds a different device than the certificate names is refused', proofMsg(A2, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.devicePubKeyJwk = plain(B.cert.devicePubKeyJwk); } }), 'offer', {}, /not listed/);
+  await refused('an inception-kind certificate cannot vouch for a device only a later event lists', proofMsg(A2, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.via = 'inception'; } }), 'offer', {}, /not listed/);
+  await refused('a log-kind certificate cannot vouch for a device nothing lists', proofMsg(A, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.via = 'log'; h.cert.devicePubKeyJwk = plain(B.cert.devicePubKeyJwk); } }), 'offer', {}, /not listed/);
+  await refused('events grafted onto another identity are refused', proofMsg(B, 'offer', FPS, { edit: (h) => { h.events = A2.events; } }), 'offer', {}, /identity does not verify/);
 
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('FATAL', e); process.exit(2); });

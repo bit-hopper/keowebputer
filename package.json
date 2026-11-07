@@ -11,6 +11,7 @@
     "test:hello": "node tests/keo-hello-test.js",
     "test:callsdp": "node tests/keo-callsdp-test.js",
     "test:fingerprint": "node tests/keo-fingerprint-test.js",
+    "test:enrollcode": "node tests/keo-enroll-code-test.js",
     "test:worldtext": "node tests/keo-worldtext-test.js",
     "refresh-kernel": "node extension/refresh-kernel.js"
   },

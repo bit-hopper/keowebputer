@@ -76,14 +76,17 @@ Which files an update may carry, and what it must leave to a new package, is dec
 The browser tests drive a headed browser through `playwright-core` with the extension loaded. Their first argument is the folder that holds `node_modules/playwright-core` (here: `.`).
 
 ```
-npm run test:did                                     # no browser: DID, inception and verifier
+npm run test:did                                     # no browser: DID, inception, the log of added passkeys and the verifier
 npm run test:release                                 # no browser: release signing and verification
 npm run test:hello                                   # no browser: the short connection code and the signed peer proof
 npm run test:callsdp                                 # no browser: what a call description from the peer must look like
-npm run test:fingerprint                             # no browser: the eight words that stand for a DID
+npm run test:fingerprint                             # no browser: the eight words that stand for a DID, and for a request to add a device
+npm run test:enrollcode                               # no browser: the text carried between two devices when an identity is added to another
 npm run test:worldtext                               # no browser: the text that is searchable in a saved world, and the search
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator
 node tests/keo-session-test.js  . dist <work dir>    # the session, encrypted saved worlds, menu bar
+node tests/keo-enroll-test.js    . dist <work dir>    # two browsers, two extension ids: one identity moved to the other origin by a second passkey, the secret carried over, the words that guard both ends
+node tests/keo-enroll-ui-test.js . dist <work dir>    # the same, through the shell dialog by real clicks, typing, a real file chooser and a real download
 node tests/keo-gate-test.js     . dist <work dir>    # sign-in dialog inside the world, what starts when nobody is signed in
 node tests/keo-worlds-test.js   . dist <work dir>    # the worlds library: create by name, save, search, rename, copy, tags, delete, what is on disk, an older database
 node tests/keo-worlds-ui-test.js . dist <work dir>   # "My worlds" and the search palette, by real clicks and typing: search, row menu, create blank and from presets

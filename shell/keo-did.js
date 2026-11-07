@@ -143,6 +143,11 @@
     }).catch(function () { return false; });
   }
 
+  // A P-256 public key as a JWK, with no private member: the only kind a log may carry (authority keys and device keys).
+  function isPublicEcJwk(j) {
+    return !!j && j.kty === 'EC' && j.crv === 'P-256' && typeof j.x === 'string' && typeof j.y === 'string' && j.d === undefined;
+  }
+
   // ---- verifying an inception (7.5, 7.8 steps 3) -----------------------------------------------------------------
   // `rec` is { inception, sigs: { discovery: b64u, authority: [ assertion... ] } }. Resolves to { ok, did, error? }.
   // Needs no network: it checks that the event is well formed, that the discovery key proves possession, and that at
@@ -160,9 +165,7 @@
     // devices is optional (a log may delegate no device in its inception); when present it must be well formed: each entry names an
     // ECDSA P-256 public key, because a session's certificate is checked against this list.
     if (st.devices !== undefined) {
-      var devOk = Array.isArray(st.devices) && st.devices.every(function (d) {
-        return d && typeof d.id === 'string' && d.jwk && d.jwk.kty === 'EC' && d.jwk.crv === 'P-256' && typeof d.jwk.x === 'string' && typeof d.jwk.y === 'string' && d.jwk.d === undefined;
-      });
+      var devOk = Array.isArray(st.devices) && st.devices.every(function (d) { return d && typeof d.id === 'string' && isPublicEcJwk(d.jwk); });
       if (!devOk) return Promise.resolve(fail('state.devices is malformed'));
     }
     var dkBytes;
@@ -188,7 +191,76 @@
     });
   }
 
+  // ---- the log after the inception: adding an authority key on another origin -------------------------------------
+  // A passkey is bound to the origin it was made on and cannot move. What moves is the identity: a second passkey, made on
+  // another origin (the desktop app, a new extension id), is added to the same DID by an event that the identity's EXISTING
+  // authority keys sign (as many as the current threshold) and that the NEW key signs too, so a log can never list a key
+  // nobody holds. Both sign H(e) as a WebAuthn assertion, exactly as the inception does, and neither rpId nor origin is
+  // checked (see verifyAssertion), so the DID does not depend on where any one key lives.
+  //
+  //   { v: 1, type: 'add-authority', seq: n, prev: b64u(H(event n-1)), time,
+  //     add: { key: { id, jwk, rpId, kind, addedAt }, device: { id, jwk, addedAt } } }       (device is optional)
+  //   sigs: { authority: [ { keyId, ...assertion } ], newKey: { keyId, ...assertion } }
+  //
+  // The chain is linear: seq must follow the last event and prev must be its hash. Two devices that each extend the same
+  // event produce a fork, which this verifier does not accept (the second one fails on seq/prev); resolving forks is the
+  // sync layer's job, not this file's.
+  //
+  // `prevEvent` is the event to extend (the inception, or the last event of the log). Returns the unsigned event.
+  function addAuthorityEvent(prevEvent, key, device, time) {
+    return eventHash(prevEvent).then(function (h) {
+      var add = { key: key };
+      if (device) add.device = device;
+      return { v: 1, type: 'add-authority', seq: prevEvent.seq + 1, prev: b64u(h), time: time || new Date().toISOString(), add: add };
+    });
+  }
+
+  // `log` is { inception, sigs, events: [ { event, sigs } ] }. Verifies the inception, then each event in order, and
+  // resolves to { ok, did, state, error?, failedAt? } where `state` is the authority and device lists after the last event
+  // (the inception's `state` with the additions folded in). A caller that was GIVEN a DID passes it as `expectDid`.
+  async function verifyLog(log, expectDid) {
+    function fail(msg, at) { return { ok: false, error: msg, failedAt: at }; }
+    var inc = await verifyInception(log);
+    if (!inc.ok) return fail(inc.error, 0);
+    if (expectDid && inc.did !== expectDid) return fail('the log is for ' + inc.did + ', not ' + expectDid, 0);
+    var st = JSON.parse(JSON.stringify(log.inception.state));
+    st.devices = st.devices || [];
+    var last = log.inception, lastSeq = 0, events = log.events || [];
+    if (!Array.isArray(events)) return fail('events is not a list', 1);
+    for (var i = 0; i < events.length; i++) {
+      var e = events[i] && events[i].event, sigs = events[i] && events[i].sigs, at = i + 1;
+      if (!e || !sigs) return fail('event ' + at + ' has no signatures', at);
+      if (e.v !== 1 || e.type !== 'add-authority') return fail('event ' + at + ' is not a known event', at);
+      if (e.seq !== lastSeq + 1) return fail('event ' + at + ' does not follow the last event (seq)', at);
+      var lastHash = b64u(await eventHash(last));
+      if (e.prev !== lastHash) return fail('event ' + at + ' does not point at the last event (prev)', at);
+      var key = e.add && e.add.key, dev = e.add && e.add.device;
+      if (!key || typeof key.id !== 'string' || !isPublicEcJwk(key.jwk)) return fail('event ' + at + ' adds a malformed key', at);
+      if (st.authority.keys.some(function (k) { return k.id === key.id; }) || (st.revoked || []).indexOf(key.id) >= 0) return fail('event ' + at + ' adds a key the identity already has or revoked', at);
+      if (dev !== undefined && (!dev || typeof dev.id !== 'string' || !isPublicEcJwk(dev.jwk))) return fail('event ' + at + ' adds a malformed device', at);
+      if (dev && st.devices.some(function (d) { return d.id === dev.id; })) return fail('event ' + at + ' adds a device the identity already has', at);
+      var H = await eventHash(e);
+      // the existing keys: distinct, each listed before this event, as many as the threshold
+      var seen = {}, good = 0, list = sigs.authority || [];
+      for (var j = 0; j < list.length; j++) {
+        var a = list[j], k = st.authority.keys.filter(function (x) { return x.id === (a && a.keyId); })[0];
+        if (!k || seen[a.keyId]) continue;
+        seen[a.keyId] = true;
+        if (await verifyAssertion(a, k.jwk, H, 'webauthn.get')) good++;
+      }
+      if (good < st.authority.threshold) return fail('event ' + at + ': only ' + good + ' of ' + st.authority.threshold + ' required authority signatures verify', at);
+      // the new key must prove it is held by whoever is adding it
+      var nk = sigs.newKey;
+      if (!nk || nk.keyId !== key.id || !(await verifyAssertion(nk, key.jwk, H, 'webauthn.get'))) return fail('event ' + at + ': the new key did not sign', at);
+      st.authority.keys.push(key);
+      if (dev) st.devices.push(dev);
+      last = e; lastSeq = e.seq;
+    }
+    return { ok: true, did: inc.did, state: st, seq: lastSeq };
+  }
+
   return {
+    addAuthorityEvent: addAuthorityEvent, verifyLog: verifyLog, isPublicEcJwk: isPublicEcJwk,
     b64u: b64u, unb64u: unb64u, z32encode: z32encode, z32decode: z32decode,
     canonicalJson: canonicalJson, sha256: sha256, eventHash: eventHash,
     didFor: didFor, parseDid: parseDid,

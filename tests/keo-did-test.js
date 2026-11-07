@@ -105,5 +105,82 @@ async function makeAssertion(privateKey, challengeBytes, type) {
   t = clone(); t.inception.state.discovery.key = 'tooshort';
   ok('a malformed discovery key is rejected', (await kd.verifyInception(t)).ok === false);
 
+  // ---- the log after the inception: a second passkey, made on another origin, added to the same identity
+  const pubOf = async (pair) => { const j = await subtle.exportKey('jwk', pair.publicKey); return { kty: j.kty, crv: j.crv, x: j.x, y: j.y }; };
+  const mkKey = async (rpId) => {
+    const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    return { pair, entry: { id: kd.b64u(crypto.getRandomValues(new Uint8Array(16))), jwk: await pubOf(pair), rpId: rpId || 'keo.test', kind: 'platform', addedAt: new Date().toISOString() } };
+  };
+  const as = (keyId, pair) => ({ keyId, pair });
+  // signs an event the way the two sides would: the existing keys and the new one each sign H(e)
+  const signEvent = async (e, oldSigners, nw) => {
+    const He = await kd.eventHash(e);
+    return { event: e, sigs: {
+      authority: await Promise.all(oldSigners.map(async (s) => Object.assign({ keyId: s.keyId }, await makeAssertion(s.pair.privateKey, He)))),
+      newKey: nw ? Object.assign({ keyId: nw.keyId }, await makeAssertion(nw.pair.privateKey, He)) : undefined } };
+  };
+  const logOf = (events) => ({ inception: good.inception, sigs: good.sigs, events });
+  const k2 = await mkKey(), k3 = await mkKey('another.test');
+  const dev2 = { id: devEntry.id, jwk: devEntry.jwk, addedAt: devEntry.addedAt };
+  const e1 = await kd.addAuthorityEvent(good.inception, k2.entry, dev2);
+  const s1 = await signEvent(e1, [as(keyId, authPair)], as(k2.entry.id, k2.pair));
+  ok('the first event follows the inception: seq 1, prev is the inception hash', e1.seq === 1 && e1.prev === kd.b64u(H) && e1.type === 'add-authority');
+  let r = await kd.verifyLog(logOf([s1]));
+  ok('a log with a second authority key verifies and the DID is unchanged', r.ok === true && r.did === did, JSON.stringify(r));
+  ok('the folded state lists both keys and the new device', r.ok && r.state.authority.keys.length === 2 && r.state.devices.length === 1 && r.seq === 1);
+  ok('verifying does not change the log it was given', !JSON.stringify(good.inception).includes(k2.entry.id));
+  ok('a log with no events verifies like the inception alone', (await kd.verifyLog(logOf([]))).ok === true && (await kd.verifyLog({ inception: good.inception, sigs: good.sigs })).ok === true);
+  ok('the DID the caller expects is checked', (await kd.verifyLog(logOf([s1]), did)).ok === true && (await kd.verifyLog(logOf([s1]), did.slice(0, -1) + (did.endsWith('A') ? 'B' : 'A'))).ok === false);
+  const e2 = await kd.addAuthorityEvent(e1, k3.entry);
+  const s2 = await signEvent(e2, [as(k2.entry.id, k2.pair)], as(k3.entry.id, k3.pair));
+  r = await kd.verifyLog(logOf([s1, s2]));
+  ok('the key added by an event can authorise the next one, and the chain folds in order', r.ok === true && r.state.authority.keys.length === 3 && r.seq === 2, JSON.stringify(r));
+
+  const bad = async (name, events, at) => { const x = await kd.verifyLog(logOf(events)); ok(name, x.ok === false && (at === undefined || x.failedAt === at), JSON.stringify(x)); };
+  const tamper = (s, f) => { const c = JSON.parse(JSON.stringify(s)); f(c); return c; };
+  await bad('an event the new key did not sign is rejected', [await signEvent(e1, [as(keyId, authPair)], null)], 1);
+  await bad('an event signed by a stranger instead of the new key is rejected', [await signEvent(e1, [as(keyId, authPair)], as(k2.entry.id, stranger))], 1);
+  await bad('an event with no signature from an existing key is rejected', [await signEvent(e1, [], as(k2.entry.id, k2.pair))], 1);
+  await bad('an event the new key signed but a stranger posed as an existing key is rejected', [await signEvent(e1, [as(keyId, stranger)], as(k2.entry.id, k2.pair))], 1);
+  await bad('the new key cannot authorise its own addition', [await signEvent(e1, [as(k2.entry.id, k2.pair)], as(k2.entry.id, k2.pair))], 1);
+  await bad('changing the event after signing is rejected', [tamper(s1, (c) => { c.event.add.key.rpId = 'evil.test'; })], 1);
+  await bad('swapping the added key after signing is rejected', [tamper(s1, (c) => { c.event.add.key.jwk = k3.entry.jwk; })], 1);
+  await bad('a wrong seq is rejected', [await signEvent(Object.assign({}, e1, { seq: 2 }), [as(keyId, authPair)], as(k2.entry.id, k2.pair))], 1);
+  await bad('a wrong prev is rejected', [await signEvent(Object.assign({}, e1, { prev: kd.b64u(crypto.getRandomValues(new Uint8Array(32))) }), [as(keyId, authPair)], as(k2.entry.id, k2.pair))], 1);
+  await bad('an event of an unknown type is rejected', [await signEvent(Object.assign({}, e1, { type: 'rotate' }), [as(keyId, authPair)], as(k2.entry.id, k2.pair))], 1);
+  await bad('a second event that extends the inception again (a fork) is rejected', [s1, await signEvent(await kd.addAuthorityEvent(good.inception, k3.entry), [as(keyId, authPair)], as(k3.entry.id, k3.pair))], 2);
+  await bad('adding a key id the identity already has is rejected', [s1, await signEvent(await kd.addAuthorityEvent(e1, Object.assign({}, k3.entry, { id: k2.entry.id })), [as(keyId, authPair)], as(k2.entry.id, k3.pair))], 2);
+  await bad('a key with a private member is rejected', [await signEvent(await kd.addAuthorityEvent(good.inception, Object.assign({}, k2.entry, { jwk: await subtle.exportKey('jwk', k2.pair.privateKey) })), [as(keyId, authPair)], as(k2.entry.id, k2.pair))], 1);
+  await bad('an event list that is not a list is rejected', 'x');
+  // an event signed for one identity does not graft onto another: prev is that identity's inception hash
+  const other2 = JSON.parse(JSON.stringify(good)); other2.inception.state.services = [{ id: 'y', type: 'https', endpoint: 'https://other.example' }];
+  const Hother = await kd.eventHash(other2.inception);
+  other2.sigs = { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, Hother)), authority: [Object.assign({ keyId }, await makeAssertion(authPair.privateKey, Hother))] };
+  r = await kd.verifyLog({ inception: other2.inception, sigs: other2.sigs, events: [s1] });
+  ok('an event made for one identity is rejected on another, even with the same keys', r.ok === false && r.failedAt === 1, JSON.stringify(r));
+  ok('isPublicEcJwk accepts a public P-256 key and refuses private, non-EC and incomplete ones',
+    kd.isPublicEcJwk(k2.entry.jwk) && !kd.isPublicEcJwk(await subtle.exportKey('jwk', k2.pair.privateKey)) &&
+    !kd.isPublicEcJwk({ kty: 'OKP', crv: 'Ed25519', x: 'aa' }) && !kd.isPublicEcJwk({ kty: 'EC', crv: 'P-256', x: 'aa' }) && !kd.isPublicEcJwk(null));
+
+  // an identity that needs TWO authority keys: one key signing twice must not add a third, two different ones must
+  const kb = await mkKey('b.test');
+  const inc2 = JSON.parse(JSON.stringify(inception));
+  inc2.state.authority = { threshold: 2, keys: [inception.state.authority.keys[0], kb.entry] };
+  const H2 = await kd.eventHash(inc2);
+  const base2 = { inception: inc2, sigs: { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, H2)),
+    authority: [Object.assign({ keyId }, await makeAssertion(authPair.privateKey, H2)), Object.assign({ keyId: kb.entry.id }, await makeAssertion(kb.pair.privateKey, H2))] } };
+  ok('an inception with two required keys verifies', (await kd.verifyInception(base2)).ok === true);
+  const kc = await mkKey('c.test');
+  const ec = await kd.addAuthorityEvent(inc2, kc.entry);
+  const twice = await signEvent(ec, [as(keyId, authPair), as(keyId, authPair)], as(kc.entry.id, kc.pair));
+  let r2 = await kd.verifyLog({ inception: base2.inception, sigs: base2.sigs, events: [twice] });
+  ok('one key signing twice does not meet a threshold of two for an added key', r2.ok === false && r2.failedAt === 1, JSON.stringify(r2));
+  const both = await signEvent(ec, [as(keyId, authPair), as(kb.entry.id, kb.pair)], as(kc.entry.id, kc.pair));
+  r2 = await kd.verifyLog({ inception: base2.inception, sigs: base2.sigs, events: [both] });
+  ok('two different existing keys do', r2.ok === true && r2.state.authority.keys.length === 3 && r2.state.authority.threshold === 2, JSON.stringify(r2));
+
+  const withTwo = JSON.parse(JSON.stringify(good)); withTwo.inception.state.authority.threshold = 2;
+  ok('verifyInception is untouched by all of this (a threshold the lone key cannot meet still fails)', (await kd.verifyInception(withTwo)).ok === false);
+
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error(e); process.exit(1); });

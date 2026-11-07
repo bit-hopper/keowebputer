@@ -19,7 +19,7 @@
 // first session needs no third prompt (see "sign-in and the session").
 //
 // `next` is null: a first-run account is allowed to have no pre-committed next key and is flagged notRecoverable until a
-// second credential on another rpId is enrolled. Nothing here enrols one.
+// second credential on another rpId is enrolled. Nothing here enrolls one.
 // The label is the user's own name for the identity on this device. It is never part of the log and never leaves the
 // device; it is also written into the passkey's user name, so the authenticator's own picker shows it.
 // Not here (later steps of 9.4l): export/import, registering to a host.
@@ -68,13 +68,22 @@
     var r = credential.response;
     return { keyId: keyId, authenticatorData: kd.b64u(r.authenticatorData), clientDataJSON: kd.b64u(r.clientDataJSON), signature: kd.b64u(r.signature) };
   }
+  // The identity's log as it is kept here: the inception with its signatures, then the events after it (rec.events, absent on a
+  // record made before events existed). keo-did.js verifyLog checks it and folds it into the current keys and devices.
+  function logOf(rec) { return { inception: rec.inception, sigs: rec.sigs, events: rec.events || [] }; }
+  // The authority keys after every event, WITHOUT checking anything: for display only. Whatever decides a signature goes through
+  // verifyLog, which does check.
+  function keysOf(rec) {
+    return rec.inception.state.authority.keys.concat((rec.events || []).map(function (x) { return x.event.add.key; }));
+  }
   function summary(rec) {
-    var next = rec.inception.state.next;
+    var next = rec.inception.state.next, keys = keysOf(rec), rpIds = {};
+    keys.forEach(function (k) { rpIds[k.rpId] = true; });
     return {
       did: rec.did, label: rec.label, createdAt: rec.createdAt, rpId: rec.rpId,
-      authorityKeys: rec.inception.state.authority.keys.length,
+      authorityKeys: keys.length,
       // true until a second credential on another rpId is enrolled (a pre-committed `next` key is what makes recovery possible)
-      notRecoverable: next === null || next === undefined
+      notRecoverable: (next === null || next === undefined) && Object.keys(rpIds).length < 2
     };
   }
 
@@ -368,7 +377,10 @@
     var a = await ceremony(diag, 'unlocking with the passkey', function () { return navigator.credentials.get({ publicKey: {
       challenge: challenge, allowCredentials: [{ type: 'public-key', id: kd.unb64u(rec.credentialId) }], userVerification: 'required',
       extensions: { prf: { eval: { first: SALT } } } } }); });
-    var key = rec.inception.state.authority.keys.filter(function (k) { return k.id === rec.credentialId; })[0];
+    // the key is looked up in the log AFTER its events: a passkey added by a later event (one made on another origin) is not in the inception
+    var folded = await kd.verifyLog(logOf(rec));
+    if (!folded.ok) throw new Error('This identity\'s log does not verify: ' + folded.error);
+    var key = folded.state.authority.keys.filter(function (k) { return k.id === rec.credentialId; })[0];
     var sig = assertionSig(rec.credentialId, a);
     if (!key || !(await kd.verifyAssertion(sig, key.jwk, challenge))) throw new Error('The passkey assertion did not verify.');
     var prf = prfOf(a);
@@ -396,7 +408,7 @@
     if (!session) throw new Error('Sign in first.');
     var info = session.info, rec = await dbGet(info.did);
     if (!rec) throw new Error('This identity is no longer on this device.');
-    return { did: rec.did, inception: rec.inception, sigs: rec.sigs, cert: info.cert };
+    return { did: rec.did, inception: rec.inception, sigs: rec.sigs, events: rec.events || [], cert: info.cert };
   }
   // Signs `bytes` with the device key of the identity `did`, which must still be the one signed in. Never put it behind a
   // bridge op: it signs whatever it is given, so the world could make this device vouch for anything. Callers decide what is
@@ -410,6 +422,211 @@
     return kd.b64u(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, rec.deviceKey.privateKey, bytes));
   }
 
+  // ---- the same identity on another origin -------------------------------------------------------------------------------
+  // A passkey is bound to the origin it was made on. To use an identity on another origin (the desktop app, a new extension id) a
+  // SECOND passkey is made there and added to the identity's log by an event (keo-did.js add-authority), and the account secret is
+  // carried over so the new passkey can wrap it. The data sealed under the secret (saved worlds, the local library) then opens on
+  // both. Three messages, each plain JSON, so any channel can carry them (the connection two devices already make, a file):
+  //   1. NEW side  enrollRequest()           -> request   { key, device, ecdh } : public data only. The passkey is made here.
+  //   2. OLD side  enrollGrant(did, request) -> grant     : the event signed by an existing passkey, and the secret sealed to the
+  //                                                        request's ecdh key. ONE prompt: it signs the event and unlocks the secret.
+  //   3. NEW side  enrollComplete(grant)     -> done      : this side's passkey co-signs, the secret is wrapped under it and kept.
+  //      OLD side  enrollAccept(done)                     : takes the finished event into its own log (the logs are then equal).
+  // Nothing here is meant for the world, and none of it is behind a bridge op. The reason is the words below.
+  //
+  // WHAT STOPS A STRANGER GETTING THE SECRET. The request travels over a channel nobody has vouched for, so a request swapped on the
+  // way would make the old side seal the secret to the wrong key. Both ends therefore show eight words for the request
+  // (keo-fingerprint.js requestWords) and the person compares them; enrollGrant will not run without the words the person TYPED, and
+  // checks them against the request it was given. The same holds the other way: a forged grant (an attacker's own identity, adding
+  // this side's key) would give the new side an identity it does not want, so enrollComplete needs the words of the identity's DID as
+  // read from the old device. The words must come from a dialog the SHELL draws: a caller that could supply them could compute them.
+  // A pending request lives in this page's memory only. If the page is closed after the passkey was made, the passkey stays
+  // unused in the authenticator (a page cannot delete one) and the person starts again.
+  var pendingEnroll = null;
+  var ENROLL_OK_KINDS = ['platform', 'security-key'];
+
+  function enrollText(req) { return kd.canonicalJson(req); }
+  async function deviceIdOf(jwk) { return kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson(plainEcJwk(jwk))))); }
+  // Rebuilds a request from its known members only, so nothing else a sender added can enter the log; throws on anything malformed.
+  async function cleanRequest(req) {
+    var bad = new Error('That is not a valid request to add a device.');
+    if (!req || req.v !== 1 || req.kind !== 'enroll-request' || !req.key || !req.device || !req.ecdh) throw bad;
+    var k = req.key, d = req.device;
+    if (typeof k.id !== 'string' || !k.id || k.id.length > 1400 || !kd.isPublicEcJwk(k.jwk) || typeof k.rpId !== 'string' || !k.rpId ||
+        ENROLL_OK_KINDS.indexOf(k.kind) < 0 || typeof k.addedAt !== 'string') throw bad;
+    if (typeof d.id !== 'string' || !kd.isPublicEcJwk(d.jwk) || d.id !== await deviceIdOf(d.jwk) || typeof d.addedAt !== 'string') throw bad;
+    if (!kd.isPublicEcJwk(req.ecdh)) throw bad;
+    return { v: 1, kind: 'enroll-request',
+      key: { id: k.id, jwk: plainEcJwk(k.jwk), rpId: k.rpId, kind: k.kind, addedAt: k.addedAt },
+      device: { id: d.id, jwk: plainEcJwk(d.jwk), addedAt: d.addedAt },
+      ecdh: plainEcJwk(req.ecdh) };
+  }
+  // The key the secret is sealed under: ECDH between the two ephemeral keys, then HKDF salted with the event hash, so a grant is
+  // tied to this request AND this event and cannot be replayed under another.
+  async function sealingKey(privateKey, peerPublicJwk, eventHash) {
+    var pub = await crypto.subtle.importKey('jwk', plainEcJwk(peerPublicJwk), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+    var bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: pub }, privateKey, 256);
+    var base = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: eventHash, info: enc.encode('keo/enroll/v1') }, base,
+      { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+
+  // For the dialog's live hint: do these words (as typed) belong to this request? The same test enrollGrant makes at the click, over the
+  // request as it will be used (cleaned), so the hint and the gate cannot disagree. A request that is not valid is just "no".
+  async function enrollWordsMatch(request, said) {
+    try { return await window.keoFingerprint.requestMatches(enrollText(await cleanRequest(request)), said); } catch (e) { return false; }
+  }
+
+  // NEW side. Makes the passkey (this origin's), a device key, and a throwaway key to receive the secret with.
+  async function enrollRequest(opts) {
+    opts = opts || {};
+    var label = cleanLabel(opts.label), diag = [];
+    var cred = await ceremony(diag, 'creating the passkey', function () { return navigator.credentials.create({ publicKey: {
+      rp: { name: 'keo' }, user: { id: rnd(16), name: label, displayName: label }, challenge: rnd(32),
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+      extensions: { prf: { eval: { first: SALT } } } } }); });
+    if (cred.response.getPublicKeyAlgorithm() !== -7) throw new Error('This authenticator did not make an ES256 passkey.');
+    var rpId = await effectiveRpId(new Uint8Array(cred.response.getAuthenticatorData()));
+    var authJwk = plainEcJwk(await crypto.subtle.exportKey('jwk', await crypto.subtle.importKey('spki',
+      cred.response.getPublicKey(), { name: 'ECDSA', namedCurve: 'P-256' }, true, ['verify'])));
+    var attachment = cred.authenticatorAttachment || null, now = new Date().toISOString();
+    var deviceKey = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+    var deviceJwk = plainEcJwk(await crypto.subtle.exportKey('jwk', deviceKey.publicKey));
+    var ecdh = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+    var request = await cleanRequest({ v: 1, kind: 'enroll-request',
+      key: { id: kd.b64u(cred.rawId), jwk: authJwk, rpId: rpId, kind: attachment === 'cross-platform' ? 'security-key' : 'platform', addedAt: now },
+      device: { id: await deviceIdOf(deviceJwk), jwk: deviceJwk, addedAt: now },
+      ecdh: plainEcJwk(await crypto.subtle.exportKey('jwk', ecdh.publicKey)) });
+    pendingEnroll = { request: request, label: label, rawId: cred.rawId, prfAtCreate: prfOf(cred), deviceKey: deviceKey, ecdh: ecdh };
+    return { request: request, words: await window.keoFingerprint.requestWords(enrollText(request)), rpId: rpId, diag: diag };
+  }
+  function enrollCancel() { pendingEnroll = null; return Promise.resolve(true); }
+
+  // OLD side. `args`: { did, request, confirm } where `confirm` is the words the person typed from the NEW device's screen.
+  async function enrollGrant(args) {
+    if (!session || session.info.did !== String(args.did)) throw new Error('Sign in as this identity first.');
+    var rec = await dbGet(String(args.did));
+    if (!rec) throw new Error('No such identity on this device.');
+    var req = await cleanRequest(args.request);
+    if (!(await window.keoFingerprint.requestMatches(enrollText(req), args.confirm))) throw new Error('The words do not match the request, so nothing was approved.');
+    var folded = await kd.verifyLog(logOf(rec));
+    if (!folded.ok) throw new Error('This identity\'s log does not verify: ' + folded.error);
+    if (folded.state.authority.threshold !== 1) throw new Error('Adding a device to an identity that needs several passkeys is not supported yet.');
+    var key = folded.state.authority.keys.filter(function (k) { return k.id === rec.credentialId; })[0];
+    if (!key) throw new Error('This device\'s passkey is not in the identity\'s log.');
+    var events = rec.events || [];
+    var ev = await kd.addAuthorityEvent(events.length ? events[events.length - 1].event : rec.inception, req.key, req.device);
+    var H = await kd.eventHash(ev), diag = [];
+    // one prompt: the assertion signs the event, and the PRF output it carries unlocks the secret to hand over
+    var a = await ceremony(diag, 'approving the new device', function () { return navigator.credentials.get({ publicKey: {
+      challenge: H, allowCredentials: [{ type: 'public-key', id: kd.unb64u(rec.credentialId) }], userVerification: 'required',
+      extensions: { prf: { eval: { first: SALT } } } } }); });
+    var sig = assertionSig(rec.credentialId, a);
+    if (!(await kd.verifyAssertion(sig, key.jwk, H))) throw new Error('The passkey assertion did not verify.');
+    var prf = prfOf(a);
+    if (!prf) throw new Error('No PRF output, so the secret cannot be unlocked.');
+    var secret = await crypto.subtle.unwrapKey('raw', kd.unb64u(rec.wrappedAccountSecret), await prfKek(prf), 'AES-KW',
+      { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);          // extractable for the length of this function only
+    if (kd.b64u(await crypto.subtle.sign('HMAC', secret, enc.encode('keo/check'))) !== rec.check) throw new Error('The account secret did not unlock.');
+    var raw = new Uint8Array(await crypto.subtle.exportKey('raw', secret));
+    var eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+    var iv = rnd(12), sealed;
+    try { sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: H }, await sealingKey(eph.privateKey, req.ecdh, H), raw); }
+    finally { raw.fill(0); }
+    return { v: 1, kind: 'enroll-grant', inception: rec.inception, sigs: rec.sigs, events: events, event: ev, authority: sig,
+      ecdh: plainEcJwk(await crypto.subtle.exportKey('jwk', eph.publicKey)), iv: kd.b64u(iv), sealed: kd.b64u(new Uint8Array(sealed)), check: rec.check };
+  }
+
+  // NEW side, before asking the person anything: whose identity this grant is for, and the words to compare with the old device's.
+  async function enrollPreview(grant) {
+    var v = await kd.verifyLog({ inception: grant && grant.inception, sigs: grant && grant.sigs, events: grant && grant.events });
+    if (!v.ok) throw new Error('That is not a valid grant: ' + v.error);
+    return { did: v.did, words: await window.keoFingerprint.words(v.did) };
+  }
+
+  // NEW side. `args`: { grant, confirm } where `confirm` is the words of the DID as the person read them off the old device.
+  async function enrollComplete(args) {
+    var p = pendingEnroll, g = args && args.grant;
+    if (!p) throw new Error('No request is waiting. Start again from "add this device".');
+    if (!g || g.kind !== 'enroll-grant' || g.v !== 1 || !g.event || !g.authority || typeof g.sealed !== 'string' || typeof g.iv !== 'string' || !g.ecdh) throw new Error('That is not a valid grant.');
+    var base = await kd.verifyLog({ inception: g.inception, sigs: g.sigs, events: g.events });
+    if (!base.ok) throw new Error('That is not a valid grant: ' + base.error);
+    if (!(await window.keoFingerprint.matches(base.did, args.confirm))) throw new Error('The words do not match the identity, so nothing was added.');
+    if (await dbGet(base.did)) throw new Error('This identity is already on this device.');
+    var ev = g.event, add = ev.add || {};
+    if (kd.canonicalJson(add.key) !== kd.canonicalJson(p.request.key) || kd.canonicalJson(add.device) !== kd.canonicalJson(p.request.device)) {
+      throw new Error('The grant is not for the request this device made.');
+    }
+    var H = await kd.eventHash(ev), diag = [];
+    // this side's passkey signs the same event; the PRF output that comes with it is what will wrap the secret
+    var a = await ceremony(diag, 'adding this device', function () { return navigator.credentials.get({ publicKey: {
+      challenge: H, allowCredentials: [{ type: 'public-key', id: p.rawId }], userVerification: 'required',
+      extensions: { prf: { eval: { first: SALT } } } } }); });
+    var newSig = assertionSig(p.request.key.id, a);
+    var prf = prfOf(a) || p.prfAtCreate;
+    if (!prf) throw new Error('This authenticator did not return a PRF output, so it cannot protect the account secret.');
+    var events = (g.events || []).concat([{ event: ev, sigs: { authority: [g.authority], newKey: newSig } }]);
+    var log = { inception: g.inception, sigs: g.sigs, events: events };
+    var v = await kd.verifyLog(log, base.did);
+    if (!v.ok) throw new Error('The finished log does not verify: ' + v.error);
+    var raw;
+    try {
+      raw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(g.iv), additionalData: H },
+        await sealingKey(p.ecdh.privateKey, g.ecdh, H), kd.unb64u(g.sealed)));
+    } catch (e) { throw new Error('The secret in the grant could not be opened.'); }
+    var secret = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);
+    raw.fill(0);
+    var check = kd.b64u(await crypto.subtle.sign('HMAC', secret, enc.encode('keo/check')));
+    if (check !== g.check) throw new Error('The secret in the grant is not this identity\'s.');
+    var disc = await kd.ed25519FromSeed(await kd.discoverySeed(secret, 1));
+    if (disc.publicZ32 !== g.inception.state.discovery.key) throw new Error('The secret in the grant does not belong to this identity.');
+    var now = new Date().toISOString();
+    var wrapped = await crypto.subtle.wrapKey('raw', secret, await prfKek(prf), 'AES-KW');
+    var rec = { did: base.did, label: p.label, createdAt: now, rpId: p.request.key.rpId, credentialId: p.request.key.id,
+      inception: g.inception, sigs: g.sigs, events: events,
+      wrappedAccountSecret: kd.b64u(wrapped), check: check,
+      deviceKey: { privateKey: p.deviceKey.privateKey, publicKey: p.deviceKey.publicKey, publicJwk: p.request.device.jwk },
+      discoveryKey: disc.privateKey };
+    await dbPut(rec);
+    pendingEnroll = null;
+    if (!session) {
+      await startSession(rec, secret, await worldKeyFrom(secret), {
+        v: 1, via: 'log', did: rec.did, devicePubKeyJwk: p.request.device.jwk, authorityKeyId: rec.credentialId,
+        issuedAt: now, exp: new Date(Date.parse(now) + SESSION_MS).toISOString(), aud: location.origin, scope: SESSION_SCOPE.slice(),
+        assertion: { authenticatorData: newSig.authenticatorData, clientDataJSON: newSig.clientDataJSON, signature: newSig.signature }
+      });
+    }
+    var out = summary(rec);
+    out.session = sessionInfo();
+    out.done = { v: 1, kind: 'enroll-done', did: rec.did, events: events };
+    out.diag = diag;
+    return out;
+  }
+
+  // OLD side (or any device that holds the identity): takes a longer log that EXTENDS the one it has. A log that is not an extension
+  // (a fork: the same position holds another event) is refused, as is one that does not verify, whoever sent it.
+  async function enrollAccept(args) {
+    var rec = await dbGet(String(args && args.did));
+    if (!rec) throw new Error('No such identity on this device.');
+    var theirs = args.events;
+    if (!Array.isArray(theirs)) throw new Error('That is not a valid log.');
+    var v = await kd.verifyLog({ inception: rec.inception, sigs: rec.sigs, events: theirs }, rec.did);
+    if (!v.ok) throw new Error('That log does not verify: ' + v.error);
+    var mine = rec.events || [];
+    // The shorter of the two must be the start of the longer. If it is not, they disagree about what came first (a fork).
+    var common = Math.min(mine.length, theirs.length);
+    for (var i = 0; i < common; i++) {
+      if (kd.canonicalJson(mine[i].event) !== kd.canonicalJson(theirs[i].event)) throw new Error('That log disagrees with this device\'s own (a fork), so it was not taken.');
+    }
+    // The same log, or an older copy of it (a code that was kept from before): nothing new, nothing wrong.
+    if (theirs.length <= mine.length) return summary(rec);
+    rec.events = theirs;
+    await dbPut(rec);
+    return summary(rec);
+  }
+
   window.keoIdentity = { create: create, list: list, rename: rename, remove: remove, signIn: signIn, current: current,
-    signOut: signOut, onEnd: onEnd, resume: resume, sessionWorldKey: sessionWorldKey, deviceProof: deviceProof, signWithDevice: signWithDevice };
+    signOut: signOut, onEnd: onEnd, resume: resume, sessionWorldKey: sessionWorldKey, deviceProof: deviceProof, signWithDevice: signWithDevice,
+    enrollRequest: enrollRequest, enrollWordsMatch: enrollWordsMatch, enrollCancel: enrollCancel, enrollGrant: enrollGrant, enrollPreview: enrollPreview, enrollComplete: enrollComplete, enrollAccept: enrollAccept };
 })();

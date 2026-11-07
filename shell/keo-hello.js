@@ -167,18 +167,23 @@
   function plainJwk(j) { return { kty: j.kty, crv: j.crv, x: j.x, y: j.y }; }
   function signedBytes(hello) { return enc.encode(kd.canonicalJson(hello)); }
 
-  // fps: [the offerer's fingerprint, the answerer's fingerprint] as the codes carry them. `proof` is { did, inception, sigs, cert }
-  // as keo-identity.js deviceProof returns it; the caller signs signedBytes(result) with signWithDevice.
+  // fps: [the offerer's fingerprint, the answerer's fingerprint] as the codes carry them. `proof` is { did, inception, sigs, events?, cert }
+  // as keo-identity.js deviceProof returns it; the caller signs signedBytes(result) with signWithDevice. `events` is the log after the
+  // inception (keo-did.js verifyLog): an identity whose passkey on this origin was added later cannot be checked without it. It is left
+  // out when empty, so a proof from an identity that never added a key has the shape it always had.
   function proofBuild(role, fps, proof, opts) {
     opts = opts || {};
     var h = { v: 1, purpose: PURPOSE, role: role, fps: fps.slice(), time: new Date(opts.now || Date.now()).toISOString(),
       did: proof.did, inception: proof.inception, inceptionSigs: proof.sigs, cert: proof.cert };
+    if (proof.events && proof.events.length) h.events = proof.events;
     if (opts.name) h.name = String(opts.name).replace(/\s+/g, ' ').trim().slice(0, MAX_NAME);
     return h;
   }
 
   // null when the certificate is good, else a sentence saying what is wrong.
-  async function certError(cert, inception, did, now, audience) {
+  // `state` is the identity's keys and devices after the whole log (keo-did.js verifyLog); `inception` is the inception alone, which a
+  // certificate of kind 'inception' is checked against.
+  async function certError(cert, state, inception, did, now, audience) {
     if (!cert || typeof cert !== 'object' || cert.v !== 1 || cert.did !== did) return 'the delegation is not for this identity';
     var exp = Date.parse(cert.exp), iat = Date.parse(cert.issuedAt);
     if (!(exp > now)) return 'the delegation has expired';
@@ -187,12 +192,15 @@
     if (!Array.isArray(cert.scope) || cert.scope.indexOf('sign') < 0) return 'the delegation does not allow signing';
     var dj = cert.devicePubKeyJwk;
     if (!dj || dj.kty !== 'EC' || dj.crv !== 'P-256' || typeof dj.x !== 'string' || typeof dj.y !== 'string' || dj.d !== undefined) return 'the device key is malformed';
-    var key = inception.state.authority.keys.filter(function (k) { return k.id === cert.authorityKeyId; })[0];
+    var key = state.authority.keys.filter(function (k) { return k.id === cert.authorityKeyId; })[0];
     if (!key) return 'the delegation names an authority key the identity does not have';
-    if (cert.via === 'inception') {
+    if (cert.via === 'inception' || cert.via === 'log') {
+      // 'inception': the device is in the inception, which the authority key signed. 'log': it was added by a later event, which an
+      // existing key and the new key both signed. Either way no further signature is needed to vouch for it.
       var want = kd.canonicalJson(plainJwk(dj));
-      var listed = (inception.state.devices || []).some(function (d) { return kd.canonicalJson(plainJwk(d.jwk)) === want; });
-      return listed ? null : 'the device is not listed in the identity\'s inception';
+      var from = cert.via === 'inception' ? inception.state.devices : state.devices;
+      var listed = (from || []).some(function (d) { return kd.canonicalJson(plainJwk(d.jwk)) === want; });
+      return listed ? null : 'the device is not listed in the identity\'s ' + (cert.via === 'inception' ? 'inception' : 'log');
     }
     if (cert.via !== undefined) return 'the delegation is of an unknown kind';
     // a sign-in certificate: the passkey signed H(cert as it was before the assertion was added)
@@ -217,10 +225,10 @@
       if (!(t > now - MAX_AGE_MS)) return fail('The other side\'s proof is too old.');
       if (t > now + SKEW_MS) return fail('The other side\'s proof is dated in the future (check the clock).');
       if (h.name !== undefined && (typeof h.name !== 'string' || h.name.length > MAX_NAME)) return fail('The other side sent a bad name.');
-      var v = await kd.verifyInception({ inception: h.inception, sigs: h.inceptionSigs });
+      var v = await kd.verifyLog({ inception: h.inception, sigs: h.inceptionSigs, events: h.events });
       if (!v.ok) return fail('The identity does not verify: ' + v.error);
       if (v.did !== h.did) return fail('The identity does not match its proof.');
-      var ce = await certError(h.cert, h.inception, h.did, now, opts.audience);
+      var ce = await certError(h.cert, v.state, h.inception, h.did, now, opts.audience);
       if (ce) return fail('The other side\'s device is not vouched for: ' + ce + '.');
       var devKey = await subtle.importKey('jwk', plainJwk(h.cert.devicePubKeyJwk), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
       if (!(await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, devKey, kd.unb64u(msg.sig), signedBytes(h)))) return fail('The other side\'s signature does not match.');
