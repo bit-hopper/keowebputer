@@ -4,7 +4,7 @@ const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
 const ONLY = process.argv.slice(5);
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
-const ID = 'cgjphijackijgcjkfdfieihkbfooigjp', sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn', sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const FEATURES = {
   ace: `$world.addCodeEditor({ title: 'probe', content: 'var x = 1;', textMode: 'javascript', extent: pt(500, 300) }); return 'opened';`,
   aceModes: `const ed = $world.addCodeEditor({ title: 'p', content: 'x = 1', textMode: 'javascript', extent: pt(400, 200) }); await new Promise((r) => setTimeout(r, 2500)); const out = []; for (const m of ['javascript','python','haskell','c_cpp','r','scheme','yaml','log','markdown','html','css','json','sh','sql','xml','diff']) { ed.setTextMode(m); await new Promise((r) => setTimeout(r, 400)); out.push(m + ':' + ed.getTextMode()); } return out.join(' ');`,

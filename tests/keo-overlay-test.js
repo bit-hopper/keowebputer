@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const { REPO, EXT, WORK } = require('./args.js')();
 const { chromium } = require(path.join(path.resolve(REPO), 'node_modules', 'playwright-core'));
-const ID = 'cgjphijackijgcjkfdfieihkbfooigjp', sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn', sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 function check(name, ok, detail) { results.push(ok); console.log((ok ? 'PASS ' : 'FAIL ') + name + (!ok && detail !== undefined ? '  -> ' + JSON.stringify(detail).slice(0, 700) : '')); }
 const MODULE = 'core/lively/identity/LocalIdentity.js';      // loaded on demand, not part of the boot bundle

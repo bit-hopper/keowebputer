@@ -10,7 +10,7 @@ const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
 const PARTS = process.argv.length > 5 ? process.argv.slice(5) : ['idb', 'persist', 'webauthn', 'vault'];
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
-const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
+const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- the operation script: runs in either context, returns a transcript (array of strings) ----

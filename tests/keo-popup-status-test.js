@@ -21,7 +21,7 @@ const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const { befriend } = require('./friends-helper.js');
-const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
+const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0, passed = 0;
 function check(name, ok, detail) { if (ok) passed++; else failed++; console.log((ok ? 'PASS ' : 'FAIL ') + name + (detail !== undefined && !ok ? '  -> ' + JSON.stringify(detail).slice(0, 900) : '')); }

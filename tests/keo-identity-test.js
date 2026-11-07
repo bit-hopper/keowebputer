@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
-const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
+const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = {};
 function check(name, ok, detail) { results[name] = { ok: !!ok, detail }; console.log((ok ? 'PASS ' : 'FAIL ') + name + (detail && !ok ? '  -> ' + JSON.stringify(detail).slice(0, 700) : '')); }

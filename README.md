@@ -44,7 +44,7 @@ Not built: Gallery (its pictures need the file store above to be wired into it),
 
 ### The pinned key
 
-`extension/extension-key.json` is the **public** key written into the extension manifest. It fixes the extension id, and the extension id is the origin and the passkey rpId on which every identity is made. Changing it orphans every passkey created under the old id, so do not regenerate it.
+`extension/extension-key.json` is the **public** key written into the extension manifest. It fixes the extension id, and the extension id is the origin and the passkey rpId on which every identity is made. A passkey works only on the origin it was made on, so a new key is a new origin: the passkeys made under the old id do not work there. An identity is not lost by that, because it can be linked to the new origin from the Identity menu ("Link a new webputer ...", then "Link this webputer to an identity ..." on the new side), which adds a second passkey to it. Even so, do not regenerate the key without a reason.
 
 ## Building
 

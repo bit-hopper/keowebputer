@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
-const ID = 'cgjphijackijgcjkfdfieihkbfooigjp';
+const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn';
 
 const FUNC = () => {
   const m = new lively.morphic.Box(lively.rect(200, 200, 220, 120));
