@@ -58,6 +58,8 @@ The build writes `keo-build.json` into the package with the kernel commit the sn
 
 To move the snapshot to a newer kernel commit, run `node extension/refresh-kernel.js --kernel <path to a clean kernel checkout>` (a checkout made with `git clone -c core.autocrlf=false`, with the kernel's own `npm install` done). It rewrites `kernel/` completely, including the boot bundle, which only the kernel's own code can generate; so a change to the runtime's code is made in the kernel and arrives here by a refresh. Files under `kernel/` are stored byte for byte (`.gitattributes`).
 
+While the runtime is being changed, `node extension/dev-cycle.js --kernel <kernel checkout> --clean <clean clone> --out <package folder> --paths <kernel file>...` does the whole round in about fifteen seconds: it commits only the kernel files named (every other change in the kernel checkout is left alone), moves the clean clone to that commit, refreshes `kernel/` and builds a package. The commit is a local one that later runs amend, but only while it has not been pushed; it is never pushed by this script. When the change is finished, give that commit its real message (`git commit --amend -m ...` in the kernel) and run the script once more without `--paths`, so the snapshot names the final commit. The clean clone is made on first use, with the kernel's installed packages linked in, and is only ever reset to the kernel's commit, so keep nothing in it.
+
 The package contains the kernel's code, so it carries the kernel's licence notice (`LICENSE-lively-kernel`) and `THIRD-PARTY-NOTICES.md` (kept in `kernel/`, by hand). The libraries the kernel vendors have their own licences; they have not been audited, and that file says which have a notice and which do not.
 
 ## Releases
@@ -82,6 +84,7 @@ npm run test:hello                                   # no browser: the short con
 npm run test:callsdp                                 # no browser: what a call description from the peer must look like
 npm run test:fingerprint                             # no browser: the eight words that stand for a DID, and for a request to add a device
 npm run test:enrollcode                               # no browser: the text carried between two devices when an identity is added to another
+npm run test:devcycle                                  # no browser: the kernel round (extension/dev-cycle.js) against throwaway repositories: only the named files are committed, a pushed or real commit is never amended
 npm run test:worldtext                               # no browser: the text that is searchable in a saved world, and the search
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator
 node tests/keo-session-test.js  . dist <work dir>    # the session, encrypted saved worlds, menu bar

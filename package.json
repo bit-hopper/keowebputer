@@ -12,8 +12,10 @@
     "test:callsdp": "node tests/keo-callsdp-test.js",
     "test:fingerprint": "node tests/keo-fingerprint-test.js",
     "test:enrollcode": "node tests/keo-enroll-code-test.js",
+    "test:devcycle": "node tests/keo-dev-cycle-test.js",
     "test:worldtext": "node tests/keo-worldtext-test.js",
-    "refresh-kernel": "node extension/refresh-kernel.js"
+    "refresh-kernel": "node extension/refresh-kernel.js",
+    "dev-cycle": "node extension/dev-cycle.js"
   },
   "devDependencies": {
     "playwright-core": "1.63.0"
