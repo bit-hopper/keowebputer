@@ -108,7 +108,8 @@
     if (q && q.mode === 'new' && q.step !== 'done') ident.enrollCancel();      // a request that was never answered is dropped
     hide();
     // A webputer with nobody signed in is signed in as the identity just added: the world on screen is still the sign-in screen.
-    if (reload) setTimeout(function () { location.reload(); }, 0);
+    // The world's own exit warning is lifted first (shell.js keoPrepareToLeave), or the browser asks "Leave site?" about a reload the person did not ask for.
+    if (reload) { var again = function () { location.reload(); }; if (window.keoPrepareToLeave) window.keoPrepareToLeave().then(again, again); else again(); }
   }
 
   // What each step shows. One place, so a step cannot leave a piece of the last one on screen.
@@ -137,11 +138,15 @@
       u.gWords.labelEl.textContent = 'The words of this identity: the new webputer asks for these'; u.gIn.labelEl.textContent = 'Code from the new webputer';
     } else if (!isNew && s === 'confirm') {
       u.text.textContent = 'A new webputer asks to use this identity, with a passkey on ' + q.where + '. Only approve it if it is a webputer of yours that you are holding. Type the eight words the NEW webputer shows. Approving asks for your passkey, then gives you a reply to take to it.';
-      show.head = show.typed = true; u.yes.textContent = 'Approve this webputer'; u.gTyped.labelEl.textContent = 'The words the new webputer shows';
+      // The identity's words stay on screen from here to the end: the new webputer asks for them LAST, after the reply is pasted there.
+      // They are not the words typed here (those are the request's, which this dialog never shows), so showing them gives nothing away.
+      show.head = show.typed = show.words = true; u.yes.textContent = 'Approve this webputer'; u.gTyped.labelEl.textContent = 'The words the new webputer shows';
+      u.gWords.labelEl.textContent = 'The words of this identity: the new webputer asks for these later';
     } else if (!isNew && s === 'granted') {
-      u.text.textContent = 'Give the reply below to the new webputer (copy it, or save it as a file). When the new webputer has finished it shows one more code: paste it below so this webputer keeps the same list of passkeys. You can do that later.';
-      show.head = show.out = show.inp = true; show.yes = false; u.no.textContent = 'Close';
+      u.text.textContent = 'Give the reply below to the new webputer (copy it, or save it as a file). It will ask for the words of this identity, shown below: type them there. When it has finished it shows one more code: paste it below so this webputer keeps the same list of passkeys. You can do that later.';
+      show.head = show.out = show.inp = show.words = true; show.yes = false; u.no.textContent = 'Close';
       u.gOut.labelEl.textContent = 'Reply to give to the new webputer'; u.gIn.labelEl.textContent = 'Finished code from the new webputer (optional)';
+      u.gWords.labelEl.textContent = 'The words of this identity: the new webputer asks for these';
     }
     u.head.hidden = !show.head; u.gName.hidden = !show.name; u.gWords.hidden = !show.words; u.gOut.hidden = !show.out; u.gIn.hidden = !show.inp;
     u.gTyped.hidden = !show.typed; u.yes.hidden = !show.yes;

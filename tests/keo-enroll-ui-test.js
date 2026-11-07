@@ -56,6 +56,8 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
     for (const [P, id] of [[A, ID_A], [B, ID_B]]) { await P.page.goto(`chrome-extension://${id}/start.html#guest`); P.frame = await waitForWorld(P.page); }
 
     // the identity on A (set up through the shell; the dialog is what is under test)
+    const dialogsB = [];
+    B.page.on('dialog', (x) => { dialogsB.push(x.type()); x.accept().catch(() => {}); });
     const made = await shell(A.page, () => window.keoIdentity.create({ label: 'Alice laptop' }));
     const DID = made.r && made.r.did;
     check('setup: A has a signed-in identity', made.ok && /^did:keo:/.test(DID), made);
@@ -125,6 +127,7 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
     d = await poll(async () => { const x = await dlg(A); return x.hasTyped ? x : null; }, 5000);
     check('A: the request code moves it on to asking for the words, and says where the new passkey lives', !!d && d.yesDisabled && d.text.includes('chrome-extension://' + ID_B) && d.yesText === 'Approve this webputer', d);
     check('A: the words of the new device are still not on screen anywhere', !!d && !d.whole.includes(reqWords) && d.out === null, d);
+    check('A: the words of the identity are still on screen while it waits for the typed words (the new device asks for them last)', !!d && d.words === idWords.r.join(' '), d);
     await A.page.fill(TYPED, 'abandon ability able about above absent absorb abstract');
     d = await poll(async () => { const x = await dlg(A); return x.hintClass.includes('bad') ? x : null; }, 3000);
     check('A: wrong words keep Approve off, with a warning', !!d && d.yesDisabled && /Those are not the words/.test(d.hint), d);
@@ -141,6 +144,7 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
     d = await poll(async () => { const x = await dlg(A); return x.out ? x : null; }, 15000);
     const grantCode = d && d.out;
     check('A: a real click on Approve (one passkey prompt) gives a reply code', !!grantCode && /^keo-enroll-grant\./.test(grantCode) && d.yesHidden && d.hasIn && d.noText === 'Close', d);
+    check('A: after approving, the words of the identity are still on screen for the new device to ask for, and the request words are not', !!d && d.words === idWords.r.join(' ') && !d.whole.includes(reqWords), d);
     check('A: the reply is only sealed data: the account secret is not in it as text', !!grantCode && !Buffer.from(grantCode.replace(/^keo-enroll-grant\./, ''), 'base64url').toString().includes('"wrappedAccountSecret"'));
 
     // ---- back on B: the reply
@@ -194,13 +198,18 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
     check('A: the world asking again right after is refused, so it cannot keep the question up', !soon.ok && /closed a moment ago/.test(soon.e), soon);
     // B closes: the page reloads (a marker set on the page is gone afterwards). A start.html#guest page never resumes a session by
     // design (keo-gate.js), so the check that the session survived is made on the address a person would use, in the same tab.
+    const nDialogs = dialogsB.length;
     await B.page.evaluate(() => { window.__beforeClose = 1; });
     await B.page.click(NO);
     const reloaded = await poll(() => B.page.evaluate(() => window.__beforeClose === undefined), 15000);
+    check('B: closing it raised no browser "Leave site?" warning', dialogsB.length === nDialogs, dialogsB.slice(nDialogs));
     check('B: closing the dialog after the webputer was linked reloads the page', !!reloaded);
     await B.page.goto(`chrome-extension://${ID_B}/start.html`);
     const after = await poll(() => shell(B.page, async () => { const c = await window.keoIdentity.current(); return c && c.did; }).then((x) => x.r), 15000);
     check('B: and on a normal start it is still signed in as the identity', after === DID, after);
+    // ... and a person signed in with nothing saved lands on their own home page (homestar), as after any sign-in.
+    const landed = await poll(async () => { const fr = await waitForWorld(B.page); return fr.evaluate(() => { const s = window.keo && keo.init && keo.init.startup; return s && s.kind ? { kind: s.kind, label: s.session && s.session.label } : null; }); }, 20000);
+    check('B: a normal start lands on the home page of the identity, signed in under the name given while linking', !!landed && landed.kind === 'homestar' && landed.label === 'Alice desktop', landed);
     await B.page.goto(`chrome-extension://${ID_B}/start.html#guest`);
 
     // ---- a request that is never answered is dropped with the dialog

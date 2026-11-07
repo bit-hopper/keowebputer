@@ -174,8 +174,24 @@
     // device wants an identity) or 'old' (the identity signed in here is to be added to another device). The words, the codes and the
     // passkey prompt are all in this page's dialog; there is no op that fills it in, approves, or reads what is in it.
     'enroll.open': function (a) { return window.keoEnroll.start({ mode: a.mode }); },
+    // The world's answer to 'leaving' (see keoPrepareToLeave below): its exit warning is off. Harmless when nothing waits.
+    'exit.ready': function () { var w = leaveWaiting; if (w) w(); return !!w; },
     // The vault asked to be shown (its "Unlock with passkey" button needs a click inside its own frame), or hidden again.
     'vault.frame': function (a) { vault.classList.toggle('shown', !!a.shown); return true; }
+  };
+
+  // For code in THIS page that reloads it on the person's own click (the link dialog): asks the world to lift its exit warning and
+  // resolves when it says it has (op 'exit.ready'), so the reload does not raise the browser's "Leave site?" prompt. The timer is only
+  // for a world that is not up, which has no warning to lift. Not for anything the world can start: a reload it wants goes through an op.
+  var leaveWaiting = null;
+  window.keoPrepareToLeave = function () {
+    return new Promise(function (resolve) {
+      var done = false;
+      function fin() { if (done) return; done = true; if (leaveWaiting === fin) leaveWaiting = null; resolve(); }
+      leaveWaiting = fin;
+      toWorld({ keo: 1, event: 'leaving' });
+      setTimeout(fin, 1500);
+    });
   };
 
   // Events from the connections go to the world as {keo:1, event:'p2p', data}. They are not queued: a world that is not up yet (or

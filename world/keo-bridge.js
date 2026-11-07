@@ -95,6 +95,15 @@
     if (ev.source !== parentWin || ev.origin !== SHELL_ORIGIN) return;
     var m = ev.data;
     if (m && m.keo === 1 && typeof m.event === 'string') {
+      // The SHELL is about to reload the page on its own (the person closed the dialog that linked this webputer to an identity), so the
+      // exit warning is lifted as for the calls above, and the shell is told it is, because it waits for that before reloading: the
+      // reload is the person's click in the shell page, not a call from here, so nothing else would lift it. The shell asks for nothing
+      // else with this and the world gains nothing from sending it: it only lowers the world's own warning.
+      if (m.event === 'leaving') {
+        liftExitWarning(); setTimeout(restoreExitWarning, 2000);
+        call('exit.ready', {}, 3000).then(null, function () {});
+        return;
+      }
       (listeners[m.event] || []).slice().forEach(function (f) { try { f(m.data); } catch (e) { console.warn('keo bridge: a ' + m.event + ' listener threw: ' + e.message); } });
       return;
     }
