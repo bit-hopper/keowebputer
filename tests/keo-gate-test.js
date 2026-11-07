@@ -94,6 +94,9 @@ const delta = (a, b) => JSON.stringify({ create: b.create - a.create, get: b.get
     await openShell(page, '');
     const f0 = await waitForWorld(page, 'gate');
     check('start: the shell page draws no sign-in screen of its own', await page.evaluate(() => !document.getElementById('gate') && !document.getElementById('idlist') && !document.getElementById('create')));
+    // the default scrollbar is a soft pink in both directions: the world's root carries it (every box that scrolls inherits it), and so do the shell's dark dialog boxes (they are made when opened, so the rule is read, not an element)
+    check('scrollbars: the world page and the shell dialog boxes are pink', await f0.evaluate(() => getComputedStyle(document.documentElement).scrollbarColor) === 'rgb(244, 167, 198) rgba(240, 26, 105, 0.08)'
+      && await page.evaluate(() => { const r = Array.from(document.styleSheets).flatMap((x) => Array.from(x.cssRules)).find((x) => x.selectorText === '#keo-enroll .box, #keo-transfer .box'); return !!r && r.style.scrollbarColor === 'rgb(255, 156, 193) rgba(255, 156, 193, 0.14)'; }));
     if (gateWorld) {
       // (Whether the landing page itself opens the dialog is its own business and not asserted.)
       console.log('INFO landing page started; the dialog is ' + ((await dialogState(f0).catch(() => null)) ? 'already' : 'not') + ' open on it');

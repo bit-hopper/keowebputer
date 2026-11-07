@@ -132,6 +132,11 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
   // the page (and every script it loads) is decoded as the legacy single-byte charset (windows-1252) and non-ASCII source text turns to mojibake (the
   // submenu arrow "▶" showed as "â–¶").
   html = html.replace('<head>', '<head><meta charset="utf-8">');
+  // The default scrollbar of the whole world (both scroll directions, the page and every box that scrolls) is a soft pink. It is the
+  // inherited scrollbar-color on the root element, as an attribute so that stripping style blocks cannot remove it; a box that sets its own
+  // colour keeps it (the apps that draw their own themes do). Thumb: the soft pink the kernel's own scrolling boxes use (#f4a7c6); track: the accent pink, very faint.
+  if (!html.includes('<html>')) throw new Error('<html> not found in blank.html');
+  html = html.replace('<html>', '<html style="scrollbar-color: #f4a7c6 rgba(240, 26, 105, 0.08)">');
   const boot = '<script type="text/javascript" src="core/lively/bootstrap.js"></script>';
   if (!html.includes(boot)) throw new Error('bootstrap script tag not found in blank.html');
   // the bootstrap is NOT a static tag any more: keo-boot.js adds it once the shell has answered the bridge handshake
