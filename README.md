@@ -105,6 +105,7 @@ node tests/keo-leave-test.js . dist <work dir>           # signing in and out ra
 node tests/keo-popup-test.js    . dist <work dir>    # the toolbar popup page, by real clicks (opened in a tab: not the browser's own popup surface)
 node tests/keo-popup-status-test.js . dist <work dir> # two browsers: what the popup shows of the session and of each friend's connection, and Reconnect by real clicks
 node tests/keo-identity-real.js . dist <work dir>    # a REAL authenticator: you approve four OS prompts
+node tests/keo-enroll-real.js   . dist <work dir> [<second package>]   # a REAL authenticator, TWO browsers: link a second origin to an identity; you approve seven OS prompts
 ```
 
 **Not yet verified** (the tests above cannot show it): calls and messages have been run only between two browser profiles on one machine, with the browser's fake camera and microphone. A real camera, microphone and permission prompt, two computers on a network, whether audio is audible, other browsers, and a real authenticator have not been tried. The friend dialog has been driven by the tests (real clicks and typing between two browsers) but no person has used it to compare words with another person. In the world, "Connect a device" offers "Add as friend…" and only then files and messages, Messages and its call buttons say when a device is not a friend, and "Friends ..." in the identity menu lists who was added and removes them (the shell asks first).
