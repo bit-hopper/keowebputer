@@ -1,25 +1,25 @@
-// Adding an identity to a second device, SHELL side: the dialog in which a person does it, on both devices. Runs in the extension's own
+// Adding an identity to a second webputer, SHELL side: the dialog in which a person does it, on both webputers. Runs in the extension's own
 // page; the sandboxed world is assumed hostile. What happens underneath is keo-identity.js (enrollRequest / enrollGrant / enrollComplete /
-// enrollAccept); the text carried between the devices is keo-enroll-code.js. This file is only the person's part of it.
+// enrollAccept); the text carried between the webputers is keo-enroll-code.js. This file is only the person's part of it.
 //
-//   NEW device ("mode new"): makes a request code and shows eight words for it. The person gives the code to the device that has the
-//     identity (pasted, sent, or saved as a file), pastes the reply code back, types the eight words of the IDENTITY that the old device
+//   NEW webputer ("mode new"): makes a request code and shows eight words for it. The person gives the code to the webputer that has the
+//     identity (pasted, sent, or saved as a file), pastes the reply code back, types the eight words of the IDENTITY that the old webputer
 //     shows, and clicks Add. Then it shows a finished code to take back.
-//   OLD device ("mode old", needs someone signed in): shows the eight words of the signed-in identity, takes the request code, and wants
-//     the eight words the NEW device shows for it. Only on a match does Approve work, and approving is where the passkey prompt appears.
+//   OLD webputer ("mode old", needs someone signed in): shows the eight words of the signed-in identity, takes the request code, and wants
+//     the eight words the NEW webputer shows for it. Only on a match does Approve work, and approving is where the passkey prompt appears.
 //     It then shows the reply code, and takes the finished code when it comes back.
 //
 // The rules (the world is assumed hostile):
 //  - The two sets of words are the whole protection (see keo-identity.js: a request swapped on the way, or a forged reply, is caught only
-//    by a person comparing them). So each dialog shows the words the OTHER device has to be given and never the ones it has to be
-//    TYPED from: the old device shows its identity's words but never the request's, the new device shows the request's but never the
+//    by a person comparing them). So each dialog shows the words the OTHER webputer has to be given and never the ones it has to be
+//    TYPED from: the old webputer shows its identity's words but never the request's, the new webputer shows the request's but never the
 //    identity's. A person who only copies from the screen therefore has nothing to copy.
 //  - The words are typed into this page's own input and checked here against the code that was pasted, never against anything the world
 //    sends. The world can only ASK for the dialog (enroll.open, with a mode): there is no op that fills it in, answers it, or reads it.
 //  - Only a real click counts (isTrusted). Asked again while one is up, or within a few seconds of one being closed, the world is refused,
 //    so it cannot keep the question in front of the person.
-//  - What is shown about a request (where the new passkey lives) is text the other device chose, shown as text and nothing more.
-// Not for: anything that has to work without a person present. There is no way to approve a device from code.
+//  - What is shown about a request (where the new passkey lives) is text the other webputer chose, shown as text and nothing more.
+// Not for: anything that has to work without a person present. There is no way to approve a webputer from code.
 (function () {
   'use strict';
   var ident = window.keoIdentity, fp = window.keoFingerprint, codec = window.keoEnrollCode, icons = window.keoIdenticon;
@@ -43,24 +43,24 @@
   function build() {
     if (ui) return ui;
     var root = el('div'); root.id = 'keo-enroll'; root.hidden = true;
-    var box = el('div', 'box'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', 'Add a device to an identity');
+    var box = el('div', 'box'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', 'Link a webputer to an identity');
     var title = el('div', 'title'), text = el('div', 'text');
     var head = el('div', 'head'), img = el('img', 'who-img'), who = el('div', 'who'), wname = el('div', 'who-name'), wdid = el('div', 'who-did');
     img.width = img.height = 40; img.alt = '';
     who.appendChild(wname); who.appendChild(wdid); head.appendChild(img); head.appendChild(who);
 
-    var nameIn = el('input', 'name'); nameIn.type = 'text'; nameIn.maxLength = 64; nameIn.autocomplete = 'off'; nameIn.setAttribute('aria-label', 'Name for this identity on this device');
-    var gName = group('A name for this identity on this device', nameIn);
+    var nameIn = el('input', 'name'); nameIn.type = 'text'; nameIn.maxLength = 64; nameIn.autocomplete = 'off'; nameIn.setAttribute('aria-label', 'Name for this identity on this webputer');
+    var gName = group('A name for this identity on this webputer', nameIn);
 
     var words = el('div', 'words'), gWords = group('Words', words);
 
-    var out = el('textarea', 'code'); out.readOnly = true; out.rows = 4; out.setAttribute('aria-label', 'Code to give to the other device');
+    var out = el('textarea', 'code'); out.readOnly = true; out.rows = 4; out.setAttribute('aria-label', 'Code to give to the other webputer');
     var copy = el('button', 'tool', 'Copy'), save = el('button', 'tool', 'Save as file'); copy.type = save.type = 'button';
     copy.setAttribute('data-act', 'copy'); save.setAttribute('data-act', 'save');
     var outTools = el('div', 'tools'); outTools.appendChild(copy); outTools.appendChild(save);
     var gOut = group('Code', out); gOut.appendChild(outTools);
 
-    var inp = el('textarea', 'code'); inp.rows = 4; inp.spellcheck = false; inp.setAttribute('aria-label', 'Code from the other device');
+    var inp = el('textarea', 'code'); inp.rows = 4; inp.spellcheck = false; inp.setAttribute('aria-label', 'Code from the other webputer');
     var file = el('input', 'file'); file.type = 'file'; file.hidden = true; file.accept = '.txt,text/plain';
     var openF = el('button', 'tool', 'Open a file'); openF.type = 'button'; openF.setAttribute('data-act', 'open');
     var inTools = el('div', 'tools'); inTools.appendChild(openF); inTools.appendChild(file);
@@ -107,7 +107,7 @@
     var q = open, reload = q && q.mode === 'new' && q.step === 'done';
     if (q && q.mode === 'new' && q.step !== 'done') ident.enrollCancel();      // a request that was never answered is dropped
     hide();
-    // A device with nobody signed in is signed in as the identity just added: the world on screen is still the sign-in screen.
+    // A webputer with nobody signed in is signed in as the identity just added: the world on screen is still the sign-in screen.
     if (reload) setTimeout(function () { location.reload(); }, 0);
   }
 
@@ -116,32 +116,32 @@
     var q = open, u = ui, s = q.step, isNew = q.mode === 'new';
     var show = { head: false, name: false, words: false, out: false, inp: false, typed: false, yes: true };
     u.yes.disabled = true; u.yes.className = 'yes'; u.no.textContent = 'Cancel';
-    u.title.textContent = isNew ? 'Add this device to an identity' : 'Add another device to this identity';
+    u.title.textContent = isNew ? 'Link this webputer to an identity' : 'Link a new webputer to this identity';
     if (isNew && s === 'start') {
-      u.text.textContent = 'Use this on a device that does not have your identity yet. It makes a new passkey for this device, then a code to give to the device that has the identity. Nothing leaves this device until you give it the code.';
+      u.text.textContent = 'Use this on a webputer that does not have your identity yet. It makes a new passkey for this webputer, then a code to give to the webputer that has the identity. Nothing leaves this webputer until you give it the code.';
       show.name = true; u.yes.textContent = 'Make a code'; u.yes.disabled = false;
     } else if (isNew && s === 'wait') {
-      u.text.textContent = 'On the device that has your identity, choose "Add another device" and give it the code below (copy it, or save it as a file). It will ask you for the eight words: type them there. Then paste or open the reply it gives you here.';
-      show.out = show.words = show.inp = true; u.yes.textContent = 'Add this device';
-      u.gOut.labelEl.textContent = 'Code to give to the other device'; u.gWords.labelEl.textContent = 'Words to type on the other device (they are not secret, but they must be the ones shown here)';
-      u.gIn.labelEl.textContent = 'Reply from the other device';
+      u.text.textContent = 'On the webputer that has your identity, choose "Link a new webputer" and give it the code below (copy it, or save it as a file). It will ask you for the eight words: type them there. Then paste or open the reply it gives you here.';
+      show.out = show.words = show.inp = true; u.yes.textContent = 'Link this webputer';
+      u.gOut.labelEl.textContent = 'Code to give to the other webputer'; u.gWords.labelEl.textContent = 'Words to type on the other webputer (they are not secret, but they must be the ones shown here)';
+      u.gIn.labelEl.textContent = 'Reply from the other webputer';
     } else if (isNew && s === 'confirm') {
-      u.text.textContent = 'Make sure this is the identity you mean. The other device shows eight words for it: type them here exactly as it shows them.';
-      show.head = show.typed = true; u.yes.textContent = 'Add this device'; u.gTyped.labelEl.textContent = 'The words the other device shows for the identity';
+      u.text.textContent = 'Make sure this is the identity you mean. The other webputer shows eight words for it: type them here exactly as it shows them.';
+      show.head = show.typed = true; u.yes.textContent = 'Link this webputer'; u.gTyped.labelEl.textContent = 'The words the other webputer shows for the identity';
     } else if (isNew && s === 'done') {
-      u.text.textContent = 'This device now has the identity, with a passkey of its own. Give the finished code below back to the other device (paste it there, or open the file) so both keep the same list of passkeys. You can do that later.';
-      show.head = show.out = true; show.yes = false; u.no.textContent = 'Close'; u.gOut.labelEl.textContent = 'Finished code to give back to the other device';
+      u.text.textContent = 'This webputer now has the identity, with a passkey of its own. Give the finished code below back to the other webputer (paste it there, or open the file) so both keep the same list of passkeys. You can do that later.';
+      show.head = show.out = true; show.yes = false; u.no.textContent = 'Close'; u.gOut.labelEl.textContent = 'Finished code to give back to the other webputer';
     } else if (!isNew && s === 'paste') {
-      u.text.textContent = 'On the new device, choose "Add this device to an identity" and make a code. Paste it here (or open the file). Read the words below to the new device if it asks for them.';
-      show.head = show.words = show.inp = true; u.yes.textContent = 'Approve this device';
-      u.gWords.labelEl.textContent = 'The words of this identity: the new device asks for these'; u.gIn.labelEl.textContent = 'Code from the new device';
+      u.text.textContent = 'On the new webputer, choose "Link this webputer to an identity" and make a code. Paste it here (or open the file). Read the words below to the new webputer if it asks for them.';
+      show.head = show.words = show.inp = true; u.yes.textContent = 'Approve this webputer';
+      u.gWords.labelEl.textContent = 'The words of this identity: the new webputer asks for these'; u.gIn.labelEl.textContent = 'Code from the new webputer';
     } else if (!isNew && s === 'confirm') {
-      u.text.textContent = 'A new device asks to use this identity, with a passkey on ' + q.where + '. Only approve it if it is a device of yours that you are holding. Type the eight words the NEW device shows. Approving asks for your passkey, then gives you a reply to take to it.';
-      show.head = show.typed = true; u.yes.textContent = 'Approve this device'; u.gTyped.labelEl.textContent = 'The words the new device shows';
+      u.text.textContent = 'A new webputer asks to use this identity, with a passkey on ' + q.where + '. Only approve it if it is a webputer of yours that you are holding. Type the eight words the NEW webputer shows. Approving asks for your passkey, then gives you a reply to take to it.';
+      show.head = show.typed = true; u.yes.textContent = 'Approve this webputer'; u.gTyped.labelEl.textContent = 'The words the new webputer shows';
     } else if (!isNew && s === 'granted') {
-      u.text.textContent = 'Give the reply below to the new device (copy it, or save it as a file). When the new device has finished it shows one more code: paste it below so this device keeps the same list of passkeys. You can do that later.';
+      u.text.textContent = 'Give the reply below to the new webputer (copy it, or save it as a file). When the new webputer has finished it shows one more code: paste it below so this webputer keeps the same list of passkeys. You can do that later.';
       show.head = show.out = show.inp = true; show.yes = false; u.no.textContent = 'Close';
-      u.gOut.labelEl.textContent = 'Reply to give to the new device'; u.gIn.labelEl.textContent = 'Finished code from the new device (optional)';
+      u.gOut.labelEl.textContent = 'Reply to give to the new webputer'; u.gIn.labelEl.textContent = 'Finished code from the new webputer (optional)';
     }
     u.head.hidden = !show.head; u.gName.hidden = !show.name; u.gWords.hidden = !show.words; u.gOut.hidden = !show.out; u.gIn.hidden = !show.inp;
     u.gTyped.hidden = !show.typed; u.yes.hidden = !show.yes;
@@ -189,7 +189,7 @@
         var done = codec.decode('done', text);
         var sum = await ident.enrollAccept({ did: q.did, events: done.events });
         if (open !== q || q.inId !== id) return;
-        say('Done. This device now lists ' + sum.authorityKeys + ' passkeys for this identity.', 'good');
+        say('Done. This webputer now lists ' + sum.authorityKeys + ' passkeys for this identity.', 'good');
         emit({ type: 'enroll', kind: 'accepted', did: q.did });
       }
     } catch (e) {
@@ -212,7 +212,7 @@
       if (open !== q || q.checkId !== id) return;
       u.yes.disabled = !ok;
       u.hint.className = ok ? 'hint good' : 'hint bad';
-      u.hint.textContent = ok ? 'They match.' : 'Those are not the words. Do not go on: this may not be the device or the identity you think it is.';
+      u.hint.textContent = ok ? 'They match.' : 'Those are not the words. Do not go on: this may not be the webputer or the identity you think it is.';
     });
   }
 
@@ -252,13 +252,13 @@
   // Puts the dialog in front of the person. Adds nothing and shows nothing the world sent.
   async function start(args) {
     var mode = args && args.mode;
-    if (mode !== 'new' && mode !== 'old') throw new Error('Unknown way of adding a device.');
+    if (mode !== 'new' && mode !== 'old') throw new Error('Unknown way of linking a webputer.');
     if (open) throw new Error('This is already waiting for an answer.');
     if (Date.now() - lastClosed < DISMISS_MS) throw new Error('This was closed a moment ago.');
     var q = { mode: mode, step: mode === 'new' ? 'start' : 'paste', inId: 0, checkId: 0, busy: false };
     if (mode === 'old') {
       var s = await ident.current();
-      if (!s) throw new Error('Sign in first: this is for adding a device to the identity that is signed in.');
+      if (!s) throw new Error('Sign in first: this is for linking a new webputer to the identity that is signed in.');
       q.did = s.did; q.label = s.label; q.words = await fp.words(s.did);
     }
     if (open) throw new Error('This is already waiting for an answer.');

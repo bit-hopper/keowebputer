@@ -22,6 +22,13 @@ async function waitForWorld(page) {
   return frame;
 }
 const op = (frame, name, args) => frame.evaluate(([o, a]) => window.keo.call(o, a || {}, 60000).then((r) => ({ ok: true, r }), (e) => ({ ok: false, e: e.message })), [name, args]);
+// where a morph found by `pick` is, in page coordinates (the world sits in an iframe); null while there is none
+async function rectOf(page, frame, pick, arg) {
+  const r = await frame.evaluate(([src, a]) => { const m = (new Function('return (' + src + ')'))()(a); if (!m) return null; const n = m.renderContext().shapeNode; const b = n.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; }, [pick.toString(), arg]);
+  if (!r) return null;
+  const off = await (await frame.frameElement()).boundingBox();
+  return { x: off.x + r.x, y: off.y + r.y, w: r.w, h: r.h };
+}
 const shell = (page, fn, arg) => page.evaluate(async ([src, a]) => {
   try { return { ok: true, r: await (new Function('return (' + src + ')')())(a) }; } catch (e) { return { ok: false, err: (e && e.name) + ': ' + (e && e.message) }; }
 }, [fn.toString(), arg]);
@@ -67,9 +74,16 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
 
     // ---- the NEW device (B)
     await B.page.bringToFront();
-    check('the world asks for the new-device dialog', (await op(B.frame, 'enroll.open', { mode: 'new' })).ok);
+    // The entries a person has: the menu bar's own menu (nobody signed in) and the sign-in window's button. The button is clicked for real.
+    const menuB = await B.frame.evaluate(() => { const bar = $world.get(/MenuBar/), e = $world.get('IdentityMenuBarEntry') || (bar && bar.submorphs.filter((m) => m.name === 'IdentityMenuBarEntry')[0]); return e ? e.morphMenuItems().map((i) => i[0]) : null; });
+    check('B: with nobody signed in the menu offers "Link this webputer to an identity ..."', !!menuB && menuB.includes('Link this webputer to an identity ...') && menuB.includes('sign in'), menuB);
+    await B.frame.evaluate(() => { lively.require('lively.identity.LoginDialog').toRun(function () { lively.BuildSpec('lively.identity.LoginDialog').createMorph().openInWorldCenter(); }); });
+    const linkRect = await poll(() => rectOf(B.page, B.frame, () => { let hit = null; (function walk(m) { if (hit) return; if (m.name === 'linkWebputerBtn' && m.renderContext && m.renderContext().shapeNode && m.renderContext().shapeNode.getBoundingClientRect().width > 0) hit = m; (m.submorphs || []).forEach(walk); })($world); return hit; }), 20000);
+    check('B: the sign-in window has a "Link this webputer to an identity ..." button', !!linkRect, linkRect);
+    await B.page.mouse.click(linkRect.x + linkRect.w / 2, linkRect.y + linkRect.h / 2);
+    check('B: a real click on it puts the shell dialog up', !!(await poll(async () => { const x = await dlg(B); return x && !x.hidden ? x : null; }, 5000)));
     let d = await dlg(B);
-    check('B: the dialog opens on its first step: a name, one button, nothing else', !!d && !d.hidden && d.title === 'Add this device to an identity' && d.hasName && !d.hasIn && !d.hasTyped && d.out === null && d.yesText === 'Make a code' && !d.yesDisabled, d);
+    check('B: the dialog opens on its first step: a name, one button, nothing else', !!d && !d.hidden && d.title === 'Link this webputer to an identity' && d.hasName && !d.hasIn && !d.hasTyped && d.out === null && d.yesText === 'Make a code' && !d.yesDisabled, d);
     const again = await op(B.frame, 'enroll.open', { mode: 'new' });
     check('B: asked again while it is up, the world is refused', !again.ok && /already waiting/.test(again.e), again);
     await B.page.fill('#keo-enroll input.name', 'Alice desktop');
@@ -77,7 +91,7 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
     check('B: a real click makes the code', !!(await poll(async () => (await dlg(B)).out, 15000)));
     d = await dlg(B);
     const reqCode = d.out, reqWords = d.words;
-    check('B: it shows a request code, eight words for it, and a box for the reply', /^keo-enroll-request\./.test(reqCode) && reqWords.split(' ').length === 8 && d.hasIn && d.yesDisabled && d.yesText === 'Add this device', d);
+    check('B: it shows a request code, eight words for it, and a box for the reply', /^keo-enroll-request\./.test(reqCode) && reqWords.split(' ').length === 8 && d.hasIn && d.yesDisabled && d.yesText === 'Link this webputer', d);
     check('B: it does not show the words of any identity (it does not know one yet)', !d.whole.includes(idWords.r.join(' ')));
 
     // ---- a wrong kind of code, a cut-short one, nonsense
@@ -90,16 +104,26 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
 
     // ---- the OLD device (A)
     await A.page.bringToFront();
-    check('the world asks for the old-device dialog', (await op(A.frame, 'enroll.open', { mode: 'old' })).ok);
+    // A `#guest` page never resumes a session: reload A on the plain page so its world is signed in, as a person's would be.
+    await A.page.goto(`chrome-extension://${ID_A}/start.html`); A.frame = await waitForWorld(A.page);
+    const signedIn = await poll(() => A.frame.evaluate(() => !!(lively.identity.did && lively.identity.did.isLoggedIn())), 20000);
+    check('A: the plain page resumes the session, so the world is signed in', !!signedIn);
+    // The world reports itself signed in a moment before its menu bar has the identity entry: wait for the entry, not for a fixed time.
+    const entryUp = await poll(() => A.frame.evaluate(() => { const bar = $world.get(/MenuBar/), e = $world.get('IdentityMenuBarEntry') || (bar && bar.submorphs.filter((m) => m.name === 'IdentityMenuBarEntry')[0]); return !!(e && e.morphMenuItems().some((i) => i[0] === 'Identity')); }), 20000);
+    check('A: the menu bar has its identity entry', !!entryUp);
+    const menuA = await A.frame.evaluate(() => { const bar = $world.get(/MenuBar/), e = $world.get('IdentityMenuBarEntry') || (bar && bar.submorphs.filter((m) => m.name === 'IdentityMenuBarEntry')[0]); const top = e ? e.morphMenuItems() : null, sub = top && (top.filter((i) => i[0] === 'Identity')[0] || [])[1]; return { top: top && top.map((i) => i[0]), sub: sub && sub.map((i) => i[0]) }; });
+    check('A: signed in, "Link a new webputer ..." is under Identity and not at the top', !!menuA.sub && menuA.sub.includes('Link a new webputer ...') && !menuA.top.some((l) => /^Link /.test(l)), menuA);
+    await A.frame.evaluate(() => { const bar = $world.get(/MenuBar/), e = $world.get('IdentityMenuBarEntry') || bar.submorphs.filter((m) => m.name === 'IdentityMenuBarEntry')[0]; const sub = e.morphMenuItems().filter((i) => i[0] === 'Identity')[0][1]; sub.filter((i) => /^Link a new webputer/.test(i[0]))[0][1](); });
+    check('A: the menu entry puts the shell dialog up', !!(await poll(async () => { const x = await dlg(A); return x && !x.hidden ? x : null; }, 5000)));
     d = await dlg(A);
-    check('A: it shows the words of the identity signed in, and a box for the code', !!d && d.words === idWords.r.join(' ') && d.hasIn && d.whoDid && d.yesDisabled && d.title === 'Add another device to this identity', d);
+    check('A: it shows the words of the identity signed in, and a box for the code', !!d && d.words === idWords.r.join(' ') && d.hasIn && d.whoDid && d.yesDisabled && d.title === 'Link a new webputer to this identity', d);
     check('A: it has no words of the new device on screen', !d.whole.includes(reqWords));
     await A.page.fill(IN, 'keo-enroll-request.' + 'A'.repeat(30));
     d = await poll(async () => { const x = await dlg(A); return x.hint ? x : null; }, 3000);
     check('A: a damaged request code is "not a valid code" and nothing moves on', !!d && /not a valid code/.test(d.hint) && !d.hasTyped, d);
     await A.page.fill(IN, reqCode);
     d = await poll(async () => { const x = await dlg(A); return x.hasTyped ? x : null; }, 5000);
-    check('A: the request code moves it on to asking for the words, and says where the new passkey lives', !!d && d.yesDisabled && d.text.includes('chrome-extension://' + ID_B) && d.yesText === 'Approve this device', d);
+    check('A: the request code moves it on to asking for the words, and says where the new passkey lives', !!d && d.yesDisabled && d.text.includes('chrome-extension://' + ID_B) && d.yesText === 'Approve this webputer', d);
     check('A: the words of the new device are still not on screen anywhere', !!d && !d.whole.includes(reqWords) && d.out === null, d);
     await A.page.fill(TYPED, 'abandon ability able about above absent absorb abstract');
     d = await poll(async () => { const x = await dlg(A); return x.hintClass.includes('bad') ? x : null; }, 3000);
@@ -130,11 +154,11 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
     check('B: the words of the request are not accepted for the identity', !!d && d.yesDisabled, d);
     await B.page.fill(TYPED, idWords.r.join(' '));
     d = await poll(async () => { const x = await dlg(B); return !x.yesDisabled ? x : null; }, 5000);
-    check('B: the identity\'s words wake Add this device', !!d && /They match/.test(d.hint), d);
+    check('B: the identity\'s words wake Link this webputer', !!d && /They match/.test(d.hint), d);
     await B.page.click(YES);
     d = await poll(async () => { const x = await dlg(B); return x.out && /^keo-enroll-done\./.test(x.out) ? x : null; }, 15000);
     const doneCode = d && d.out;
-    check('B: a real click adds the device and gives a finished code to take back', !!doneCode && d.yesHidden && d.noText === 'Close' && /now has the identity/.test(d.text), d);
+    check('B: a real click links the webputer and gives a finished code to take back', !!doneCode && d.yesHidden && d.noText === 'Close' && /now has the identity/.test(d.text), d);
     const stored = await shell(B.page, async (did) => { const l = await window.keoIdentity.list(); const c = await window.keoIdentity.current(); return { list: l.filter((x) => x.did === did)[0], session: c && c.did }; }, DID);
     check('B: the identity is on B with two passkeys, recoverable, and B is signed in', stored.ok && stored.r.list && stored.r.list.authorityKeys === 2 && stored.r.list.notRecoverable === false && stored.r.session === DID, stored);
 
@@ -173,7 +197,7 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
     await B.page.evaluate(() => { window.__beforeClose = 1; });
     await B.page.click(NO);
     const reloaded = await poll(() => B.page.evaluate(() => window.__beforeClose === undefined), 15000);
-    check('B: closing the dialog after the device was added reloads the page', !!reloaded);
+    check('B: closing the dialog after the webputer was linked reloads the page', !!reloaded);
     await B.page.goto(`chrome-extension://${ID_B}/start.html`);
     const after = await poll(() => shell(B.page, async () => { const c = await window.keoIdentity.current(); return c && c.did; }).then((x) => x.r), 15000);
     check('B: and on a normal start it is still signed in as the identity', after === DID, after);
