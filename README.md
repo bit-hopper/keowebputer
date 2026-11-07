@@ -87,6 +87,7 @@ node tests/keo-identity-test.js . dist <work dir>    # identity creation end to 
 node tests/keo-session-test.js  . dist <work dir>    # the session, encrypted saved worlds, menu bar
 node tests/keo-enroll-test.js    . dist <work dir>    # two browsers, two extension ids: one identity moved to the other origin by a second passkey, the secret carried over, the words that guard both ends
 node tests/keo-enroll-ui-test.js . dist <work dir>    # the same, through the shell dialog by real clicks, typing, a real file chooser and a real download
+node tests/keo-transfer-test.js . dist <work dir>    # two browsers: the saved worlds and library of one identity saved as a sealed file on one origin and added on the other, by real clicks, a real download and a real file chooser
 node tests/keo-gate-test.js     . dist <work dir>    # sign-in dialog inside the world, what starts when nobody is signed in
 node tests/keo-worlds-test.js   . dist <work dir>    # the worlds library: create by name, save, search, rename, copy, tags, delete, what is on disk, an older database
 node tests/keo-worlds-ui-test.js . dist <work dir>   # "My worlds" and the search palette, by real clicks and typing: search, row menu, create blank and from presets

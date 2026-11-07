@@ -195,5 +195,71 @@
     });
   }
 
-  window.keoLibrary = { get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob, purge: purge };
+  // ---- moving between origins (keo-transfer.js) -------------------------------------------------------------------------
+  // The signed-in identity's documents and files AS THEY ARE ON DISK: sealed under its key (identity and id as additional data), so a
+  // copy is valid on another origin that holds the same identity and readable nowhere else. Nothing here decrypts. Not for anything
+  // but keo-transfer.js.
+  function exportSealed() {
+    return serial(async function () {
+      var s = session(), prefix = s.did + '|';
+      var got = await tx(['docs', 'blobs'], 'readonly', function (t) {
+        var d = t.objectStore('docs').index('did').getAll(IDBKeyRange.only(s.did)), b = t.objectStore('blobs').index('did').getAll(IDBKeyRange.only(s.did));
+        return function () { return { docs: d.result, blobs: b.result }; };
+      });
+      function rec(r) { return { id: r.id.slice(prefix.length), iv: r.iv, ct: r.ct }; }
+      return { did: s.did, docs: got.docs.map(rec), blobs: got.blobs.map(rec) };
+    });
+  }
+  // Adds the documents and files of a pack made by exportSealed (for the same identity) that this identity does not have yet. Nothing
+  // is overwritten. Every record is opened with this identity's key first, a document is checked as putDoc checks it, and a file must
+  // still be the bytes its name is the hash of; the limits apply. All of it is written together or none of it. Returns
+  // { docs: n added, blobs: n added, skippedDocs: n, skippedBlobs: n, unreadable: n }.
+  function importSealed(pack) {
+    return serial(async function () {
+      var s = session();
+      if (!pack || pack.did !== s.did) throw new Error('That data belongs to another identity.');
+      var docs = pack.docs || [], blobs = pack.blobs || [];
+      var haveDocs = await tx(['docs'], 'readonly', function (t) { var k = t.objectStore('docs').index('did').getAllKeys(IDBKeyRange.only(s.did)); return function () { return k.result; }; });
+      var haveBlobs = await tx(['blobs'], 'readonly', function (t) { var k = t.objectStore('blobs').index('did').getAllKeys(IDBKeyRange.only(s.did)); return function () { return k.result; }; });
+      var docSet = {}, blobSet = {};
+      haveDocs.forEach(function (k) { docSet[k] = true; });
+      haveBlobs.forEach(function (k) { blobSet[k] = true; });
+      var out = { docs: 0, blobs: 0, skippedDocs: 0, skippedBlobs: 0, unreadable: 0 }, putDocs = [], putBlobs = [], addBytes = 0;
+      for (var i = 0; i < docs.length; i++) {
+        var r = docs[i], key = typeof r.id === 'string' && OBJ_ID.test(r.id) ? idOf(s.did, r.id) : null;
+        if (!key) { out.unreadable++; continue; }
+        if (docSet[key]) { out.skippedDocs++; continue; }
+        try {
+          var doc = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(r.iv), additionalData: enc.encode(aad(s.did, r.id)) }, s.key, r.ct)));
+          if (!doc || typeof doc !== 'object' || Array.isArray(doc) || doc.objId !== r.id || doc.did !== s.did || TYPES.indexOf(doc.type) < 0) throw new Error('not a library item');
+          docSet[key] = true; putDocs.push({ id: key, did: s.did, iv: r.iv, ct: r.ct });
+        } catch (e) { out.unreadable++; }
+      }
+      for (var j = 0; j < blobs.length; j++) {
+        var b = blobs[j], bkey = typeof b.id === 'string' && CID.test(b.id) ? idOf(s.did, b.id) : null;
+        if (!bkey) { out.unreadable++; continue; }
+        if (blobSet[bkey]) { out.skippedBlobs++; continue; }
+        try {
+          var bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(b.iv), additionalData: enc.encode(blobAad(s.did, b.id)) }, s.key, b.ct));
+          if (bytes.length > MAX_BLOB || kd.b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))) !== b.id) throw new Error('not that file');
+          blobSet[bkey] = true; addBytes += bytes.length; putBlobs.push({ id: bkey, did: s.did, iv: b.iv, ct: b.ct });
+        } catch (e) { out.unreadable++; }
+      }
+      var total = await tx(['blobtotal'], 'readonly', function (t) { return get(t, 'blobtotal', s.did); });
+      var used = total ? total.total : 0;
+      if (haveDocs.length + putDocs.length > MAX_DOCS) throw new Error('The library would be full: it holds at most ' + MAX_DOCS + ' items.');
+      if (used + addBytes > MAX_BLOBS_TOTAL) throw new Error('The library would be full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.');
+      if (putDocs.length || putBlobs.length) {
+        await tx(['docs', 'blobs', 'blobtotal'], 'readwrite', function (t) {
+          putDocs.forEach(function (p) { t.objectStore('docs').put(p); });
+          putBlobs.forEach(function (p) { t.objectStore('blobs').put(p); });
+          if (putBlobs.length) t.objectStore('blobtotal').put({ did: s.did, total: used + addBytes });
+        });
+      }
+      out.docs = putDocs.length; out.blobs = putBlobs.length;
+      return out;
+    });
+  }
+
+  window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob, purge: purge };
 })();

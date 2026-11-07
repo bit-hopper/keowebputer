@@ -359,7 +359,74 @@
     });
   }
 
+  // ---- moving between origins (keo-transfer.js) -------------------------------------------------------------------------
+  // The signed-in identity's records AS THEY ARE ON DISK: sealed under its key, so a copy is only readable where the same identity
+  // is signed in, and nothing here decrypts a body. A record is sealed with the identity and its own id as additional data, so one
+  // copied to another origin that holds the same identity is valid there as it is. Not for anything but keo-transfer.js: it hands
+  // back sealed bytes the caller must not interpret.
+  function exportSealed() {
+    return serial(async function () {
+      var s = session();
+      var got = await tx(['index', 'bodies', 'texts'], 'readonly', function (t) {
+        var i = t.objectStore('index').get(s.did), b = t.objectStore('bodies').index('did').getAll(IDBKeyRange.only(s.did)),
+          x = t.objectStore('texts').index('did').getAll(IDBKeyRange.only(s.did));
+        return function () { return { index: i.result, bodies: b.result, texts: x.result }; };
+      });
+      function rec(r) { return { id: r.id, iv: r.iv, ct: r.ct }; }
+      return { did: s.did, index: got.index ? { iv: got.index.iv, ct: got.index.ct } : null, bodies: got.bodies.map(rec), texts: got.texts.map(rec) };
+    });
+  }
+  // Adds the worlds of a pack made by exportSealed (on another origin, for the same identity) that this identity does not have yet.
+  // Nothing is overwritten: a name that is taken here is left alone and reported. Every record is opened with this identity's key
+  // first, so a damaged or foreign one is refused before anything is written, and what is added is cleaned as a save would clean it.
+  // The save order ("last") and the settings are this device's own and are not touched. Returns { added: [names], skipped: [names],
+  // unreadable: [names] }.
+  function importSealed(pack) {
+    return serial(async function () {
+      var s = session();
+      if (!pack || pack.did !== s.did) throw new Error('That data belongs to another identity.');
+      var cur = await readIndex(s), theirs = { worlds: {} };
+      if (pack.index) theirs = JSON.parse(dec.decode(await open(s.key, pack.index, indexAad(s.did))));
+      if (!theirs || typeof theirs.worlds !== 'object' || !theirs.worlds) throw new Error('That is not valid saved-world data.');
+      var bodies = {}, texts = {};
+      (pack.bodies || []).forEach(function (r) { bodies[r.id] = r; });
+      (pack.texts || []).forEach(function (r) { texts[r.id] = r; });
+      var haveIds = {};
+      Object.keys(cur.worlds).forEach(function (n) { haveIds[cur.worlds[n].id] = true; });
+      var added = [], skipped = [], unreadable = [], put = [];
+      var names = Object.keys(theirs.worlds);
+      for (var i = 0; i < names.length; i++) {
+        var raw = names[i], w = theirs.worlds[raw], name;
+        try { name = cleanName(raw); } catch (e) { unreadable.push(String(raw).slice(0, 40)); continue; }
+        if (cur.worlds[name]) { skipped.push(name); continue; }
+        if (!w || typeof w.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(w.id) || haveIds[w.id] || !bodies[w.id]) { unreadable.push(name); continue; }
+        try {
+          await open(s.key, bodies[w.id], bodyAad(s.did, w.id));
+          var hasText = !!texts[w.id];
+          if (hasText) await open(s.key, texts[w.id], textAad(s.did, w.id));
+          var e = { id: w.id, savedAt: String(w.savedAt || ''), bytes: Math.max(0, Number(w.bytes) || 0), createdAt: String(w.createdAt || w.savedAt || ''),
+            tags: cleanTags(w.tags || []), note: cleanNote(w.note || '') };
+          if (hasText) e.t = true;
+          var tpl = cleanTemplate(w.template);
+          if (tpl) e.template = tpl;
+          cur.worlds[name] = e; haveIds[w.id] = true; added.push(name);
+          put.push({ store: 'bodies', rec: { id: w.id, did: s.did, iv: bodies[w.id].iv, ct: bodies[w.id].ct } });
+          if (hasText) put.push({ store: 'texts', rec: { id: w.id, did: s.did, iv: texts[w.id].iv, ct: texts[w.id].ct } });
+        } catch (err) { unreadable.push(name); }
+      }
+      if (added.length) {
+        var rec = await sealIndex(s, cur);
+        await tx(['bodies', 'texts', 'index'], 'readwrite', function (t) {
+          put.forEach(function (p) { t.objectStore(p.store).put(p.rec); });
+          t.objectStore('index').put(rec);
+        });
+      }
+      return { added: added, skipped: skipped, unreadable: unreadable };
+    });
+  }
+
   window.keoWorlds = {
+    exportSealed: exportSealed, importSealed: importSealed,
     save: save, list: list, has: has, load: load, last: last, setLast: setLast, remove: remove, purge: purge,
     rename: rename, setMeta: setMeta, duplicate: duplicate, search: search, prefsGet: prefsGet, prefsSet: prefsSet,
     cleanTemplate: cleanTemplate

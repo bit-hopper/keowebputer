@@ -48,7 +48,7 @@
   #keo-confirm .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   #keo-confirm button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
   #keo-confirm button:hover { background: #444a5e; }
-  #keo-confirm button.yes { background: #c0392b; }
+  #keo-confirm button.yes { background: #c0392b; color: #fff; }
   /* The friend dialog (keo-friend.js): drawn and placed by this page only. Like the others it stays BELOW the vault's unlock frame. */
   #keo-friend { position: fixed; inset: 0; z-index: 2147483002; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
   #keo-friend[hidden] { display: none; }
@@ -70,7 +70,7 @@
   #keo-friend .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   #keo-friend button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
   #keo-friend button:hover { background: #444a5e; }
-  #keo-friend button.yes { background: #2f9e5b; }
+  #keo-friend button.yes { background: #2f9e5b; color: #fff; }
   #keo-friend button:disabled { opacity: .4; cursor: default; }
   /* The dialog for adding an identity to a second device (keo-enroll.js): drawn and placed by this page only, BELOW the vault's unlock frame. */
   #keo-enroll { position: fixed; inset: 0; z-index: 2147483003; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
@@ -96,8 +96,37 @@
   #keo-enroll button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
   #keo-enroll button.tool { padding: 4px 10px; font-size: 13px; }
   #keo-enroll button:hover { background: #444a5e; }
-  #keo-enroll button.yes { background: #2f9e5b; }
+  #keo-enroll button.yes { background: #2f9e5b; color: #fff; }
   #keo-enroll button:disabled { opacity: .4; cursor: default; }
+  /* The dialog for moving an identity's saved data to another webputer (keo-transfer.js): drawn and placed by this page only, in the same layer as the link dialog. */
+  #keo-transfer { position: fixed; inset: 0; z-index: 2147483003; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  #keo-transfer[hidden], #keo-transfer [hidden] { display: none !important; }
+  #keo-transfer .box { width: 420px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow: auto; box-sizing: border-box; padding: 16px; background: #1d1f27; color: #f2f3f7;
+                    border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.45); }
+  #keo-transfer .title { font-weight: 600; font-size: 15px; margin-bottom: 12px; }
+  #keo-transfer .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  #keo-transfer .who-img { width: 40px; height: 40px; border-radius: 6px; image-rendering: pixelated; flex: none; }
+  #keo-transfer .who { min-width: 0; }
+  #keo-transfer .who-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #keo-transfer .who-did { font: 12px ui-monospace, monospace; color: #a9adbd; }
+  #keo-transfer .text { color: #d6d9e4; line-height: 1.4; margin-bottom: 12px; }
+  #keo-transfer .label { display: block; font-size: 12px; color: #a9adbd; margin: 10px 0 4px; }
+  #keo-transfer .words { font: 15px ui-monospace, monospace; padding: 8px 10px; background: #2a2d3a; border-radius: 8px; line-height: 1.5; word-spacing: 4px; user-select: all; }
+  #keo-transfer input.name, #keo-transfer input.typed, #keo-transfer textarea.code { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font: 14px ui-monospace, monospace; padding: 8px 10px; border: 1px solid #444a5e; border-radius: 8px; background: #14161c; color: inherit; }
+  #keo-transfer textarea.code { resize: vertical; word-break: break-all; }
+  #keo-transfer .tools { display: flex; gap: 8px; margin-top: 6px; }
+  #keo-transfer .hint { min-height: 18px; margin-top: 6px; font-size: 12px; color: #a9adbd; }
+  #keo-transfer .hint.good { color: #6fd39a; }
+  #keo-transfer .hint.bad { color: #f1948a; }
+  #keo-transfer .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  #keo-transfer button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
+  #keo-transfer button.tool { padding: 4px 10px; font-size: 13px; }
+  #keo-transfer button:hover { background: #444a5e; }
+  #keo-transfer button.yes { background: #c80f55; color: #fff; font-weight: 600; }
+  #keo-transfer button:focus-visible { outline: 2px solid #ff4d8d; outline-offset: 2px; }
+  #keo-transfer button:disabled { opacity: .4; cursor: default; }
+  #keo-transfer .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  #keo-transfer .result { min-height: 18px; margin-top: 10px; color: #d6d9e4; line-height: 1.4; }
 </style>
 <!-- Both frames get their src from shell.js, after its message listener exists (the world's only once keo-gate.js has decided how it starts). -->
 <iframe id="world"></iframe>
@@ -119,6 +148,7 @@
 <script src="keo-friend.js"></script>
 <script src="keo-enroll-code.js"></script>
 <script src="keo-enroll.js"></script>
+<script src="keo-transfer.js"></script>
 <script src="keo-status.js"></script>
 <script src="keo-chatlog.js"></script>
 <script src="keo-worldtext.js"></script>
