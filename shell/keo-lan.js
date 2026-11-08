@@ -156,7 +156,8 @@
       var s = await ident.current();
       if (!s || !visibleNow || typeof b64 !== 'string' || b64.length > MAX_B64) return null;
       var t = Date.now(), from = String(ip);
-      if (t - (lastFrom[from] || 0) < ANSWER_COOLDOWN_MS) return null;
+      // A second request from one address within the pause is refused with the same plain reply, without any of the checking work.
+      if (t - (lastFrom[from] || 0) < ANSWER_COOLDOWN_MS) return NO;
       lastFrom[from] = t;
       Object.keys(lastFrom).forEach(function (k) { if (t - lastFrom[k] > 60000) delete lastFrom[k]; });
       pruneAnswering();
