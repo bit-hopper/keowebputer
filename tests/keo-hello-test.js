@@ -210,5 +210,47 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await refused('a log-kind certificate cannot vouch for a device nothing lists', proofMsg(A, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.via = 'log'; h.cert.devicePubKeyJwk = plain(B.cert.devicePubKeyJwk); } }), 'offer', {}, /not listed/);
   await refused('events grafted onto another identity are refused', proofMsg(B, 'offer', FPS, { edit: (h) => { h.events = A2.events; } }), 'offer', {}, /identity does not verify/);
 
+  // ================================================================ the dial request (on the local network, keo-lan.js)
+  // Signed by the sender's device, for ONE receiver and ONE code, fresh. `edit(hello)` changes it before signing, `after(msg)` after.
+  const CODE_HASH = 'Zm9vYmFyYmF6cXV4';
+  const NONCE = 'AAAAAAAAAAAAAAAAAAAAAA';
+  async function dialMsg(id, o) {
+    o = o || {};
+    const h = hello.dialBuild({ did: id.did, inception: id.inception, sigs: id.sigs, events: id.events, cert: id.cert }, { to: o.to || B.did, nonce: o.nonce || NONCE, c: o.c || CODE_HASH, now: o.now });
+    if (o.edit) o.edit(h);
+    const sig = kd.b64u(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, (o.signWith || id).device.privateKey, hello.signedBytes(h)));
+    const msg = JSON.parse(JSON.stringify({ hello: h, sig }));
+    if (o.after) o.after(msg);
+    return msg;
+  }
+  const dverify = (msg, o) => hello.verifyDial(msg, Object.assign({ to: B.did, c: CODE_HASH, audience: AUD }, o || {}));
+  const dRefused = async (name, msg, o, pattern) => { const r = await dverify(await msg, o); ok(name, r.ok === false && (!pattern || pattern.test(r.error)), r); };
+
+  const d1 = await dverify(await dialMsg(A));
+  ok('a dial request from a device listed in the inception verifies: the DID, the nonce and the time come back', d1.ok && d1.did === A.did && d1.nonce === NONCE && Math.abs(d1.time - Date.now()) < 5000, d1);
+  const d2 = await dverify(await dialMsg(A2));
+  ok('and one from a device the log lists (a passkey added later) verifies under the same DID', d2.ok && d2.did === A.did, d2);
+  const d3 = await dverify(await dialMsg(A3));
+  ok('and one from a sign-in certificate on the added passkey verifies', d3.ok && d3.did === A.did, d3);
+  await dRefused('a dial request for someone else is refused: it cannot be forwarded to a third device', dialMsg(A, { to: A.did }), {}, /someone else/);
+  await dRefused('a dial request with another code\'s hash is refused: it cannot be used with a different code', dialMsg(A, { c: 'b3RoZXJjb2RlaGFzaA' }), {}, /different code/);
+  await dRefused('a changed receiver fails the signature', dialMsg(A, { to: A.did, after: (m) => { m.hello.to = B.did; } }), {}, /signature/);
+  await dRefused('a changed code hash fails the signature', dialMsg(A, { c: 'b3RoZXJjb2RlaGFzaA', after: (m) => { m.hello.c = CODE_HASH; } }), {}, /signature/);
+  await dRefused('a dial request signed by another identity\'s device key fails', dialMsg(A, { signWith: B }), {}, /signature/);
+  await dRefused('a dial request older than a minute is refused', dialMsg(A, { now: Date.now() - hello.DIAL_AGE_MS - 5000 }), {}, /too old/);
+  await dRefused('a dial request dated in the future is refused', dialMsg(A, { now: Date.now() + 3600e3 }), {}, /future/);
+  await dRefused('a dial request with a short or odd nonce is refused', dialMsg(A, { nonce: 'short' }), {}, /nonce/);
+  await dRefused('a dial request with a nonce holding other characters is refused', dialMsg(A, { nonce: 'AAAAAAAAAAAAAAAA AAAAAA' }), {}, /nonce/);
+  await dRefused('a peer proof is not accepted as a dial request (the purposes differ)', proofMsg(A, 'offer', FPS), {}, /not a keo dial request/);
+  ok('and a dial request is refused as a peer proof', (await verify(await dialMsg(A), 'offer')).ok === false);
+  await dRefused('something that is not a dial request is refused without throwing', {}, {}, /not a keo dial request/);
+  await dRefused('a dial request for another app\'s origin is refused', dialMsg(await makeIdentity('signin', { aud: 'chrome-extension://other' })), {}, /another app/);
+  await dRefused('an expired delegation is refused', dialMsg(await makeIdentity('signin', { now: Date.now() - 20e3, ttl: 5e3 })), {}, /expired/);
+  await dRefused('an inception that was edited fails', dialMsg(A, { edit: (h) => { h.inception = JSON.parse(JSON.stringify(h.inception)); h.inception.time = '2020-01-01T00:00:00.000Z'; } }), {}, /identity|vouched|could not/);
+  await dRefused('a certificate made for another identity is refused', dialMsg(A, { edit: (h) => { h.cert = B.cert; } }), {}, /not for this identity/);
+  await dRefused('a dial request with no identity at all is refused without throwing', dialMsg(A, { edit: (h) => { delete h.inception; delete h.inceptionSigs; delete h.cert; } }), {}, /identity|could not be checked/);
+  await dRefused('events grafted onto another identity are refused', dialMsg(B, { to: A.did, edit: (h) => { h.events = A2.events; } }), { to: A.did }, /identity does not verify/);
+  await dRefused('the added passkey\'s device without the events is refused', dialMsg(Object.assign({}, A2, { events: [] })), {}, /authority key/);
+
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('FATAL', e); process.exit(2); });

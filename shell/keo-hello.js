@@ -225,19 +225,64 @@
       if (!(t > now - MAX_AGE_MS)) return fail('The other side\'s proof is too old.');
       if (t > now + SKEW_MS) return fail('The other side\'s proof is dated in the future (check the clock).');
       if (h.name !== undefined && (typeof h.name !== 'string' || h.name.length > MAX_NAME)) return fail('The other side sent a bad name.');
-      var v = await kd.verifyLog({ inception: h.inception, sigs: h.inceptionSigs, events: h.events });
-      if (!v.ok) return fail('The identity does not verify: ' + v.error);
-      if (v.did !== h.did) return fail('The identity does not match its proof.');
-      var ce = await certError(h.cert, v.state, h.inception, h.did, now, opts.audience);
-      if (ce) return fail('The other side\'s device is not vouched for: ' + ce + '.');
-      var devKey = await subtle.importKey('jwk', plainJwk(h.cert.devicePubKeyJwk), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
-      if (!(await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, devKey, kd.unb64u(msg.sig), signedBytes(h)))) return fail('The other side\'s signature does not match.');
+      var who = await signerError(msg, h, now, opts.audience);
+      if (who.error) return fail(who.error);
       return { ok: true, did: h.did, name: h.name || null };
     } catch (e) {
       return fail('The other side\'s proof could not be checked.');
     }
   }
 
-  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
-    proofBuild: proofBuild, signedBytes: signedBytes, verifyProof: verifyProof };
+  // The part every signed statement shares: the identity (its log verifies and names this DID), the device key (vouched for by that
+  // identity, see certError) and the signature of that device key over the statement as it was sent. Resolves { did } or { error }.
+  // It checks nothing about what the statement SAYS: the caller does that first (purpose, role, time, who it is for).
+  async function signerError(msg, h, now, audience) {
+    var v = await kd.verifyLog({ inception: h.inception, sigs: h.inceptionSigs, events: h.events });
+    if (!v.ok) return { error: 'The identity does not verify: ' + v.error };
+    if (v.did !== h.did) return { error: 'The identity does not match its proof.' };
+    var ce = await certError(h.cert, v.state, h.inception, h.did, now, audience);
+    if (ce) return { error: 'The other side\'s device is not vouched for: ' + ce + '.' };
+    var devKey = await subtle.importKey('jwk', plainJwk(h.cert.devicePubKeyJwk), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+    if (!(await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, devKey, kd.unb64u(msg.sig), signedBytes(h)))) return { error: 'The other side\'s signature does not match.' };
+    return { did: h.did };
+  }
+
+  // ---- the dial request ---------------------------------------------------------------------------------------------------
+  // "Please answer this connection code": what a device sends, on the local network, to a friend it found there (keo-lan.js). It is
+  // signed by the device key of the sender's signed-in identity and names WHO it is for, WHAT it asks to be answered (the hash of the
+  // code, so the request cannot be used with another code) and WHEN, so the receiving side can answer only a friend it has added,
+  // only once, and only while the request is fresh. It proves who asks; it does not prove who answers (the channel's own proof does
+  // that), and it is not encrypted, so anyone on the network can read it. `proof` is as for proofBuild; the caller signs
+  // signedBytes(result) with signWithDevice.
+  var DIAL_PURPOSE = 'keo-lan-dial', DIAL_AGE_MS = 60 * 1000, NONCE = /^[A-Za-z0-9_-]{16,32}$/;
+  function dialBuild(proof, o) {
+    var h = { v: 1, purpose: DIAL_PURPOSE, to: o.to, nonce: o.nonce, c: o.c, time: new Date(o.now || Date.now()).toISOString(),
+      did: proof.did, inception: proof.inception, inceptionSigs: proof.sigs, cert: proof.cert };
+    if (proof.events && proof.events.length) h.events = proof.events;
+    return h;
+  }
+  // msg = { hello, sig }. opts: { to (the DID this side is), c (the hash of the code that came with it), now, audience }.
+  // Resolves { ok, error } or { ok, did, nonce, time }. The nonce is returned, not remembered: the caller keeps the ones it has seen.
+  async function verifyDial(msg, opts) {
+    opts = opts || {};
+    var now = opts.now || Date.now(), h = msg && msg.hello;
+    function fail(m) { return { ok: false, error: m }; }
+    try {
+      if (!h || typeof h !== 'object' || typeof msg.sig !== 'string' || h.v !== 1 || h.purpose !== DIAL_PURPOSE) return fail('That is not a keo dial request.');
+      if (typeof h.to !== 'string' || h.to !== opts.to) return fail('That dial request is for someone else.');
+      if (typeof h.c !== 'string' || h.c !== opts.c) return fail('That dial request is for a different code.');
+      if (typeof h.nonce !== 'string' || !NONCE.test(h.nonce)) return fail('That dial request has a bad nonce.');
+      var t = Date.parse(h.time);
+      if (!(t > now - DIAL_AGE_MS)) return fail('That dial request is too old.');
+      if (t > now + SKEW_MS) return fail('That dial request is dated in the future (check the clock).');
+      var who = await signerError(msg, h, now, opts.audience);
+      if (who.error) return fail(who.error);
+      return { ok: true, did: h.did, nonce: h.nonce, time: t };
+    } catch (e) {
+      return fail('That dial request could not be checked.');
+    }
+  }
+
+  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, DIAL_AGE_MS: DIAL_AGE_MS, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
+    proofBuild: proofBuild, signedBytes: signedBytes, verifyProof: verifyProof, dialBuild: dialBuild, verifyDial: verifyDial };
 });
