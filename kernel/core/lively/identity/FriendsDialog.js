@@ -193,17 +193,24 @@ module("lively.identity.FriendsDialog")
               av.setImageURL(lively.identity.postCardUtils.identiconDataUrl(f.did, AV));
               av.ignoreEvents();
               content.addMorph(av);
-              // room for a Connect button beside Message and Remove when the network is in use
-              var textW = w - AV - 8 - (lan ? 244 : 160);
+              // Only a row that has a Connect button needs room for a third button: its three buttons are a little narrower and the
+              // text beside them (the name and the line under it) gets what is left. Every other row is as it always was.
+              var withConnect = !!(lan && !conn && onNet);
+              var textW = w - AV - 8 - (withConnect ? 206 : 160);
               var nameT = text(f.name || "(showed no name)", 20, { x: pad + AV + 8, y: rowY - 2, w: textW, size: 11, bold: true, name: "friendName" });
               nameT.friendDid = f.did;
               var sub = local.shortDid(f.did) + (conn ? (conn.friend ? "   connected now, friends" : "   connected now, waiting for them to add you")
-                : d.dialing[f.did] ? "   connecting …" : onNet ? "   on this network, not connected" : "   not connected");
+                : d.dialing[f.did] ? "   connecting …" : onNet ? "  on this network" : "   not connected");
               var subT = text(sub, 18, { x: pad + AV + 8, y: rowY + 16, w: textW, size: 8, color: Color.rgb(110, 110, 110), name: "friendDid" });
               subT.friendDid = f.did;
-              if (lan && !conn && onNet) button(d.dialing[f.did] ? "Connecting…" : "Connect", "lanConnectBtn", pad + w - 232, 76, "main", "onLanConnect", "rowKey", f.did, rowY + 4);
-              button("Message…", "messageBtn", pad + w - 150, 76, "plain", "onMessage", "rowKey", f.did, rowY + 4);
-              button("Remove", "removeBtn", pad + w - 70, 70, "plain", "onRemove", "rowKey", f.did, rowY + 4);
+              if (withConnect) {
+                button(d.dialing[f.did] ? "Trying…" : "Connect", "lanConnectBtn", pad + w - 198, 60, "main", "onLanConnect", "rowKey", f.did, rowY + 4);
+                button("Message…", "messageBtn", pad + w - 134, 70, "plain", "onMessage", "rowKey", f.did, rowY + 4);
+                button("Remove", "removeBtn", pad + w - 60, 60, "plain", "onRemove", "rowKey", f.did, rowY + 4);
+              } else {
+                button("Message…", "messageBtn", pad + w - 150, 76, "plain", "onMessage", "rowKey", f.did, rowY + 4);
+                button("Remove", "removeBtn", pad + w - 70, 70, "plain", "onRemove", "rowKey", f.did, rowY + 4);
+              }
               y += AV + 10;
             });
             if (friends.length > MAXROWS) { text("(" + (friends.length - MAXROWS) + " more not shown)", 20); y += 24; }
