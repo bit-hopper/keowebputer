@@ -210,6 +210,43 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await refused('a log-kind certificate cannot vouch for a device nothing lists', proofMsg(A, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.via = 'log'; h.cert.devicePubKeyJwk = plain(B.cert.devicePubKeyJwk); } }), 'offer', {}, /not listed/);
   await refused('events grafted onto another identity are refused', proofMsg(B, 'offer', FPS, { edit: (h) => { h.events = A2.events; } }), 'offer', {}, /identity does not verify/);
 
+  // ---- an identity whose only authority is a phone (raw signatures, kind 'phone'); software stands in for the phone
+  const phoneSig = async (pair, purpose, h) => ({ scheme: 'p256-raw', signature: kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, Buffer.concat([Buffer.from('keo/authority/v1'), Buffer.from([0]), Buffer.from(purpose), Buffer.from([0]), Buffer.from(h)])))) });
+  async function makePhoneIdentity(mode, o) {
+    o = o || {};
+    const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const device = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+    const deviceJwk = plain(await subtle.exportKey('jwk', device.publicKey));
+    const dev = { id: kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson(deviceJwk)))), jwk: deviceJwk, addedAt: new Date().toISOString() };
+    const disc = await kd.ed25519FromSeed(crypto.getRandomValues(new Uint8Array(32)));
+    const keyId = kd.b64u(crypto.getRandomValues(new Uint8Array(16)));
+    const t0 = new Date().toISOString();
+    const state = { authority: { threshold: 1, keys: [{ id: keyId, jwk: plain(await subtle.exportKey('jwk', pair.publicKey)), kind: 'phone', addedAt: t0 }] }, next: null,
+      recovery: { guardians: [], threshold: 2, delayDays: 3 }, discovery: { key: disc.publicZ32, version: 1 }, services: [], claims: { handles: [] }, revoked: [] };
+    const inception = { v: 1, type: 'inception', seq: 0, prev: null, time: t0, state };
+    const H = await kd.eventHash(inception), did = kd.didFor(disc.publicZ32, kd.b64u(H));
+    const sigs = { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, H)), authority: [Object.assign({ keyId }, await phoneSig(pair, 'inception', H))] };
+    let events = [];
+    if (mode === 'device') { // the computer is added by the phone alone (add-device), and its certificate is that event
+      const e = await kd.addDeviceEvent(inception, dev);
+      events = [{ event: e, sigs: { authority: [Object.assign({ keyId }, await phoneSig(pair, 'add-device', await kd.eventHash(e)))] } }];
+    }
+    const now = Date.now();
+    let cert = { v: 1, did, devicePubKeyJwk: deviceJwk, issuedAt: new Date(now).toISOString(), exp: new Date(now + 12 * 3600e3).toISOString(), aud: AUD, scope: ['world:read', 'world:write', 'sign'], authorityKeyId: keyId };
+    if (mode === 'device') cert = Object.assign({ via: 'log' }, cert);
+    else cert = Object.assign({}, cert, { assertion: await phoneSig(pair, o.purpose || 'session', await kd.eventHash(cert)) });
+    return { did, inception, sigs, events, cert, device, pair, keyId };
+  }
+  const P1 = await makePhoneIdentity('signin'), P2 = await makePhoneIdentity('device');
+  const vP1 = await verify(await proofMsg(P1, 'offer', FPS, { name: 'Maya' }), 'offer');
+  ok('a phone-only identity: a sign-in certificate signed by the phone verifies', vP1.ok && vP1.did === P1.did && vP1.name === 'Maya', vP1);
+  const vP2 = await verify(await proofMsg(P2, 'answer', FPS), 'answer');
+  ok('a phone-only identity: a computer the phone added with add-device verifies', vP2.ok && vP2.did === P2.did, vP2);
+  await refused('a phone sign-in certificate signed for another purpose is refused', proofMsg(await makePhoneIdentity('signin', { purpose: 'add-device' }), 'offer', FPS), 'offer', {}, /passkey signature/);
+  await refused('a phone sign-in certificate edited after signing is refused', proofMsg(P1, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.exp = new Date(Date.now() + 1000 * 3600 * 24 * 365).toISOString(); } }), 'offer', {}, /passkey signature/);
+  await refused('the add-device computer is refused when the proof leaves the event out', proofMsg(Object.assign({}, P2, { events: [] }), 'offer', FPS), 'offer', {}, /not listed/);
+  await refused('a WebAuthn-shaped certificate signature is refused for a phone key', proofMsg(P1, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.assertion = { authenticatorData: 'AAAA', clientDataJSON: 'AAAA', signature: h.cert.assertion.signature }; } }), 'offer', {}, /passkey signature/);
+
   // ================================================================ the dial request (on the local network, keo-lan.js)
   // Signed by the sender's device, for ONE receiver and ONE code, fresh. `edit(hello)` changes it before signing, `after(msg)` after.
   const CODE_HASH = 'Zm9vYmFyYmF6cXV4';

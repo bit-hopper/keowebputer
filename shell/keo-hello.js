@@ -206,7 +206,7 @@
     // a sign-in certificate: the passkey signed H(cert as it was before the assertion was added)
     var bare = {};
     Object.keys(cert).forEach(function (k) { if (k !== 'assertion') bare[k] = cert[k]; });
-    var ok = cert.assertion && await kd.verifyAssertion(cert.assertion, key.jwk, await kd.eventHash(bare), 'webauthn.get');
+    var ok = cert.assertion && await kd.verifySignature(cert.assertion, key, await kd.eventHash(bare), 'session');
     return ok ? null : 'the delegation\'s passkey signature does not verify';
   }
 

@@ -143,6 +143,55 @@
     }).catch(function () { return false; });
   }
 
+  // ---- the phone's signature scheme ------------------------------------------------------------------------------
+  // A phone is not a WebAuthn authenticator: its app signs with a key in the phone's secure hardware and nothing else is wrapped
+  // around the signature. So that a signature made for one job can never be replayed for another, what is signed is NOT the bare
+  // hash but
+  //     utf8("keo/authority/v1") || 0x00 || utf8(purpose) || 0x00 || H
+  // where H is the 32-byte hash the log or certificate defines (the same H a passkey would have as its challenge) and `purpose` is
+  // one of PURPOSES below. Neither label can contain 0x00, so the three parts cannot slide into one another. The signature itself
+  // is the 64 bytes r||s (WebCrypto's form; an app that gets DER from its platform converts it). Exactly 64 bytes is required, so
+  // that a DER blob is never mistaken for a raw one.
+  //
+  //   sig = { keyId, scheme: 'p256-raw', signature: b64u(r||s) }
+  //
+  // This is what a phone-app implementer must reproduce byte for byte; rawMessage below and the phone tests in tests/keo-did-test.js are the reference.
+  var RAW_SCHEME = 'p256-raw';
+  var PURPOSES = ['inception', 'add-authority', 'add-device', 'session'];
+  var KEY_KINDS = ['platform', 'security-key', 'phone'];
+  function rawMessage(purpose, hashBytes) {
+    var label = enc.encode('keo/authority/v1'), p = enc.encode(purpose), h = bytesOf(hashBytes);
+    var out = new Uint8Array(label.length + 1 + p.length + 1 + h.length), o = 0;
+    out.set(label, o); o += label.length; out[o++] = 0; out.set(p, o); o += p.length; out[o++] = 0; out.set(h, o);
+    return out;
+  }
+  function verifyRaw(sig, jwk, hashBytes, purpose) {
+    if (PURPOSES.indexOf(purpose) < 0 || typeof sig.signature !== 'string') return Promise.resolve(false);
+    var raw;
+    try { raw = unb64u(sig.signature); } catch (e) { return Promise.resolve(false); }
+    if (raw.length !== 64) return Promise.resolve(false);
+    return subtle.importKey('jwk', jwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']).then(function (key) {
+      return subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, raw, rawMessage(purpose, hashBytes));
+    }).catch(function () { return false; });
+  }
+
+  // The one place a signature by an authority key is checked, whatever the key is. `key` is the log's key entry { id, jwk, kind }:
+  // its kind decides the scheme, so a phone key can only ever be satisfied by a raw signature and a passkey only by an assertion
+  // (a signature in the other form is refused, not tried). `purpose` is used by the raw scheme only; a passkey's challenge is H.
+  function verifySignature(sig, key, hashBytes, purpose) {
+    if (!sig || typeof sig !== 'object' || !key) return Promise.resolve(false);
+    var phone = key.kind === 'phone';
+    if (phone !== (sig.scheme === RAW_SCHEME)) return Promise.resolve(false);
+    return phone ? verifyRaw(sig, key.jwk, hashBytes, purpose) : verifyAssertion(sig, key.jwk, hashBytes, 'webauthn.get');
+  }
+
+  // A key entry as a log may carry it. `kind` is optional for logs made before phones existed, but when present it must be known.
+  function keyEntryError(key) {
+    if (!key || typeof key.id !== 'string' || !isPublicEcJwk(key.jwk)) return 'malformed key';
+    if (key.kind !== undefined && KEY_KINDS.indexOf(key.kind) < 0) return 'unknown key kind';
+    return null;
+  }
+
   // A P-256 public key as a JWK, with no private member: the only kind a log may carry (authority keys and device keys).
   function isPublicEcJwk(j) {
     return !!j && j.kty === 'EC' && j.crv === 'P-256' && typeof j.x === 'string' && typeof j.y === 'string' && j.d === undefined;
@@ -168,6 +217,7 @@
       var devOk = Array.isArray(st.devices) && st.devices.every(function (d) { return d && typeof d.id === 'string' && isPublicEcJwk(d.jwk); });
       if (!devOk) return Promise.resolve(fail('state.devices is malformed'));
     }
+    if (auth.keys.some(keyEntryError)) return Promise.resolve(fail('state.authority has a malformed key'));
     var dkBytes;
     try { dkBytes = z32decode(disc.key); } catch (err) { return Promise.resolve(fail('discovery key is not z-base-32')); }
     if (dkBytes.length !== 32 || z32encode(dkBytes) !== disc.key) return Promise.resolve(fail('discovery key is not 32 bytes'));
@@ -180,7 +230,7 @@
           var k = auth.keys.filter(function (x) { return x.id === a.keyId; })[0];
           if (!k || seen[a.keyId]) return Promise.resolve(false);
           seen[a.keyId] = true;
-          return verifyAssertion(a, k.jwk, H, 'webauthn.get');
+          return verifySignature(a, k, H, 'inception');
         });
         return Promise.all(checks).then(function (rs) {
           var good = rs.filter(Boolean).length;
@@ -215,6 +265,17 @@
     });
   }
 
+  // A device key delegated by the authority that already exists, with no new authority key: one phone key serves many computers,
+  // and linking another computer to a phone-held identity must not mint a second phone key. Signed like add-authority, minus the
+  // new key's own signature (there is none):
+  //   { v: 1, type: 'add-device', seq: n, prev, time, add: { device: { id, jwk, addedAt } } }
+  //   sigs: { authority: [ { keyId, ...signature } ] }
+  function addDeviceEvent(prevEvent, device, time) {
+    return eventHash(prevEvent).then(function (h) {
+      return { v: 1, type: 'add-device', seq: prevEvent.seq + 1, prev: b64u(h), time: time || new Date().toISOString(), add: { device: device } };
+    });
+  }
+
   // `log` is { inception, sigs, events: [ { event, sigs } ] }. Verifies the inception, then each event in order, and
   // resolves to { ok, did, state, error?, failedAt? } where `state` is the authority and device lists after the last event
   // (the inception's `state` with the additions folded in). A caller that was GIVEN a DID passes it as `expectDid`.
@@ -230,13 +291,16 @@
     for (var i = 0; i < events.length; i++) {
       var e = events[i] && events[i].event, sigs = events[i] && events[i].sigs, at = i + 1;
       if (!e || !sigs) return fail('event ' + at + ' has no signatures', at);
-      if (e.v !== 1 || e.type !== 'add-authority') return fail('event ' + at + ' is not a known event', at);
+      if (e.v !== 1 || (e.type !== 'add-authority' && e.type !== 'add-device')) return fail('event ' + at + ' is not a known event', at);
       if (e.seq !== lastSeq + 1) return fail('event ' + at + ' does not follow the last event (seq)', at);
       var lastHash = b64u(await eventHash(last));
       if (e.prev !== lastHash) return fail('event ' + at + ' does not point at the last event (prev)', at);
-      var key = e.add && e.add.key, dev = e.add && e.add.device;
-      if (!key || typeof key.id !== 'string' || !isPublicEcJwk(key.jwk)) return fail('event ' + at + ' adds a malformed key', at);
-      if (st.authority.keys.some(function (k) { return k.id === key.id; }) || (st.revoked || []).indexOf(key.id) >= 0) return fail('event ' + at + ' adds a key the identity already has or revoked', at);
+      var addAuth = e.type === 'add-authority';
+      var key = addAuth ? e.add && e.add.key : null, dev = e.add && e.add.device;
+      if (addAuth) {
+        if (keyEntryError(key)) return fail('event ' + at + ' adds a malformed key', at);
+        if (st.authority.keys.some(function (k) { return k.id === key.id; }) || (st.revoked || []).indexOf(key.id) >= 0) return fail('event ' + at + ' adds a key the identity already has or revoked', at);
+      } else if (!dev) return fail('event ' + at + ' adds no device', at);
       if (dev !== undefined && (!dev || typeof dev.id !== 'string' || !isPublicEcJwk(dev.jwk))) return fail('event ' + at + ' adds a malformed device', at);
       if (dev && st.devices.some(function (d) { return d.id === dev.id; })) return fail('event ' + at + ' adds a device the identity already has', at);
       var H = await eventHash(e);
@@ -246,13 +310,15 @@
         var a = list[j], k = st.authority.keys.filter(function (x) { return x.id === (a && a.keyId); })[0];
         if (!k || seen[a.keyId]) continue;
         seen[a.keyId] = true;
-        if (await verifyAssertion(a, k.jwk, H, 'webauthn.get')) good++;
+        if (await verifySignature(a, k, H, e.type)) good++;
       }
       if (good < st.authority.threshold) return fail('event ' + at + ': only ' + good + ' of ' + st.authority.threshold + ' required authority signatures verify', at);
-      // the new key must prove it is held by whoever is adding it
-      var nk = sigs.newKey;
-      if (!nk || nk.keyId !== key.id || !(await verifyAssertion(nk, key.jwk, H, 'webauthn.get'))) return fail('event ' + at + ': the new key did not sign', at);
-      st.authority.keys.push(key);
+      if (addAuth) {
+        // the new key must prove it is held by whoever is adding it
+        var nk = sigs.newKey;
+        if (!nk || nk.keyId !== key.id || !(await verifySignature(nk, key, H, e.type))) return fail('event ' + at + ': the new key did not sign', at);
+        st.authority.keys.push(key);
+      }
       if (dev) st.devices.push(dev);
       last = e; lastSeq = e.seq;
     }
@@ -260,7 +326,8 @@
   }
 
   return {
-    addAuthorityEvent: addAuthorityEvent, verifyLog: verifyLog, isPublicEcJwk: isPublicEcJwk,
+    addAuthorityEvent: addAuthorityEvent, addDeviceEvent: addDeviceEvent, verifyLog: verifyLog, isPublicEcJwk: isPublicEcJwk,
+    verifySignature: verifySignature, rawMessage: rawMessage, RAW_SCHEME: RAW_SCHEME, PURPOSES: PURPOSES, KEY_KINDS: KEY_KINDS,
     b64u: b64u, unb64u: unb64u, z32encode: z32encode, z32decode: z32decode,
     canonicalJson: canonicalJson, sha256: sha256, eventHash: eventHash,
     didFor: didFor, parseDid: parseDid,

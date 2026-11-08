@@ -182,5 +182,104 @@ async function makeAssertion(privateKey, challengeBytes, type) {
   const withTwo = JSON.parse(JSON.stringify(good)); withTwo.inception.state.authority.threshold = 2;
   ok('verifyInception is untouched by all of this (a threshold the lone key cannot meet still fails)', (await kd.verifyInception(withTwo)).ok === false);
 
+  // ---- the phone: a key that signs raw, domain-separated messages instead of WebAuthn assertions
+  // The software "phone" below builds the signed message WITHOUT keo-did's rawMessage, from the written rule, so a drift in the
+  // verifier and in this file cannot hide each other: a phone app has to reproduce the same bytes.
+  const rawMsg = (purpose, h) => Buffer.concat([Buffer.from('keo/authority/v1'), Buffer.from([0]), Buffer.from(purpose), Buffer.from([0]), Buffer.from(h)]);
+  const phoneSign = async (keyId, pair, purpose, h) => ({ keyId, scheme: 'p256-raw', signature: kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, rawMsg(purpose, h)))) });
+  const mkPhone = async () => { const m = await mkKey('phone'); m.entry.kind = 'phone'; delete m.entry.rpId; return m; };
+  ok('rawMessage is the label, a zero, the purpose, a zero, then the hash', Buffer.from(kd.rawMessage('session', H)).equals(rawMsg('session', H)));
+  ok('the four purposes are the ones the log and the certificate use', kd.PURPOSES.join() === 'inception,add-authority,add-device,session');
+
+  // an identity whose ONLY authority is a phone (allowed: a lost phone is then a lost identity unless a second way back exists)
+  const ph = await mkPhone();
+  const incP = JSON.parse(JSON.stringify(inception)); incP.state.authority = { threshold: 1, keys: [ph.entry] };
+  const HP = await kd.eventHash(incP);
+  const goodP = { inception: incP, sigs: { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, HP)), authority: [await phoneSign(ph.entry.id, ph.pair, 'inception', HP)] } };
+  const vP = await kd.verifyInception(goodP);
+  ok('an inception signed only by a phone key verifies', vP.ok === true && vP.did === kd.didFor(disc.publicZ32, kd.b64u(HP)), JSON.stringify(vP));
+  const inceptionBad = async (name, sig) => ok(name, (await kd.verifyInception({ inception: incP, sigs: { discovery: goodP.sigs.discovery, authority: [sig] } })).ok === false);
+  await inceptionBad('a phone signature made for another purpose is rejected', await phoneSign(ph.entry.id, ph.pair, 'session', HP));
+  await inceptionBad('a phone signature over another hash is rejected', await phoneSign(ph.entry.id, ph.pair, 'inception', H));
+  await inceptionBad('a phone signature by a stranger is rejected', await phoneSign(ph.entry.id, stranger, 'inception', HP));
+  await inceptionBad('a bare signature over the hash (no label, no purpose) is rejected', { keyId: ph.entry.id, scheme: 'p256-raw', signature: kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, ph.pair.privateKey, HP))) });
+  const noSeparator = Buffer.concat([Buffer.from('keo/authority/v1'), Buffer.from([0]), Buffer.from('inception'), Buffer.from(HP)]);
+  await inceptionBad('a message without the zero between the purpose and the hash is rejected', { keyId: ph.entry.id, scheme: 'p256-raw', signature: kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, ph.pair.privateKey, noSeparator))) });
+  await inceptionBad('a DER-encoded signature is rejected, only r||s is accepted', { keyId: ph.entry.id, scheme: 'p256-raw', signature: kd.b64u(rawToDer(kd.unb64u((await phoneSign(ph.entry.id, ph.pair, 'inception', HP)).signature))) });
+  await inceptionBad('a signature with no scheme is not read as raw', Object.assign({}, await phoneSign(ph.entry.id, ph.pair, 'inception', HP), { scheme: undefined }));
+  await inceptionBad('an unknown scheme is rejected', Object.assign({}, await phoneSign(ph.entry.id, ph.pair, 'inception', HP), { scheme: 'p384-raw' }));
+  await inceptionBad('a raw signature for a key that is not listed is rejected', await phoneSign('nobody', ph.pair, 'inception', HP));
+  // the kind decides the scheme, in both directions
+  await inceptionBad('a WebAuthn assertion cannot stand in for a phone key', Object.assign({ keyId: ph.entry.id }, await makeAssertion(ph.pair.privateKey, HP)));
+  const rawForPasskey = async () => { const r = JSON.parse(JSON.stringify(good)); r.sigs.authority = [await phoneSign(keyId, authPair, 'inception', H)]; return r; };
+  ok('a raw signature cannot stand in for a passkey', (await kd.verifyInception(await rawForPasskey())).ok === false);
+  const kindOf = async (kind) => { const e = JSON.parse(JSON.stringify(inception)); e.state.authority.keys[0].kind = kind; const He = await kd.eventHash(e); return { inception: e, sigs: { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, He)), authority: [Object.assign({ keyId }, await makeAssertion(authPair.privateKey, He))] } }; };
+  ok('a key kind of "security-key" is accepted', (await kd.verifyInception(await kindOf('security-key'))).ok === true);
+  ok('an unknown key kind is rejected', (await kd.verifyInception(await kindOf('tpm'))).ok === false);
+  ok('a key with no kind (a log made before phones) still verifies', (await kd.verifyInception(await kindOf(undefined))).ok === true);
+
+  // a phone is added to an identity that has a passkey, and the passkey can then be left out
+  const logP = (events) => ({ inception: good.inception, sigs: good.sigs, events });
+  const phoneEvent = async (prev, key, device) => kd.addAuthorityEvent(prev, key.entry, device);
+  const eP = await phoneEvent(good.inception, ph);
+  const signAdd = async (e, oldSigners, newKey, newPair) => { const He = await kd.eventHash(e); return { event: e, sigs: { authority: oldSigners, newKey: newKey } , He }; };
+  let sAdd = await signAdd(eP);
+  sAdd.sigs.authority = [Object.assign({ keyId }, await makeAssertion(authPair.privateKey, sAdd.He))];
+  sAdd.sigs.newKey = await phoneSign(ph.entry.id, ph.pair, 'add-authority', sAdd.He);
+  r = await kd.verifyLog(logP([{ event: sAdd.event, sigs: sAdd.sigs }]));
+  ok('a passkey identity adds a phone: the passkey signs, the phone signs for itself', r.ok === true && r.state.authority.keys.length === 2 && r.state.authority.keys[1].kind === 'phone', JSON.stringify(r));
+  const badNew = JSON.parse(JSON.stringify(sAdd.sigs)); badNew.newKey = await phoneSign(ph.entry.id, ph.pair, 'session', sAdd.He);
+  r = await kd.verifyLog(logP([{ event: sAdd.event, sigs: badNew }]));
+  ok('a phone that signed for the wrong purpose does not count as having signed', r.ok === false && r.failedAt === 1, JSON.stringify(r));
+  const badNew2 = JSON.parse(JSON.stringify(sAdd.sigs)); badNew2.newKey = Object.assign({ keyId: ph.entry.id }, await makeAssertion(ph.pair.privateKey, sAdd.He));
+  r = await kd.verifyLog(logP([{ event: sAdd.event, sigs: badNew2 }]));
+  ok('a new phone key cannot prove itself with a WebAuthn assertion', r.ok === false && r.failedAt === 1);
+
+  // the phone, as the only authority, adds a second phone and a computer
+  const ph2 = await mkPhone();
+  const eP2 = await kd.addAuthorityEvent(incP, ph2.entry);
+  const HP2 = await kd.eventHash(eP2);
+  const sP2 = { event: eP2, sigs: { authority: [await phoneSign(ph.entry.id, ph.pair, 'add-authority', HP2)], newKey: await phoneSign(ph2.entry.id, ph2.pair, 'add-authority', HP2) } };
+  const logPhone = (events) => ({ inception: incP, sigs: goodP.sigs, events });
+  r = await kd.verifyLog(logPhone([sP2]));
+  ok('a phone that is the only authority adds a second phone', r.ok === true && r.state.authority.keys.length === 2, JSON.stringify(r));
+  const sP2bad = JSON.parse(JSON.stringify(sP2)); sP2bad.sigs.authority = [await phoneSign(ph.entry.id, ph.pair, 'add-device', HP2)];
+  r = await kd.verifyLog(logPhone([sP2bad]));
+  ok('the existing phone\'s signature for another purpose does not authorise adding a key', r.ok === false && r.failedAt === 1);
+
+  // ---- add-device: a computer's key delegated by an existing authority, no new authority key
+  const eD = await kd.addDeviceEvent(incP, dev2);
+  const HD = await kd.eventHash(eD);
+  const sD = { event: eD, sigs: { authority: [await phoneSign(ph.entry.id, ph.pair, 'add-device', HD)] } };
+  ok('an add-device event is typed, numbered and chained', eD.type === 'add-device' && eD.seq === 1 && eD.prev === kd.b64u(HP) && eD.add.device.id === dev2.id && eD.add.key === undefined);
+  r = await kd.verifyLog(logPhone([sD]));
+  ok('a computer is added to a phone identity by the phone alone', r.ok === true && r.state.devices.length === 1 && r.state.authority.keys.length === 1 && r.seq === 1, JSON.stringify(r));
+  ok('the DID does not change when a computer is added', r.did === kd.didFor(disc.publicZ32, kd.b64u(HP)));
+  const badD = async (name, entry, at) => { const x = await kd.verifyLog(logPhone(entry)); ok(name, x.ok === false && x.failedAt === (at || 1), JSON.stringify(x)); };
+  await badD('an add-device event signed for the add-authority purpose is rejected', [{ event: eD, sigs: { authority: [await phoneSign(ph.entry.id, ph.pair, 'add-authority', HD)] } }]);
+  await badD('an add-device event with no signature is rejected', [{ event: eD, sigs: { authority: [] } }]);
+  await badD('an add-device event signed by a stranger is rejected', [{ event: eD, sigs: { authority: [await phoneSign(ph.entry.id, stranger, 'add-device', HD)] } }]);
+  await badD('an add-device event whose device was swapped after signing is rejected', [tamper(sD, (c) => { c.event.add.device.jwk = k3.entry.jwk; })]);
+  await badD('an add-device event with no device is rejected', [await (async () => { const e = Object.assign({}, eD, { add: {} }); const He = await kd.eventHash(e); return { event: e, sigs: { authority: [await phoneSign(ph.entry.id, ph.pair, 'add-device', He)] } }; })()]);
+  r = await kd.verifyLog(logPhone([await (async () => { const e = Object.assign({}, eD, { add: { device: dev2, key: ph2.entry } }); const He = await kd.eventHash(e); return { event: e, sigs: { authority: [await phoneSign(ph.entry.id, ph.pair, 'add-device', He)] } }; })()]));
+  ok('a key smuggled into an add-device event is ignored, never added', r.ok === true && r.state.authority.keys.length === 1, JSON.stringify(r));
+  const eD2 = await kd.addDeviceEvent(eD, dev2); const HD2 = await kd.eventHash(eD2);
+  await badD('adding the same device twice is rejected', [sD, { event: eD2, sigs: { authority: [await phoneSign(ph.entry.id, ph.pair, 'add-device', HD2)] } }], 2);
+  await badD('an add-device event cannot fork the chain (it must extend the last event)', [sD, await (async () => { const e = await kd.addDeviceEvent(incP, Object.assign({}, dev2, { id: 'other' })); const He = await kd.eventHash(e); return { event: e, sigs: { authority: [await phoneSign(ph.entry.id, ph.pair, 'add-device', He)] } }; })()], 2);
+  // add-device also works for a passkey identity (WebAuthn signatures, challenge = H(e))
+  const eDw = await kd.addDeviceEvent(good.inception, dev2);
+  r = await kd.verifyLog(logP([{ event: eDw, sigs: { authority: [Object.assign({ keyId }, await makeAssertion(authPair.privateKey, await kd.eventHash(eDw)))] } }]));
+  ok('add-device with a passkey signature verifies too', r.ok === true && r.state.devices.length === 1 && r.state.authority.keys.length === 1, JSON.stringify(r));
+  // the event type is part of what a raw signature covers, so an add-device signature cannot be turned into an add-authority one
+  const eSwap = Object.assign({}, eD, { type: 'add-authority' });
+  await badD('an add-device event cannot be relabelled as add-authority', [{ event: eSwap, sigs: sD.sigs }]);
+  // a threshold of two with one passkey and one phone
+  const inc3 = JSON.parse(JSON.stringify(inception)); inc3.state.authority = { threshold: 2, keys: [inception.state.authority.keys[0], ph.entry] };
+  const H3 = await kd.eventHash(inc3);
+  const mixed = { inception: inc3, sigs: { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, H3)), authority: [Object.assign({ keyId }, await makeAssertion(authPair.privateKey, H3)), await phoneSign(ph.entry.id, ph.pair, 'inception', H3)] } };
+  ok('an identity that needs a passkey AND a phone verifies with both', (await kd.verifyInception(mixed)).ok === true);
+  const onlyOne = JSON.parse(JSON.stringify(mixed)); onlyOne.sigs.authority.pop();
+  ok('and not with the passkey alone', (await kd.verifyInception(onlyOne)).ok === false);
+
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error(e); process.exit(1); });
