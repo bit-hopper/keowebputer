@@ -43,7 +43,15 @@
     var m = /^did:keo:[^:]+:([A-Za-z0-9_-]{43})$/.exec(String(did));
     return m ? 'keo:' + m[1].slice(0, 4) + '…' + m[1].slice(-4) : String(did).slice(0, 24);
   }
-  function peerView(c) { var p = c.h.peer; return p ? { did: p.did, name: p.name || null } : null; }
+  // What to call the other side: the name it chose to show on this connection, else the name saved when it was added as a friend (a connection
+  // made by dialing carries no name, and calls are friends-only, so the book has one), else nothing. Text a device chose: for showing, never for deciding.
+  function nameOf(c) {
+    var p = c.h.peer;
+    if (!p) return null;
+    if (p.name) return p.name;
+    try { var f = window.keoContacts && window.keoContacts.get(p.did); return (f && f.name) || null; } catch (e) { return null; }
+  }
+  function peerView(c) { var p = c.h.peer; return p ? { did: p.did, name: nameOf(c) } : null; }
 
   // ---- what the world is told -----------------------------------------------------------------------------------------
   function view(c) {
@@ -94,7 +102,7 @@
     return ['hang'];
   }
   function statusText(c) {
-    var n = (c.h.peer && c.h.peer.name) || 'this device';
+    var n = nameOf(c) || 'this device';
     if (c.dir === 'out' && c.state === 'confirming') return (c.audioOnly ? 'Audio call ' : 'Call ') + n + '?';
     if (c.state === 'starting') return 'Starting…';
     if (c.state === 'ringing') return 'Calling…';
@@ -108,7 +116,7 @@
     if (!c) { if (ui) { ui.root.hidden = true; ui.remote.srcObject = null; ui.self.srcObject = null; } return; }
     var u = build(), p = c.h.peer;
     // The name is whatever the peer chose to show (text only); the picture and short DID are the proven identity's.
-    u.name.textContent = (p && p.name) || 'Unnamed device';
+    u.name.textContent = nameOf(c) || 'Unnamed device';
     u.did.textContent = p ? shortDid(p.did) : '';
     u.did.title = p ? p.did : '';
     if (u.shownDid !== (p && p.did)) {
