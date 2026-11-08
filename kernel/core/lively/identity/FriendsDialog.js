@@ -225,7 +225,7 @@ module("lively.identity.FriendsDialog")
             y += 30;
             var anyHere = friends && friends.some(function (f) { return (net.found || []).some(function (x) { return x.did === f.did; }); });
             var hint = net.note || (friends && friends.length && !anyHere && !Object.keys(d.conns).length
-              ? "None of your friends was found on this network. They need the app open, signed in and visible, on the same network. Some guest networks block this." : "");
+              ? "None of your friends were found on this network. They need the app open, signed in and visible, on the same network. Some guest networks block this." : "");
             if (hint) { text(hint, 38, { size: 8, color: Color.rgb(110, 110, 110), name: "lanHint" }); y += 42; }
           }
           y += 4;
