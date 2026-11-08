@@ -9,6 +9,10 @@
  *
  * It never shows the other device's words: the point of the check is that the person types what the other person says.
  *
+ * In the desktop app a friend on the same network is found by their key: the row says so and has a Connect button that connects
+ * with no codes passed (LocalIdentity.lanDial), and one line says whether this webputer is visible to friends on the network, with a
+ * button to change it. Elsewhere (the extension) the shell reports the network as unavailable and none of that is drawn.
+ *
  * Async convention: thenDo(err, result) throughout. The list is read again whenever the shell reports a change.
  *
  * Dependencies:
@@ -59,9 +63,10 @@ module("lively.identity.FriendsDialog")
         var self = this, li = lively.identity.localIdentity;
         this._ensureAccentChromeCss();
         this.addStyleClassName("identity-accent-chrome");
-        this._d = { friends: null, words: null, conns: {}, status: null };
+        this._d = { friends: null, words: null, conns: {}, status: null, lan: null, dialing: {}, waitingFor: null };
         this._stops = [
           li.onFriendEvent(function () { self.refresh(); }),
+          li.onLanEvent(function () { self.refresh(); }),
           li.onPeerEvent(function (ev) { if (ev.type === "state" || ev.type === "friendship") self.refresh(); }),
         ];
         this.render();
@@ -89,19 +94,23 @@ module("lively.identity.FriendsDialog")
 
       // ─── data ───────────────────────────────────────────────────────────────────
 
-      // Reads the three things the window shows, then draws. A late answer for a window that is gone is dropped.
+      // Reads the four things the window shows, then draws. A late answer for a window that is gone is dropped.
       refresh: function refresh() {
         var self = this, li = lively.identity.localIdentity, d = this._d;
         if (!d || !li.isAvailable()) return;
-        var left = 3;
+        var left = 4;
         function got() { if (--left === 0 && self.world()) self.render(); }
         li.friendList(function (err, list) { d.friends = err ? [] : (list || []); if (err) self.setStatus("Could not read your friends: " + (err.message || err), true); got(); });
         li.friendWords(function (err, w) { d.words = err ? null : w; got(); });
         li.peerList(function (err, conns) {
           d.conns = {};
           (conns || []).forEach(function (c) { if (c.state === "ready" && c.peer) d.conns[c.peer.did] = c; });
+          // a connection asked for here is up: the sentence that said it was being made is done
+          if (d.waitingFor && d.conns[d.waitingFor]) { d.waitingFor = null; d.status = null; }
           got();
         });
+        // An older shell has no network op: that reads as "not available", and nothing about the network is drawn.
+        li.lanStatus(function (err, s) { d.lan = err || !s ? null : s; got(); });
       },
 
       // ─── drawing ────────────────────────────────────────────────────────────────
@@ -173,24 +182,44 @@ module("lively.identity.FriendsDialog")
           } else if (!friends.length) {
             text("No friends yet. Connect to a device, then choose Add as friend.", 36, { name: "emptyText" }); y += 40;
           } else {
+            var lan = d.lan && d.lan.available ? d.lan : null;
+            var seenOnNet = {};
+            if (lan) (lan.found || []).forEach(function (x) { seenOnNet[x.did] = true; });
             friends.slice(0, MAXROWS).forEach(function (f) {
-              var conn = d.conns[f.did], rowY = y;
+              var conn = d.conns[f.did], rowY = y, onNet = !!seenOnNet[f.did];
               var av = new lively.morphic.Image(lively.rect(pad, rowY, AV, AV));
               av.name = "friendAvatar";
               av.applyStyle({ borderRadius: AV / 2, borderWidth: 0, clipMode: "hidden" });
               av.setImageURL(lively.identity.postCardUtils.identiconDataUrl(f.did, AV));
               av.ignoreEvents();
               content.addMorph(av);
-              var nameT = text(f.name || "(showed no name)", 20, { x: pad + AV + 8, y: rowY - 2, w: w - AV - 8 - 160, size: 11, bold: true, name: "friendName" });
+              // room for a Connect button beside Message and Remove when the network is in use
+              var textW = w - AV - 8 - (lan ? 244 : 160);
+              var nameT = text(f.name || "(showed no name)", 20, { x: pad + AV + 8, y: rowY - 2, w: textW, size: 11, bold: true, name: "friendName" });
               nameT.friendDid = f.did;
-              var sub = local.shortDid(f.did) + (conn ? (conn.friend ? "   connected now, friends" : "   connected now, waiting for them to add you") : "   not connected");
-              var subT = text(sub, 18, { x: pad + AV + 8, y: rowY + 16, w: w - AV - 8 - 160, size: 8, color: Color.rgb(110, 110, 110), name: "friendDid" });
+              var sub = local.shortDid(f.did) + (conn ? (conn.friend ? "   connected now, friends" : "   connected now, waiting for them to add you")
+                : d.dialing[f.did] ? "   connecting …" : onNet ? "   on this network, not connected" : "   not connected");
+              var subT = text(sub, 18, { x: pad + AV + 8, y: rowY + 16, w: textW, size: 8, color: Color.rgb(110, 110, 110), name: "friendDid" });
               subT.friendDid = f.did;
+              if (lan && !conn && onNet) button(d.dialing[f.did] ? "Connecting…" : "Connect", "lanConnectBtn", pad + w - 232, 76, "main", "onLanConnect", "rowKey", f.did, rowY + 4);
               button("Message…", "messageBtn", pad + w - 150, 76, "plain", "onMessage", "rowKey", f.did, rowY + 4);
               button("Remove", "removeBtn", pad + w - 70, 70, "plain", "onRemove", "rowKey", f.did, rowY + 4);
               y += AV + 10;
             });
             if (friends.length > MAXROWS) { text("(" + (friends.length - MAXROWS) + " more not shown)", 20); y += 24; }
+          }
+          // The network, only where the app offers it. One line says whether this webputer announces itself to friends on the network,
+          // with the button to change it; one hint says why nobody was found when friends exist and none is on the network.
+          var net = d.lan && d.lan.available ? d.lan : null;
+          if (net) {
+            y += 2;
+            text(net.visible ? "This webputer is visible to friends on this network." : "This webputer is hidden from friends on this network.", 18, { w: w - 90, name: "lanVisibleText" });
+            button(net.visible ? "Hide" : "Show", "lanVisibleBtn", pad + w - 80, 80, "plain", "onLanVisible");
+            y += 30;
+            var anyHere = friends && friends.some(function (f) { return (net.found || []).some(function (x) { return x.did === f.did; }); });
+            var hint = net.note || (friends && friends.length && !anyHere && !Object.keys(d.conns).length
+              ? "None of your friends was found on this network. They need the app open, signed in and visible, on the same network. Some guest networks block this." : "");
+            if (hint) { text(hint, 38, { size: 8, color: Color.rgb(110, 110, 110), name: "lanHint" }); y += 42; }
           }
           y += 4;
           button("Connect a device…", "connectBtn", pad, 150, "main", "onConnect");
@@ -226,6 +255,35 @@ module("lively.identity.FriendsDialog")
           if (!self.world()) return;
           if (err) return self.setStatus(err.message || String(err), true);
           self.setStatus("Removed.");
+          self.refresh();
+        });
+      },
+
+      // Connects to a friend found on the network, with no code passed. The call resolves once the connection is being made; the
+      // peer events then say when it is up, and refresh() clears the sentence.
+      onLanConnect: function onLanConnect(did) {
+        var self = this, d = this._d;
+        if (!d || d.dialing[did]) return;
+        d.dialing[did] = true;
+        this.setStatus("Connecting to your friend on this network …");
+        this.render();
+        lively.identity.localIdentity.lanDial(did, function (err) {
+          var dd = self._d;
+          if (!dd) return;
+          delete dd.dialing[did];
+          if (err) { dd.waitingFor = null; self.setStatus(err.message || String(err), true); }
+          else dd.waitingFor = did;
+          if (self.world()) self.refresh();
+        });
+      },
+
+      // Shows or hides this webputer to friends on the network (kept with the identity by the shell).
+      onLanVisible: function onLanVisible() {
+        var self = this, d = this._d;
+        if (!d || !d.lan) return;
+        lively.identity.localIdentity.lanVisible(!d.lan.visible, function (err) {
+          if (!self.world()) return;
+          if (err) self.setStatus(err.message || String(err), true);
           self.refresh();
         });
       },

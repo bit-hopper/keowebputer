@@ -210,6 +210,21 @@ module("lively.identity.LocalIdentity")
         return window.keo.on("friend", fn);
       },
 
+      // ─── friends on the same network (shell/keo-lan.js; the desktop app only) ──────────────────────────────────
+      // In the desktop app a friend on the same network can be found and connected to by their key, with no codes passed. The world is
+      // given names, identities and a connection id: never an address, a code or a tag.
+      //   lanStatus()      -> { available, signedIn, visible, note, found: [{ did, name }] }   available is false outside the desktop app
+      //   lanVisible(on)   -> { visible }      whether this webputer announces itself to friends on the network (kept with the identity)
+      //   lanDial(did)     -> { id }           the connection to that friend; its progress arrives as peer events
+      //   onLanEvent(fn): { type: "found", found: [did] }   who of the friends is on the network changed
+      lanStatus: function lanStatus(thenDo) { this._run("lan.status", {}, 30000, thenDo); },
+      lanVisible: function lanVisible(on, thenDo) { this._run("lan.visible", { on: !!on }, 30000, thenDo || function () {}); },
+      lanDial: function lanDial(did, thenDo) { this._run("lan.dial", { did: did }, 120000, thenDo || function () {}); },
+      onLanEvent: function onLanEvent(fn) {
+        if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
+        return window.keo.on("lan", fn);
+      },
+
       // ─── calls (shell/keo-call.js) ──────────────────────────────────────────────
       // The world can only ASK. callStart puts a prompt in front of the person in the shell's own call panel (outside this frame);
       // nothing is captured until they click it there, and there is no way from here to accept, answer, move or hide anything.
