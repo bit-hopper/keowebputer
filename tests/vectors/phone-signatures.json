@@ -1,0 +1,195 @@
+{
+  "about": "Test vectors for the phone signature scheme p256-raw (see rawMessage in shell/keo-did.js). A phone app must (1) rebuild messageHex from purpose and hashHex, (2) verify signature over it with key.jwk (ECDSA P-256, SHA-256, signature = r||s, 64 bytes), (3) turn signatureDer into the same r||s, and (4) refuse every entry in \"wrong\". It must also sign each message itself and have shell/keo-did.js accept it (tests/keo-phone-vectors-test.js shows how). The hash is SHA-256 of \"canonical\", which is the subject with its signature members (\"sigs\" on an event, \"assertion\" on a certificate) left out; the subjects here carry none, so canonical is the whole subject.",
+  "message": "utf8(\"keo/authority/v1\") || 0x00 || utf8(purpose) || 0x00 || hash (32 bytes)",
+  "key": {
+    "id": "dmVjdG9yLXBob25lLWtleQ",
+    "jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "oxNsiHhCIgE9uj_UvgP7OIDfO5sFPoAR-drdRtctrww",
+      "y": "wb4AeOcJFZZ_v6pg_PufrKDyWxbzQRXPFuwCMEHPeEE"
+    },
+    "kind": "phone"
+  },
+  "cases": [
+    {
+      "name": "inception signed by the phone",
+      "purpose": "inception",
+      "subject": {
+        "v": 1,
+        "type": "inception",
+        "seq": 0,
+        "prev": null,
+        "time": "2026-01-01T00:00:00.000Z",
+        "state": {
+          "authority": {
+            "threshold": 1,
+            "keys": [
+              {
+                "id": "dmVjdG9yLXBob25lLWtleQ",
+                "jwk": {
+                  "kty": "EC",
+                  "crv": "P-256",
+                  "x": "oxNsiHhCIgE9uj_UvgP7OIDfO5sFPoAR-drdRtctrww",
+                  "y": "wb4AeOcJFZZ_v6pg_PufrKDyWxbzQRXPFuwCMEHPeEE"
+                },
+                "kind": "phone",
+                "addedAt": "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          },
+          "next": null,
+          "recovery": {
+            "guardians": [],
+            "threshold": 2,
+            "delayDays": 3
+          },
+          "discovery": {
+            "key": "yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy",
+            "version": 1
+          },
+          "services": [],
+          "claims": {
+            "handles": []
+          },
+          "revoked": []
+        }
+      },
+      "canonical": "{\"prev\":null,\"seq\":0,\"state\":{\"authority\":{\"keys\":[{\"addedAt\":\"2026-01-01T00:00:00.000Z\",\"id\":\"dmVjdG9yLXBob25lLWtleQ\",\"jwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"oxNsiHhCIgE9uj_UvgP7OIDfO5sFPoAR-drdRtctrww\",\"y\":\"wb4AeOcJFZZ_v6pg_PufrKDyWxbzQRXPFuwCMEHPeEE\"},\"kind\":\"phone\"}],\"threshold\":1},\"claims\":{\"handles\":[]},\"discovery\":{\"key\":\"yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy\",\"version\":1},\"next\":null,\"recovery\":{\"delayDays\":3,\"guardians\":[],\"threshold\":2},\"revoked\":[],\"services\":[]},\"time\":\"2026-01-01T00:00:00.000Z\",\"type\":\"inception\",\"v\":1}",
+      "hash": "3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI",
+      "hashHex": "dcf8f45d9dc4c81a81e18921247f2971aca5590b2c71eb6533d67b9ca458ad62",
+      "messageHex": "6b656f2f617574686f726974792f763100696e63657074696f6e00dcf8f45d9dc4c81a81e18921247f2971aca5590b2c71eb6533d67b9ca458ad62",
+      "signature": "bcXOQNC6rCmgsrVZ-7sfmDl4fnCvxG6QNQKGfJ8_m6DaLOASt4O6idhYEuCdoVQ4KODvqwtp92gI-ofYdVkrQg",
+      "signatureDer": "MEUCIG3FzkDQuqwpoLK1Wfu7H5g5eH5wr8RukDUChnyfP5ugAiEA2izgEreDuonYWBLgnaFUOCjg76sLafdoCPqH2HVZK0I",
+      "expect": true
+    },
+    {
+      "name": "add-authority signed by the existing phone",
+      "purpose": "add-authority",
+      "subject": {
+        "v": 1,
+        "type": "add-authority",
+        "seq": 1,
+        "prev": "3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI",
+        "time": "2026-01-01T00:00:00.000Z",
+        "add": {
+          "key": {
+            "id": "c2Vjb25kLXBob25l",
+            "jwk": {
+              "kty": "EC",
+              "crv": "P-256",
+              "x": "5A4QIK9j0ucGaWib_3_yXoRivJy-LebSL5JeEOPbTD0",
+              "y": "dd_wqsC9n1nADw5aE6OmjT4LkTeuES5jrCFXEtGmqQE"
+            },
+            "kind": "phone",
+            "addedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      },
+      "canonical": "{\"add\":{\"key\":{\"addedAt\":\"2026-01-01T00:00:00.000Z\",\"id\":\"c2Vjb25kLXBob25l\",\"jwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"5A4QIK9j0ucGaWib_3_yXoRivJy-LebSL5JeEOPbTD0\",\"y\":\"dd_wqsC9n1nADw5aE6OmjT4LkTeuES5jrCFXEtGmqQE\"},\"kind\":\"phone\"}},\"prev\":\"3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI\",\"seq\":1,\"time\":\"2026-01-01T00:00:00.000Z\",\"type\":\"add-authority\",\"v\":1}",
+      "hash": "dlijQC72u0n3P6m-rmFH4wO8Yave9mzOrPHfuK1XGRk",
+      "hashHex": "7658a3402ef6bb49f73fa9beae6147e303bc61abdef66cceacf1dfb8ad571919",
+      "messageHex": "6b656f2f617574686f726974792f7631006164642d617574686f72697479007658a3402ef6bb49f73fa9beae6147e303bc61abdef66cceacf1dfb8ad571919",
+      "signature": "d9xWy8IR0_HBmU3M2I5jtHfQokcSuoM5iIIS_xUjJmrEP3LqE947QGFfVqotlheXoSw3omZK48LBXPIhajid7A",
+      "signatureDer": "MEUCIHfcVsvCEdPxwZlNzNiOY7R30KJHErqDOYiCEv8VIyZqAiEAxD9y6hPeO0BhX1aqLZYXl6EsN6JmSuPCwVzyIWo4new",
+      "expect": true
+    },
+    {
+      "name": "add-device signed by the phone",
+      "purpose": "add-device",
+      "subject": {
+        "v": 1,
+        "type": "add-device",
+        "seq": 1,
+        "prev": "3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI",
+        "time": "2026-01-01T00:00:00.000Z",
+        "add": {
+          "device": {
+            "id": "dGVzdC1kZXZpY2U",
+            "jwk": {
+              "kty": "EC",
+              "crv": "P-256",
+              "x": "R3C_IBr3ciWuGvDsRMuwwed7da3DaguGQCaMDnzifJU",
+              "y": "rRYukEBhX6Z9BB1lBUqt6vg69YhtNnIMp3cC0XxoM3A"
+            },
+            "addedAt": "2026-01-01T00:00:00.000Z"
+          }
+        }
+      },
+      "canonical": "{\"add\":{\"device\":{\"addedAt\":\"2026-01-01T00:00:00.000Z\",\"id\":\"dGVzdC1kZXZpY2U\",\"jwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"R3C_IBr3ciWuGvDsRMuwwed7da3DaguGQCaMDnzifJU\",\"y\":\"rRYukEBhX6Z9BB1lBUqt6vg69YhtNnIMp3cC0XxoM3A\"}}},\"prev\":\"3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI\",\"seq\":1,\"time\":\"2026-01-01T00:00:00.000Z\",\"type\":\"add-device\",\"v\":1}",
+      "hash": "OSI6VOsMyaj_i0BG69aXF9380RqtZm_728c9npg0XOk",
+      "hashHex": "39223a54eb0cc9a8ff8b4046ebd69717ddfcd11aad666ffbdbc73d9e98345ce9",
+      "messageHex": "6b656f2f617574686f726974792f7631006164642d6465766963650039223a54eb0cc9a8ff8b4046ebd69717ddfcd11aad666ffbdbc73d9e98345ce9",
+      "signature": "vSFxeRVtcQSqsUBprXRnuXJB_CAJ4ycMQz-En04QjpCQolCdUmnJWKh4PloG43YNFVyrQ3cv4r3YFdC8PClgCA",
+      "signatureDer": "MEYCIQC9IXF5FW1xBKqxQGmtdGe5ckH8IAnjJwxDP4SfThCOkAIhAJCiUJ1SaclYqHg-Wgbjdg0VXKtDdy_ivdgV0Lw8KWAI",
+      "expect": true
+    },
+    {
+      "name": "session certificate signed by the phone",
+      "purpose": "session",
+      "subject": {
+        "v": 1,
+        "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI",
+        "devicePubKeyJwk": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "R3C_IBr3ciWuGvDsRMuwwed7da3DaguGQCaMDnzifJU",
+          "y": "rRYukEBhX6Z9BB1lBUqt6vg69YhtNnIMp3cC0XxoM3A"
+        },
+        "issuedAt": "2026-01-01T00:00:00.000Z",
+        "exp": "2026-01-01T12:00:00.000Z",
+        "aud": "chrome-extension://example",
+        "scope": [
+          "world:read",
+          "world:write",
+          "sign"
+        ],
+        "authorityKeyId": "dmVjdG9yLXBob25lLWtleQ"
+      },
+      "canonical": "{\"aud\":\"chrome-extension://example\",\"authorityKeyId\":\"dmVjdG9yLXBob25lLWtleQ\",\"devicePubKeyJwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"R3C_IBr3ciWuGvDsRMuwwed7da3DaguGQCaMDnzifJU\",\"y\":\"rRYukEBhX6Z9BB1lBUqt6vg69YhtNnIMp3cC0XxoM3A\"},\"did\":\"did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI\",\"exp\":\"2026-01-01T12:00:00.000Z\",\"issuedAt\":\"2026-01-01T00:00:00.000Z\",\"scope\":[\"world:read\",\"world:write\",\"sign\"],\"v\":1}",
+      "hash": "O2OT_IA_ViZ9uO_hrKOtZa4QuYMpaWkrn0wRETzy7Uk",
+      "hashHex": "3b6393fc803f56267db8efe1aca3ad65ae10b9832969692b9f4c11113cf2ed49",
+      "messageHex": "6b656f2f617574686f726974792f76310073657373696f6e003b6393fc803f56267db8efe1aca3ad65ae10b9832969692b9f4c11113cf2ed49",
+      "signature": "otsrCCKY-qlJmmf9Uzw3c4b5ccgRGbDk-4PXi7vI04asR7AkvcVyI8LfeMi9fmEIFG8tXAdQ_fDLPn8jyN-ZZw",
+      "signatureDer": "MEYCIQCi2ysIIpj6qUmaZ_1TPDdzhvlxyBEZsOT7g9eLu8jThgIhAKxHsCS9xXIjwt94yL1-YQgUby1cB1D98Ms-fyPI35ln",
+      "expect": true
+    }
+  ],
+  "wrong": [
+    {
+      "name": "a signature for the inception presented as a session signature",
+      "purpose": "session",
+      "hash": "3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI",
+      "signature": "bcXOQNC6rCmgsrVZ-7sfmDl4fnCvxG6QNQKGfJ8_m6DaLOASt4O6idhYEuCdoVQ4KODvqwtp92gI-ofYdVkrQg",
+      "expect": false
+    },
+    {
+      "name": "a signature for the session presented as an add-device signature",
+      "purpose": "add-device",
+      "hash": "O2OT_IA_ViZ9uO_hrKOtZa4QuYMpaWkrn0wRETzy7Uk",
+      "signature": "otsrCCKY-qlJmmf9Uzw3c4b5ccgRGbDk-4PXi7vI04asR7AkvcVyI8LfeMi9fmEIFG8tXAdQ_fDLPn8jyN-ZZw",
+      "expect": false
+    },
+    {
+      "name": "a signature over another hash",
+      "purpose": "inception",
+      "hash": "dlijQC72u0n3P6m-rmFH4wO8Yave9mzOrPHfuK1XGRk",
+      "signature": "bcXOQNC6rCmgsrVZ-7sfmDl4fnCvxG6QNQKGfJ8_m6DaLOASt4O6idhYEuCdoVQ4KODvqwtp92gI-ofYdVkrQg",
+      "expect": false
+    },
+    {
+      "name": "the DER form of a valid signature (only 64-byte r||s is accepted)",
+      "purpose": "inception",
+      "hash": "3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI",
+      "signature": "MEUCIG3FzkDQuqwpoLK1Wfu7H5g5eH5wr8RukDUChnyfP5ugAiEA2izgEreDuonYWBLgnaFUOCjg76sLafdoCPqH2HVZK0I",
+      "expect": false
+    },
+    {
+      "name": "a purpose that is not one of the four",
+      "purpose": "inception ",
+      "hash": "3Pj0XZ3EyBqB4YkhJH8pcaylWQsscetlM9Z7nKRYrWI",
+      "signature": "bcXOQNC6rCmgsrVZ-7sfmDl4fnCvxG6QNQKGfJ8_m6DaLOASt4O6idhYEuCdoVQ4KODvqwtp92gI-ofYdVkrQg",
+      "expect": false
+    }
+  ]
+}
