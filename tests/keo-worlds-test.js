@@ -65,6 +65,16 @@ const names = (l) => l.map((w) => w.name).sort();
     check('create: a name that is taken is refused, and nothing was replaced', !taken.ok && /already exists/.test(taken.e) && (await keoCall(frame, 'world.list')).r.length === 1, taken);
     check('create: has() says so', (await keoCall(frame, 'world.has', { name: 'Alpha notes' })).r === true && (await keoCall(frame, 'world.has', { name: 'Nope' })).r === false);
 
+    // the identity's small settings: only the names the shell allows, each with the right kind of value (lanVisible: visible to friends on the network)
+    const pSet = await keoCall(frame, 'prefs.set', { key: 'lanVisible', value: false });
+    const pGet = await keoCall(frame, 'prefs.get');
+    check('settings: lanVisible keeps true or false and reads it back', pSet.ok && pGet.ok && pGet.r.lanVisible === false, { pSet, pGet });
+    const pWord = await keoCall(frame, 'prefs.set', { key: 'lanVisible', value: 'yes' });
+    const pNull = await keoCall(frame, 'prefs.set', { key: 'lanVisible', value: null });
+    const pOther = await keoCall(frame, 'prefs.set', { key: 'somethingElse', value: true });
+    check('settings: a word instead of true or false, null, and a name that is not allowed are all refused', !pWord.ok && !pNull.ok && !pOther.ok && /Not a setting/.test(pWord.e) && /Not a setting/.test(pOther.e), { pWord, pNull, pOther });
+    check('settings: and a refused value left the kept one alone', (await keoCall(frame, 'prefs.get')).r.lanVisible === false);
+
     // ---- 2. text typed into the world is what the runtime writes, and it is found
     await frame.evaluate(() => { const t = new lively.morphic.Text(lively.rect(30, 90, 260, 40), 'Pineapple fritters for the picnic'); t.setName('picnic-list'); $world.addMorph(t); });
     const saved = await frame.evaluate(() => new Promise((res) => $world.saveWorld((e) => res(e ? { err: e.message } : { ok: true }))));

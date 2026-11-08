@@ -170,6 +170,12 @@
     'friend.list': function () { return window.keoFriend.list(); },
     'friend.words': function () { return window.keoFriend.myWords(); },
     'friend.remove': function (a) { return window.keoFriend.remove({ did: a.did }); },
+    // Friends on the local network (keo-lan.js), in the desktop app: who of the friends is on this network, whether this device is
+    // visible to them, and a dial to one of them (the ordinary connection, its two codes carried over the network). The world gets
+    // names and DIDs and a connection id, never an address, a tag or a code. Elsewhere `available` is false and a dial is refused.
+    'lan.status': function () { return window.keoLan.status(); },
+    'lan.visible': function (a) { return window.keoLan.setVisible({ on: a.on }); },
+    'lan.dial': function (a) { return window.keoLan.dial({ did: a.did }); },
     // Adding an identity to a second device (keo-enroll.js). The world can only ASK for the dialog, naming which side it is: 'new' (this
     // device wants an identity) or 'old' (the identity signed in here is to be added to another device). The words, the codes and the
     // passkey prompt are all in this page's dialog; there is no op that fills it in, approves, or reads what is in it.
@@ -204,6 +210,7 @@
   window.keoCall.onEvent(function (data) { toWorld({ keo: 1, event: 'call', data: data }); });
   window.keoDm.onEvent(function (data) { toWorld({ keo: 1, event: 'dm', data: data }); });
   window.keoFriend.onEvent(function (data) { toWorld({ keo: 1, event: 'friend', data: data }); });
+  window.keoLan.onEvent(function (data) { toWorld({ keo: 1, event: 'lan', data: data }); });
   window.keoEnroll.onEvent(function (data) { toWorld({ keo: 1, event: 'enroll', data: data }); });
   window.keoTransfer.onEvent(function (data) { toWorld({ keo: 1, event: 'transfer', data: data }); });
   // The person asked, in the toolbar popup, to reconnect to a friend: {keo:1, event:'reconnect', data:{did, name}}. The world opens its
@@ -215,7 +222,7 @@
   // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
   // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
   // connections were proven with that identity's device key, and the next one to sign in must not inherit them.
-  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoEnroll.reset(); window.keoTransfer.reset(); window.keoContacts.clear(); });
+  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoLan.reset(); window.keoEnroll.reset(); window.keoTransfer.reset(); window.keoContacts.clear(); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;
