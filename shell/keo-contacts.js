@@ -1,7 +1,7 @@
 // keo friends, SHELL side: the devices the signed-in identity has checked and added, kept on THIS device, encrypted under that identity.
 // Runs in the extension's own page; the sandboxed world reaches it only through the bridge ops in shell.js (friend.*), which take plain
 // data and never see the key. It is laid out like the message history (keo-chatlog.js) and uses the same session key:
-//   IndexedDB `keo-contacts`: `book` (one record per identity, { did, iv, ct }). The plaintext is { people: { <peer DID>: { name, at, seen } } },
+//   IndexedDB `keo-contacts`: `book` (one record per identity, { did, iv, ct }). The plaintext is { people: { <peer DID>: { name, at, seen, devices } } },
 //   AES-GCM with the identity as additional data, so a record cannot be moved to another identity. What is readable without the key:
 //   the identity's DID, the size of the book and the order of writes. WHO the friends are is inside the encryption.
 //
@@ -65,7 +65,17 @@
     if (!PEER.test(v)) throw new Error('That is not a valid device identity.');
     return v;
   }
+  // This view goes out through the bridge to the sandboxed world (keo-friend.js list), so it must never hold an address: the cards a friend's
+  // devices sent (`devices` in the record) are read only by code in this page, through cards().
   function view(did, r) { return { did: did, name: r.name || '', at: r.at || '', seen: r.seen || '' }; }
+  // Where each of this friend's devices said it can be asked to connect (keo-hello.js mergeCard), newest card first. Signed text the friend's
+  // devices sent, kept so a call needs no new code swap: it can be out of date, and nothing here proves an address works. It is part of this
+  // device's book only (nothing syncs the book to the person's other devices yet). NEVER pass the result to the bridge or to the world.
+  function cards(did) {
+    var r = isAdded(did) ? mem.people[did] : null, d = (r && r.devices) || {};
+    return Object.keys(d).map(function (id) { return { deviceId: id, helpers: d[id].helpers, seq: d[id].seq, time: d[id].time }; })
+      .sort(function (a, b) { return b.time - a.time; });
+  }
 
   // Reads the book of the signed-in identity into memory (again if a different identity is signed in now).
   function ensure() {
@@ -99,7 +109,8 @@
       did = peerOf(did);
       var m = need(), before = m.people[did];
       if (!before && Object.keys(m.people).length >= MAX_PEOPLE) throw new Error('There are too many people in the list.');
-      var r = { name: String(name == null ? '' : name).slice(0, MAX_NAME) || (before && before.name) || '', at: (before && before.at) || new Date().toISOString() };
+      // Adding again keeps what the entry has learned since (the last time seen, the cards): only the name and the date are the add's own.
+      var r = Object.assign({}, before, { name: String(name == null ? '' : name).slice(0, MAX_NAME) || (before && before.name) || '', at: (before && before.at) || new Date().toISOString() });
       var people = Object.assign({}, m.people), old = m.people;
       people[did] = r;
       m.people = people;
@@ -127,6 +138,24 @@
       return true;
     }).catch(function () { return false; });
   }
+  // Keeps a card a friend's device sent. `card` is what keo-hello.js verifyCard resolved, and the caller has already checked it was made by
+  // THIS friend (verifyCard with { did }); this refuses anyone who is not added, so a card from a stranger is never kept. Resolves
+  // { changed } (false: an old or repeated card, nothing written), or throws when the write fails (the memory copy is put back).
+  function setCard(did, card) {
+    return serial(async function () {
+      did = peerOf(did);
+      var m = need(), r = m.people[did];
+      if (!r) throw new Error('That device is not in the list.');
+      if (!card || card.ok !== true || card.did !== did) throw new Error('That card is not from this friend.');
+      var out = window.keoHello.mergeCard(r.devices, card);
+      if (!out.changed) return { changed: false };
+      var people = Object.assign({}, m.people), old = m.people;
+      people[did] = Object.assign({}, r, { devices: out.devices });
+      m.people = people;
+      try { await write(); } catch (e) { m.people = old; throw e; }
+      return { changed: true };
+    });
+  }
   // Takes a device out of the list: it is no longer a friend.
   function remove(did) {
     return serial(async function () {
@@ -148,5 +177,5 @@
   // The session ended: nothing about the identity stays in memory for the next one to sign in.
   function clear() { mem = null; }
 
-  window.keoContacts = { ensure: ensure, isAdded: isAdded, get: get, add: add, seen: seen, list: list, remove: remove, purge: purge, clear: clear };
+  window.keoContacts = { ensure: ensure, isAdded: isAdded, get: get, add: add, seen: seen, setCard: setCard, cards: cards, list: list, remove: remove, purge: purge, clear: clear };
 })();

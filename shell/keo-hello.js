@@ -283,6 +283,102 @@
     }
   }
 
-  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, DIAL_AGE_MS: DIAL_AGE_MS, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
-    proofBuild: proofBuild, signedBytes: signedBytes, verifyProof: verifyProof, dialBuild: dialBuild, verifyDial: verifyDial };
+  // ---- the card -----------------------------------------------------------------------------------------------------------
+  // "Here is where my device can be asked to connect": a device's own statement of the helper addresses it can be reached through
+  // (a helper is a program at a stable address that carries the SETUP of a connection, never its media). It is signed by that device's
+  // key like a proof, so only a device of the identity can say where the identity's device is, and the signature does not depend on how the
+  // card reached anyone: a live connection, a code swap, a QR or a link all carry the same bytes. What a card is NOT: proof that the
+  // address works now (addresses go stale; a failed attempt is the only test), proof the helper is honest (a helper carries a signed
+  // request and the connection's own proof still decides who is at the other end), or a way to find a stranger (it is only ever shown
+  // to people who are friends). `seq` only moves forward, so an old card cannot roll an address back; mergeCard is the one rule for that.
+  // `time` says when it was made. It is not checked for age here, because a card is kept: the device certificate inside it (which is
+  // short-lived) decides whether the card could still be made today, and a stored card is NOT checked again.
+  var CARD_PURPOSE = 'keo-card', MAX_HELPERS = 4, MAX_CARD_DEVICES = 8, MAX_SEQ = 4294967295, HELPER_KINDS = ['ws', 'http'];
+  var LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+  // null when the helper is well formed, else a sentence. The host is a literal address or a lower-case name with a dot; nothing that can only
+  // mean "this machine" or "this network segment" (that cannot be a way in from elsewhere), and not a ".local" name (not found beyond one network).
+  function helperError(x) {
+    if (!x || typeof x !== 'object' || Array.isArray(x)) return 'a helper is not a record';
+    if (HELPER_KINDS.indexOf(x.kind) < 0) return 'a helper has an unknown kind';
+    if (typeof x.port !== 'number' || x.port % 1 !== 0 || x.port < 1 || x.port > 65535) return 'a helper has a bad port';
+    var h = x.host;
+    if (typeof h !== 'string' || !h || h.length > 253) return 'a helper has a bad host';
+    var v4 = ipv4ToBytes(h), v6 = v4 ? null : ipv6ToBytes(h);
+    if (v4) return usable(v4) && bytesToIpv4(v4) === h ? null : 'a helper has an address that cannot be reached from elsewhere';
+    if (v6) return usable(v6) && bytesToIpv6(v6) === h ? null : 'a helper has an address that cannot be reached from elsewhere';
+    var labels = h.split('.');
+    if (labels.length < 2 || labels[labels.length - 1] === 'local' || /^[0-9]+$/.test(labels[labels.length - 1]) || !labels.every(function (l) { return LABEL.test(l); })) return 'a helper has a bad host name';
+    return null;
+  }
+  function canonicalHost(h) {
+    var v4 = ipv4ToBytes(h), v6 = v4 ? null : ipv6ToBytes(h);
+    return v4 ? bytesToIpv4(v4) : v6 ? bytesToIpv6(v6) : h.toLowerCase();
+  }
+  function plainHelper(x) { return { kind: x.kind, host: x.host, port: x.port }; }
+
+  // `proof` is as for proofBuild; o: { helpers: [{ kind, host, port }], seq (a whole number, 1 or more), now }. Throws a sentence when the
+  // helpers are not valid, so a bad address is never signed. The caller signs signedBytes(result) with signWithDevice.
+  function cardBuild(proof, o) {
+    var helpers = o && o.helpers;
+    if (!Array.isArray(helpers) || helpers.length > MAX_HELPERS) throw new Error('A card holds at most ' + MAX_HELPERS + ' helpers.');
+    // The host is written the one way a verifier accepts (expanded IPv6, lower-case name), so a person's "2001:db8::7" is not refused.
+    helpers = helpers.map(function (x) { return x && typeof x === 'object' && typeof x.host === 'string' ? { kind: x.kind, host: canonicalHost(x.host), port: x.port } : x; });
+    for (var i = 0; i < helpers.length; i++) { var e = helperError(helpers[i]); if (e) throw new Error('That helper is not valid: ' + e + '.'); }
+    if (typeof o.seq !== 'number' || o.seq % 1 !== 0 || o.seq < 1 || o.seq > MAX_SEQ) throw new Error('A card needs a whole number to count its versions.');
+    var h = { v: 1, purpose: CARD_PURPOSE, seq: o.seq, helpers: helpers.map(plainHelper), time: new Date(o.now || Date.now()).toISOString(),
+      did: proof.did, inception: proof.inception, inceptionSigs: proof.sigs, cert: proof.cert };
+    if (proof.events && proof.events.length) h.events = proof.events;
+    return h;
+  }
+  // The id the identity's log gives a device key (keo-identity.js): the hash of the key in its canonical form.
+  async function deviceIdOf(jwk) { return kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson(plainJwk(jwk))))); }
+  // msg = { hello, sig }. opts: { did (the identity the card must be from, when the caller knows it: a card learned over a connection that
+  // proved a DID), now, audience }. Resolves { ok, error } or { ok, did, deviceId, helpers, seq, time }.
+  async function verifyCard(msg, opts) {
+    opts = opts || {};
+    var now = opts.now || Date.now(), h = msg && msg.hello;
+    function fail(m) { return { ok: false, error: m }; }
+    try {
+      if (!h || typeof h !== 'object' || typeof msg.sig !== 'string' || h.v !== 1 || h.purpose !== CARD_PURPOSE) return fail('That is not a keo card.');
+      if (opts.did && h.did !== opts.did) return fail('That card is from someone else.');
+      if (typeof h.seq !== 'number' || h.seq % 1 !== 0 || h.seq < 1 || h.seq > MAX_SEQ) return fail('That card has a bad version number.');
+      if (!Array.isArray(h.helpers) || h.helpers.length > MAX_HELPERS) return fail('That card has too many helpers.');
+      for (var i = 0; i < h.helpers.length; i++) {
+        var e = helperError(h.helpers[i]);
+        if (e) return fail('That card is not valid: ' + e + '.');
+        if (Object.keys(h.helpers[i]).length !== 3) return fail('That card is not valid: a helper has extra parts.');
+      }
+      var t = Date.parse(h.time);
+      if (!(t > 0)) return fail('That card has no valid date.');
+      if (t > now + SKEW_MS) return fail('That card is dated in the future (check the clock).');
+      var who = await signerError(msg, h, now, opts.audience);
+      if (who.error) return fail(who.error);
+      return { ok: true, did: h.did, deviceId: await deviceIdOf(h.cert.devicePubKeyJwk), helpers: h.helpers.map(plainHelper), seq: h.seq, time: t };
+    } catch (e) {
+      return fail('That card could not be checked.');
+    }
+  }
+  // The one rule for keeping cards. `devices` is what is kept for one friend: { <deviceId>: { helpers, seq, time } } (or null/undefined).
+  // `card` is what verifyCard resolved. A card replaces what is kept for that device only if its seq is HIGHER (a replay of the same or an
+  // older card changes nothing, which also means two different cards with one seq keep the first). At most MAX_CARD_DEVICES devices are kept:
+  // a new one over the limit pushes out the device whose card is the oldest. Returns { devices, changed } and never changes its arguments.
+  function mergeCard(devices, card) {
+    var out = {}, have = devices || {};
+    Object.keys(have).forEach(function (k) { out[k] = have[k]; });
+    var before = out[card.deviceId];
+    if (before && !(card.seq > before.seq)) return { devices: out, changed: false };
+    if (!before) {
+      var ids = Object.keys(out);
+      if (ids.length >= MAX_CARD_DEVICES) {
+        ids.sort(function (a, b) { return out[a].time - out[b].time; });
+        delete out[ids[0]];
+      }
+    }
+    out[card.deviceId] = { helpers: card.helpers.map(plainHelper), seq: card.seq, time: card.time };
+    return { devices: out, changed: true };
+  }
+
+  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, DIAL_AGE_MS: DIAL_AGE_MS, MAX_HELPERS: MAX_HELPERS, MAX_CARD_DEVICES: MAX_CARD_DEVICES, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
+    proofBuild: proofBuild, signedBytes: signedBytes, verifyProof: verifyProof, dialBuild: dialBuild, verifyDial: verifyDial,
+    helperError: helperError, cardBuild: cardBuild, verifyCard: verifyCard, mergeCard: mergeCard, deviceIdOf: deviceIdOf };
 });

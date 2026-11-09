@@ -289,5 +289,103 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await dRefused('events grafted onto another identity are refused', dialMsg(B, { to: A.did, edit: (h) => { h.events = A2.events; } }), { to: A.did }, /identity does not verify/);
   await dRefused('the added passkey\'s device without the events is refused', dialMsg(Object.assign({}, A2, { events: [] })), {}, /authority key/);
 
+  // ================================================================ the card (where a device can be asked to connect)
+  const HELP = [{ kind: 'ws', host: '203.0.113.9', port: 47431 }, { kind: 'http', host: 'home.example.org', port: 8443 }];
+  async function cardMsg(id, o) {
+    o = o || {};
+    const h = hello.cardBuild({ did: id.did, inception: id.inception, sigs: id.sigs, events: id.events, cert: id.cert }, { helpers: o.helpers || HELP, seq: o.seq || 1, now: o.now });
+    if (o.edit) o.edit(h);
+    const sig = kd.b64u(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, (o.signWith || id).device.privateKey, hello.signedBytes(h)));
+    const msg = JSON.parse(JSON.stringify({ hello: h, sig }));
+    if (o.after) o.after(msg);
+    return msg;
+  }
+  const cverify = (msg, o) => hello.verifyCard(msg, Object.assign({ audience: AUD }, o || {}));
+  const cRefused = async (name, msg, o, pattern) => { const r = await cverify(await msg, o); ok(name, r.ok === false && (!pattern || pattern.test(r.error)), r); };
+
+  const c1 = await cverify(await cardMsg(A, { seq: 3 }), { did: A.did });
+  ok('a card from a device listed in the inception verifies: the DID, the device id, the helpers, the version and the time come back',
+    c1.ok && c1.did === A.did && c1.deviceId === await hello.deviceIdOf(A.cert.devicePubKeyJwk) && JSON.stringify(c1.helpers) === JSON.stringify(HELP) && c1.seq === 3 && Math.abs(c1.time - Date.now()) < 5000, c1);
+  ok('the device id is the one the identity\'s log gives that device', c1.deviceId === A.inception.state.devices[0].id, c1.deviceId);
+  ok('a card from a device a later event lists, and one on an added passkey, verify under the same DID',
+    (await cverify(await cardMsg(A2))).did === A.did && (await cverify(await cardMsg(A3))).did === A.did);
+  ok('a card from a phone-only identity verifies', (await cverify(await cardMsg(P2))).did === P2.did);
+  ok('two devices of one identity have different device ids', (await cverify(await cardMsg(A2))).deviceId !== c1.deviceId);
+  ok('a card with no helpers is allowed (a device that can no longer be reached says so)', (await cverify(await cardMsg(A, { helpers: [], seq: 4 }))).helpers.length === 0);
+  ok('an IPv6 address a person writes short is accepted by the builder and carried in full form', JSON.stringify((await cverify(await cardMsg(A, { helpers: [{ kind: 'ws', host: '2001:DB8::7', port: 1234 }] }))).helpers) === JSON.stringify([{ kind: 'ws', host: '2001:db8:0:0:0:0:0:7', port: 1234 }]));
+  ok('a name written in capitals is carried in lower case', (await cverify(await cardMsg(A, { helpers: [{ kind: 'http', host: 'Home.Example.ORG', port: 80 }] }))).helpers[0].host === 'home.example.org');
+  ok('an address on a private network is allowed (a helper may be on the same network)', (await cverify(await cardMsg(A, { helpers: [{ kind: 'ws', host: '192.168.1.20', port: 47431 }] }))).ok === true);
+  ok('a card is not checked for age, only for the future: the certificate inside it decides', (await cverify(await cardMsg(A, { now: Date.now() - 3600e3 }))).ok === true);
+
+  await cRefused('a card from another identity than the one the caller expected is refused', cardMsg(A), { did: B.did }, /someone else/);
+  await cRefused('a changed helper fails the signature (an address cannot be swapped on the way)', cardMsg(A, { after: (m) => { m.hello.helpers[0].host = '203.0.113.66'; } }), {}, /signature/);
+  await cRefused('a changed version number fails the signature', cardMsg(A, { after: (m) => { m.hello.seq = 99; } }), {}, /signature/);
+  await cRefused('a card signed by another identity\'s device key fails', cardMsg(A, { signWith: B }), {}, /signature/);
+  await cRefused('a card dated in the future is refused', cardMsg(A, { now: Date.now() + 3600e3 }), {}, /future/);
+  await cRefused('a peer proof is not accepted as a card (the purposes differ)', proofMsg(A, 'offer', FPS), {}, /not a keo card/);
+  await cRefused('a dial request is not accepted as a card', dialMsg(A), {}, /not a keo card/);
+  ok('and a card is refused as a peer proof and as a dial request', (await verify(await cardMsg(A), 'offer')).ok === false && (await dverify(await cardMsg(A))).ok === false);
+  await cRefused('something that is not a card is refused without throwing', {}, {}, /not a keo card/);
+  await cRefused('a card for another app\'s origin is refused', cardMsg(await makeIdentity('signin', { aud: 'chrome-extension://other' })), {}, /another app/);
+  await cRefused('a card from an expired delegation is refused', cardMsg(await makeIdentity('signin', { now: Date.now() - 20e3, ttl: 5e3 })), {}, /expired/);
+  await cRefused('a certificate made for another identity is refused', cardMsg(A, { edit: (h) => { h.cert = B.cert; } }), {}, /not for this identity/);
+  await cRefused('a card with no identity at all is refused without throwing', cardMsg(A, { edit: (h) => { delete h.inception; delete h.inceptionSigs; delete h.cert; } }), {}, /identity|could not be checked/);
+  await cRefused('events grafted onto another identity are refused', cardMsg(B, { edit: (h) => { h.events = A2.events; } }), {}, /identity does not verify/);
+  await cRefused('the added passkey\'s device without the events is refused', cardMsg(Object.assign({}, A2, { events: [] })), {}, /authority key/);
+
+  // what a device that cheats could still sign: the checks are made on what the card SAYS, not only on the signature
+  const bad = (name, helpers, pattern) => cRefused(name, cardMsg(A, { edit: (h) => { h.helpers = helpers; } }), {}, pattern || /not valid/);
+  await bad('a helper on this machine itself is refused (loopback)', [{ kind: 'ws', host: '127.0.0.1', port: 1234 }]);
+  await bad('a helper at "any address" is refused', [{ kind: 'ws', host: '0.0.0.0', port: 1234 }]);
+  await bad('a helper at a link-local IPv6 address is refused', [{ kind: 'ws', host: 'fe80:0:0:0:0:0:0:1', port: 1234 }]);
+  await bad('a helper at a multicast address is refused', [{ kind: 'ws', host: '224.0.0.1', port: 1234 }]);
+  await bad('a helper named localhost is refused', [{ kind: 'ws', host: 'localhost', port: 1234 }]);
+  await bad('a helper with a ".local" name is refused (not found beyond one network)', [{ kind: 'ws', host: 'printer.local', port: 1234 }]);
+  await bad('a helper with a one-word name is refused', [{ kind: 'ws', host: 'intranet', port: 1234 }]);
+  await bad('a helper with a name ending in a number is refused (looks like an address)', [{ kind: 'ws', host: 'a.b.300', port: 1234 }]);
+  await bad('a helper with an address written another way (leading zeros) is refused', [{ kind: 'ws', host: '010.0.0.1', port: 1234 }]);
+  await bad('a helper with an IPv6 address not in the full form is refused', [{ kind: 'ws', host: '2001:db8::7', port: 1234 }]);
+  await bad('a helper with capitals in its name is refused', [{ kind: 'ws', host: 'Home.Example.org', port: 1234 }]);
+  await bad('a helper with a path or a scheme in its host is refused', [{ kind: 'ws', host: 'https://home.example.org/x', port: 1234 }]);
+  await bad('a helper with port 0 is refused', [{ kind: 'ws', host: '203.0.113.9', port: 0 }]);
+  await bad('a helper with port 70000 is refused', [{ kind: 'ws', host: '203.0.113.9', port: 70000 }]);
+  await bad('a helper with a port that is a string is refused', [{ kind: 'ws', host: '203.0.113.9', port: '1234' }]);
+  await bad('a helper with an unknown kind (a scheme the page would not speak) is refused', [{ kind: 'file', host: '203.0.113.9', port: 1234 }]);
+  await bad('a helper with an extra part is refused', [{ kind: 'ws', host: '203.0.113.9', port: 1234, user: 'x' }]);
+  await bad('a helper that is not a record is refused', ['203.0.113.9:1234']);
+  await bad('helpers that are not a list are refused', 'ws://203.0.113.9:1234', /too many/);
+  await bad('more helpers than allowed are refused', [1, 2, 3, 4, 5].map((i) => ({ kind: 'ws', host: '203.0.113.' + i, port: 1234 })), /too many/);
+  await cRefused('a card with no version number is refused', cardMsg(A, { edit: (h) => { delete h.seq; } }), {}, /version/);
+  await cRefused('a card with version 0 is refused', cardMsg(A, { edit: (h) => { h.seq = 0; } }), {}, /version/);
+  await cRefused('a card with a fractional version is refused', cardMsg(A, { edit: (h) => { h.seq = 1.5; } }), {}, /version/);
+  await cRefused('a card with no date is refused', cardMsg(A, { edit: (h) => { h.time = 'yesterday'; } }), {}, /date/);
+
+  // the builder refuses to sign the same things
+  const buildThrows = (name, helpers, seq, re) => ok(name, (() => { try { hello.cardBuild({ did: A.did }, { helpers, seq }); return false; } catch (e) { return re.test(e.message); } })());
+  buildThrows('the builder will not sign a loopback helper', [{ kind: 'ws', host: '127.0.0.1', port: 1234 }], 1, /not valid/);
+  buildThrows('the builder will not sign five helpers', [1, 2, 3, 4, 5].map((i) => ({ kind: 'ws', host: '203.0.113.' + i, port: 1234 })), 1, /at most/);
+  buildThrows('the builder will not sign without a whole version number', HELP, 0, /whole number/);
+  buildThrows('the builder will not sign helpers that are not a list', null, 1, /at most/);
+
+  // keeping cards: the one rule
+  const cardOf = (deviceId, seq, time, host) => ({ ok: true, did: A.did, deviceId, helpers: [{ kind: 'ws', host: host || '203.0.113.9', port: 1 }], seq, time });
+  let kept = hello.mergeCard(null, cardOf('d1', 2, 1000));
+  ok('a first card for a device is kept', kept.changed && kept.devices.d1.seq === 2 && kept.devices.d1.helpers[0].host === '203.0.113.9');
+  ok('a card with a higher version replaces it', hello.mergeCard(kept.devices, cardOf('d1', 3, 2000, '203.0.113.10')).devices.d1.helpers[0].host === '203.0.113.10');
+  const replay = hello.mergeCard(kept.devices, cardOf('d1', 2, 3000, '203.0.113.66'));
+  ok('a card with the SAME version changes nothing (the first one is kept)', !replay.changed && replay.devices.d1.helpers[0].host === '203.0.113.9');
+  const older = hello.mergeCard(kept.devices, cardOf('d1', 1, 4000, '203.0.113.66'));
+  ok('an older card cannot roll an address back, even if its time is newer', !older.changed && older.devices.d1.seq === 2);
+  const second = hello.mergeCard(kept.devices, cardOf('d2', 1, 500));
+  ok('a card for another device of the same friend is kept beside it', second.changed && Object.keys(second.devices).sort().join() === 'd1,d2');
+  ok('merging does not change what it was given', kept.devices.d2 === undefined && JSON.stringify(kept.devices.d1) === JSON.stringify({ helpers: [{ kind: 'ws', host: '203.0.113.9', port: 1 }], seq: 2, time: 1000 }));
+  let full = null;
+  for (let i = 0; i < hello.MAX_CARD_DEVICES; i++) full = hello.mergeCard(full && full.devices, cardOf('x' + i, 1, 1000 + i));
+  ok('a friend can have up to the allowed number of devices', Object.keys(full.devices).length === hello.MAX_CARD_DEVICES);
+  const over = hello.mergeCard(full.devices, cardOf('new', 1, 5000));
+  ok('one more pushes out the device whose card is the oldest', over.changed && Object.keys(over.devices).length === hello.MAX_CARD_DEVICES && !over.devices.x0 && !!over.devices.new && !!over.devices.x1);
+  const upd = hello.mergeCard(full.devices, cardOf('x3', 2, 6000));
+  ok('a newer card for a device already kept pushes nobody out', upd.changed && Object.keys(upd.devices).length === hello.MAX_CARD_DEVICES && !!upd.devices.x0);
+
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('FATAL', e); process.exit(2); });
