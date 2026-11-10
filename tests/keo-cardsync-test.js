@@ -123,13 +123,16 @@ const mkCard = (P, helpers, seq, edit) => P.page.evaluate(async ([helpers, seq, 
     await sendRaw(A, k.a, { t: 'card.set', ...(await mkCard(A, H1, 5)) });
     await sleep(800);
     check('an older card (lower version) cannot roll the address back', (await cardsOf(B, A.did))[0].seq === cur.seq && (await cardsOf(B, A.did))[0].helpers[0].host === 'home.example.org');
-    const edited = await mkCard(A, H1, cur.seq + 1000, 'helper');
+    const edited = await mkCard(A, H1, cur.seq + 5, 'helper');
     await sendRaw(A, k.a, { t: 'card.set', ...edited });
     await sleep(800);
     check('a card whose helper was changed after signing is dropped, and says why', (await cardsOf(B, A.did))[0].seq === cur.seq && /signature/.test(Object.values((await diag(B)).notes).join()), await diag(B));
-    await sendRaw(A, k.a, { t: 'card.set', ...(await mkCard(A, H1, cur.seq + 1000, 'did')) });
+    await sendRaw(A, k.a, { t: 'card.set', ...(await mkCard(A, H1, cur.seq + 5, 'did')) });
     await sleep(800);
     check('a card that names another identity than the one the connection proved is dropped', (await cardsOf(B, A.did))[0].seq === cur.seq && /someone else|signature/.test(Object.values((await diag(B)).notes).join()), await diag(B));
+    await sendRaw(A, k.a, { t: 'card.set', ...(await mkCard(A, H1, cur.seq + 100000)) });
+    await sleep(800);
+    check('a properly signed card whose version is far ahead of its date is dropped, and does not hide later cards', (await cardsOf(B, A.did))[0].seq === cur.seq && /ahead of its date/.test(Object.values((await diag(B)).notes).join()), await diag(B));
     check('and the connection stays up after bad cards', (await stateB()) === 'ready');
     // (one more than the stored version, not far ahead: a version far ahead of the clock would hide every later real card)
     await sendRaw(A, k.a, { t: 'card.set', ...(await mkCard(A, H1, cur.seq + 1)) });

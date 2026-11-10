@@ -333,6 +333,17 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await cRefused('events grafted onto another identity are refused', cardMsg(B, { edit: (h) => { h.events = A2.events; } }), {}, /identity does not verify/);
   await cRefused('the added passkey\'s device without the events is refused', cardMsg(Object.assign({}, A2, { events: [] })), {}, /authority key/);
 
+  // the version number is tied to the card's date: it may run ahead only by what a clock may be off, so no card can claim a version that every later card loses to
+  const secs = (ms) => Math.floor(ms / 1000);
+  const t0 = Date.now();
+  await cRefused('a card whose version number is far ahead of its date is refused even though it is signed', cardMsg(A, { now: t0, seq: secs(t0) + 3600 }), {}, /ahead of its date/);
+  await cRefused('and one a year ahead', cardMsg(A, { now: t0, seq: secs(t0) + 365 * 86400 }), {}, /ahead of its date/);
+  await cRefused('one just past the allowed skew is refused', cardMsg(A, { now: t0, seq: secs(t0) + 121 }), {}, /ahead of its date/);
+  ok('one at the allowed skew is accepted (cards made in the same second count up)', (await cverify(await cardMsg(A, { now: t0, seq: secs(t0) + 120 }))).ok === true);
+  ok('a version number equal to the date in seconds is accepted', (await cverify(await cardMsg(A, { now: t0, seq: secs(t0) }))).ok === true);
+  ok('a small counter far below the date is accepted (the version only has to move forward)', (await cverify(await cardMsg(A, { now: t0, seq: 7 }))).ok === true);
+  ok('the date is the card\'s own, so an old card with an old version still passes (a stored card is not judged by the clock now)', (await cverify(await cardMsg(A, { now: t0 - 3600e3, seq: secs(t0 - 3600e3) }))).ok === true);
+
   // what a device that cheats could still sign: the checks are made on what the card SAYS, not only on the signature
   const bad = (name, helpers, pattern) => cRefused(name, cardMsg(A, { edit: (h) => { h.helpers = helpers; } }), {}, pattern || /not valid/);
   await bad('a helper on this machine itself is refused (loopback)', [{ kind: 'ws', host: '127.0.0.1', port: 1234 }]);

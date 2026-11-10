@@ -291,6 +291,8 @@
   // address works now (addresses go stale; a failed attempt is the only test), proof the helper is honest (a helper carries a signed
   // request and the connection's own proof still decides who is at the other end), or a way to find a stranger (it is only ever shown
   // to people who are friends). `seq` only moves forward, so an old card cannot roll an address back; mergeCard is the one rule for that.
+  // A sender uses the date in whole seconds (and one more for each card in the same second); verifyCard refuses a number more than the
+  // allowed clock skew (SKEW_MS) ahead of the card's date, so no card can claim a version that every later card would lose to.
   // `time` says when it was made. It is not checked for age here, because a card is kept: the device certificate inside it (which is
   // short-lived) decides whether the card could still be made today, and a stored card is NOT checked again.
   var CARD_PURPOSE = 'keo-card', MAX_HELPERS = 4, MAX_CARD_DEVICES = 8, MAX_SEQ = 4294967295, HELPER_KINDS = ['ws', 'http'];
@@ -351,6 +353,9 @@
       var t = Date.parse(h.time);
       if (!(t > 0)) return fail('That card has no valid date.');
       if (t > now + SKEW_MS) return fail('That card is dated in the future (check the clock).');
+      // A version number far ahead of the card's own date would be kept as the newest and hide every later real card, whoever signed it (a
+      // device with a wrong counter, or a friend doing it on purpose): the number may run ahead of the date only by what a clock may be off.
+      if (h.seq > Math.floor(t / 1000) + SKEW_MS / 1000) return fail('That card has a version number that is ahead of its date.');
       var who = await signerError(msg, h, now, opts.audience);
       if (who.error) return fail(who.error);
       return { ok: true, did: h.did, deviceId: await deviceIdOf(h.cert.devicePubKeyJwk), helpers: h.helpers.map(plainHelper), seq: h.seq, time: t };
