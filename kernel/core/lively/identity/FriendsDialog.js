@@ -9,6 +9,9 @@
  *
  * It never shows the other device's words: the point of the check is that the person types what the other person says.
  *
+ * Two buttons ask the shell for the introduction screens (a QR code saying who a person is and where to reach them): one shows this
+ * identity's own, one reads someone else's and adds them after the same eight-word check. Both screens are the shell's.
+ *
  * In the desktop app a friend on the same network is found by their key: the row says so and has a Connect button that connects
  * with no codes passed (LocalIdentity.lanDial), and one line says whether this webputer is visible to friends on the network, with a
  * button to change it. Elsewhere (the extension) the shell reports the network as unavailable and none of that is drawn.
@@ -180,7 +183,7 @@ module("lively.identity.FriendsDialog")
           if (friends === null) {
             text("Reading your friends…", 20); y += 24;
           } else if (!friends.length) {
-            text("No friends yet. Connect to a device, then choose Add as friend.", 36, { name: "emptyText" }); y += 40;
+            text("No friends yet. Connect to a device and choose Add as friend, or read an introduction.", 36, { name: "emptyText" }); y += 40;
           } else {
             var lan = d.lan && d.lan.available ? d.lan : null;
             var seenOnNet = {};
@@ -230,6 +233,9 @@ module("lively.identity.FriendsDialog")
           }
           y += 4;
           button("Connect a device…", "connectBtn", pad, 150, "main", "onConnect");
+          // The two screens for an introduction (a QR code of who someone is) are the shell's: these only ask for them to open.
+          button("My introduction…", "introShowBtn", pad + 158, 120, "plain", "onIntroShow");
+          button("Read an introduction…", "introReadBtn", pad + 286, 150, "plain", "onIntroRead");
           y += 32;
         }
 
@@ -292,6 +298,19 @@ module("lively.identity.FriendsDialog")
           if (!self.world()) return;
           if (err) self.setStatus(err.message || String(err), true);
           self.refresh();
+        });
+      },
+
+      // The shell draws the screen (our QR code, or the one that reads someone's and adds them after the eight-word check); this only asks
+      // for it and learns whether it opened. Adding is told through the friend event, which refreshes the list.
+      onIntroShow: function onIntroShow() { this._askIntro("introShow"); },
+      onIntroRead: function onIntroRead() { this._askIntro("introRead"); },
+      _askIntro: function _askIntro(op) {
+        var self = this;
+        lively.identity.localIdentity[op](function (err) {
+          if (!self.world()) return;
+          if (err) return self.setStatus(err.message || String(err), true);
+          self.setStatus("");
         });
       },
 

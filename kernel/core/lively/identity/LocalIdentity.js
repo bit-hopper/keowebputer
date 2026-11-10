@@ -210,6 +210,16 @@ module("lively.identity.LocalIdentity")
         return window.keo.on("friend", fn);
       },
 
+      // ─── introductions (shell/keo-intro.js) ───────────────────────────────────────────────────────────────────
+      // An introduction says who a person is (their identity) and where they can be asked to connect, small enough for a QR code. Both screens
+      // are drawn by the SHELL, because our own addresses and the Add button must stay out of the world: the world can only ask for one to
+      // open. It is handed no text, no address and no answer, and it cannot fill, add or close either screen.
+      //   introShow() -> true   puts up the shell's screen with this identity's QR code, its eight words and the same as text
+      //   introRead() -> true   puts up the shell's screen that reads someone's introduction and adds them after the eight-word check
+      // Adding from it is told the same way as in the friend dialog (onFriendEvent kind "added").
+      introShow: function introShow(thenDo) { this._run("intro.show", {}, 30000, thenDo); },
+      introRead: function introRead(thenDo) { this._run("intro.read", {}, 30000, thenDo); },
+
       // ─── friends on the same network (shell/keo-lan.js; the desktop app only) ──────────────────────────────────
       // In the desktop app a friend on the same network can be found and connected to by their key, with no codes passed. The world is
       // given names, identities and a connection id: never an address, a code or a tag.
