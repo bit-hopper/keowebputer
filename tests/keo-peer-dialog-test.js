@@ -209,8 +209,9 @@ const adopt = (frame) => frame.evaluate(() => new Promise((res) => { let n = 0; 
     const dl = B.page.waitForEvent('download', { timeout: 10000 });
     await click(B.page, B.frame, 'saveBtn');
     const d1 = await dl.catch(() => null);
-    let got1 = null; if (d1) { fs.mkdirSync(B.dir, { recursive: true }); const p = path.join(B.dir, 'note.txt'); await d1.saveAs(p); got1 = fs.readFileSync(p); }
-    check('Save downloads the file under its name, byte for byte', !!d1 && d1.suggestedFilename() === 'note.txt' && got1 && sha(got1) === sha(body1), d1 && d1.suggestedFilename());
+    // (a failure here once ended the whole run with only "Target page, context or browser has been closed": say what the download and the page were doing)
+    let got1 = null, saveErr = null; if (d1) { fs.mkdirSync(B.dir, { recursive: true }); const p = path.join(B.dir, 'note.txt'); try { await d1.saveAs(p); got1 = fs.readFileSync(p); } catch (e) { saveErr = { error: String(e && e.message).slice(0, 160), pageClosed: B.page.isClosed(), pages: B.ctx.pages().length, failure: await d1.failure().catch((x) => 'failure() threw: ' + String(x && x.message).slice(0, 80)), url: String(d1.url()).slice(0, 60) }; } }
+    check('Save downloads the file under its name, byte for byte', !!d1 && d1.suggestedFilename() === 'note.txt' && got1 && sha(got1) === sha(body1), saveErr || (d1 && d1.suggestedFilename()));
     check('B\'s row says saved', !!(await waitFor(async () => ((await state(B.frame)).rows || []).join() === 'in:saved')));
     await A.page.bringToFront();
     check('A\'s row says delivered', !!(await waitFor(async () => ((await state(A.frame)).rows || []).join() === 'out:delivered')));
