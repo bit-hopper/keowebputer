@@ -121,6 +121,15 @@
     'library.blobPut': function (a) { return window.keoLibrary.putBlob({ cid: a.cid, bytes: a.bytes }); },
     'library.blobGet': function (a) { return window.keoLibrary.getBlob({ cid: a.cid }); },
     'library.blobRemove': function (a) { return window.keoLibrary.removeBlob({ cid: a.cid }); },
+    // Files too big for one message: announced, sent in order in chunks, finished (the shell names the file by the hash of its bytes
+    // itself), then read back chunk by chunk. Plain data in and out; the shell holds one chunk at a time.
+    'library.fileBegin': function (a) { return window.keoLibrary.fileBegin({ name: a.name, type: a.type, size: a.size }); },
+    'library.fileChunk': function (a) { return window.keoLibrary.fileChunk({ upload: a.upload, n: a.n, bytes: a.bytes }); },
+    'library.fileEnd': function (a) { return window.keoLibrary.fileEnd({ upload: a.upload }); },
+    'library.fileAbort': function (a) { return window.keoLibrary.fileAbort({ upload: a.upload }); },
+    'library.fileInfo': function (a) { return window.keoLibrary.fileInfo({ id: a.id }); },
+    'library.fileRead': function (a) { return window.keoLibrary.fileRead({ id: a.id, n: a.n }); },
+    'library.fileRemove': function (a) { return window.keoLibrary.fileRemove({ id: a.id }); },
     // A read of the music catalogue's search or lookup (keo-catalog.js): the world cannot read it itself, the shell can. Signed in only.
     'catalog.get': function (a) {
       return window.keoIdentity.current().then(function (s) {
@@ -227,7 +236,7 @@
   // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
   // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
   // connections were proven with that identity's device key, and the next one to sign in must not inherit them.
-  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoCards.reset(); window.keoIntro.reset(); window.keoLan.reset(); window.keoEnroll.reset(); window.keoTransfer.reset(); window.keoContacts.clear(); });
+  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoCards.reset(); window.keoIntro.reset(); window.keoLan.reset(); window.keoEnroll.reset(); window.keoTransfer.reset(); window.keoLibrary.reset(); window.keoContacts.clear(); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;
