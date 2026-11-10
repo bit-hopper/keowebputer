@@ -1,5 +1,5 @@
 module("lively.data.FileUpload")
-  .requires("lively.persistence.Serializer", "lively.Network", "lively.identity.FileCrypto")
+  .requires("lively.persistence.Serializer", "lively.Network", "lively.identity.FileCrypto", "lively.identity.LocalFiles")
   .toRun(function () {
     // Handles uploading of dropped files via HTML5 event API. This is how it works:
     // From the drop event we get a list of files, each have a type attribute
@@ -120,7 +120,17 @@ module("lively.data.FileUpload")
       },
       "uploading to server",
       {
+        // True inside keo, whether or not anybody is signed in yet: a dropped file then goes to the library on this device (the shell
+        // says to sign in when nobody is), never to a host's address. The same switch as lively.identity.FileCrypto._local.
+        isLocalUploadAvailable: function () {
+          var lf = typeof lively !== "undefined" && lively.identity && lively.identity.localFiles;
+          if (!lf || !lf.isAvailable()) return false;
+          var u = lively.identity.did && lively.identity.did.currentUser();
+          return !u || !!u.local;
+        },
+
         isIdentityUploadAvailable: function () {
+          if (this.isLocalUploadAvailable()) return true;
           return !!(
             typeof lively !== "undefined" &&
             lively.identity &&
@@ -135,6 +145,9 @@ module("lively.data.FileUpload")
         // lively.data.EncryptedMedia).
         attachIdentityDelete: function (morph, ref) {
           if (!morph || !ref || !ref.handle || !ref.blobCid) return;
+          // A file in the library on this device is not deleted with the morph: another world may show it, and nothing yet counts
+          // who still refers to it.
+          if (lively.identity.localFiles && lively.identity.localFiles.isRef(ref.handle)) return;
           morph.identityUploadRef = ref;
           morph.addScript(function remove() {
             var self = this;
@@ -200,6 +213,7 @@ module("lively.data.FileUpload")
         // lively.data.EncryptedMedia (loaded below before thenDo fires),
         // not by handing callers a plaintext-fetchable URL.
         identityUpload: function (file, thenDo) {
+          if (this.isLocalUploadAvailable()) return this.localUpload(file, thenDo);
           var handle = lively.identity.did.currentUser().handle;
           lively.identity.fileCrypto.encryptAndUpload(file, {
             visibility: "private",
@@ -211,6 +225,26 @@ module("lively.data.FileUpload")
               thenDo(null, ref);
             });
           });
+        },
+
+        // Keo: the file goes to the library on this device in slices (see lively.identity.LocalFiles), with a progress bar for as long
+        // as it takes. Calls thenDo(null, { handle, objId, blobCid }) like identityUpload, or thenDo(err) with a sentence.
+        localUpload: function (file, thenDo) {
+          var bar = null;
+          function done(err, result) {
+            if (bar) { try { bar.remove(); } catch (e) {} }
+            if (err) return thenDo(err);
+            lively.require('lively.data.EncryptedMedia').toRun(function () { thenDo(null, result.ref); });
+          }
+          // Small files finish before a bar would be seen; a bar appears only once a second slice is on its way.
+          lively.identity.localFiles.put(file, {
+            onProgress: function (fraction) {
+              if (!bar && fraction < 1 && file.size > 8 * 1024 * 1024) {
+                try { bar = $world.addProgressBar(null, file.name || "file"); } catch (e) {}
+              }
+              if (bar) { try { bar.updateBar(fraction); } catch (e) {} }
+            },
+          }, done);
         },
 
         uploadBinary: function (url, mime, binaryData, onloadCallback) {

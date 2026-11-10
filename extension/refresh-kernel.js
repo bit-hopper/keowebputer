@@ -56,7 +56,7 @@ const skipped = (rel) => NOT_SHIPPED.some((n) => rel === n || rel.startsWith(n +
 // Libraries (and their workers) that on-demand features load; add a directory here when a feature is found to need one.
 const ONDEMAND_LIBS = ['core/lib/marked', 'core/lib/logo', 'core/lib/ml', 'core/lib/scheme',
   'core/lib/geo', 'core/lib/astro', 'core/lib/postcard', 'core/media', 'core/styles',
-  'core/lib/app-fonts'];   // the fonts of the template apps, declared by core/styles/app-fonts.css (which the stylesheet scan above does not reach)
+  'core/lib/app-fonts', 'core/lib/pdfjs'];   // the fonts of the template apps, declared by core/styles/app-fonts.css (which the stylesheet scan above does not reach)
 const ONDEMAND_FILES = ['core/lib/grasp.js', 'core/lib/escodegen.browser.js', 'core/lib/lively.ast.dev.js', 'core/lib/lively-libs.js'];
 // Also not shipped yet: core/lib/privacy-pools (23 MB) and core/lib/mediapipe (16 MB, face effects); add them here when the
 // feature that loads them is brought over.

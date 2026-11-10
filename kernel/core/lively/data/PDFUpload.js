@@ -19,8 +19,10 @@ Object.extend(lively.data.FileUpload, {
         // Canvas-based PDF.js rendering: no iframe, so Ctrl+click → halos
         // works natively everywhere on the morph. Scroll within canvasWrapper
         // is captured by the div (parent document) — no subdocument isolation.
-        var PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-        var PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        // pdf.js 3.11.174 is part of the runtime (core/lib/pdfjs), not fetched from a CDN: the world may load scripts from its own
+        // package only, and a viewer that needs the network is no viewer on a webputer that is offline.
+        var PDFJS_URL = Config.codeBase + 'lib/pdfjs/pdf.min.js';
+        var PDFJS_WORKER = Config.codeBase + 'lib/pdfjs/pdf.worker.min.js';
 
         var canvas = document.createElement('canvas');
         canvas.style.cssText = 'display:block;background:#fff';
@@ -109,6 +111,8 @@ Object.extend(lively.data.FileUpload, {
             var script = document.createElement('script');
             script.src = PDFJS_URL;
             script.onload = initPDF;
+            // Blocked or unreachable (inside keo the world may load scripts from the package only): say so instead of "Loading…" for ever.
+            script.onerror = function() { pageInfo.textContent = 'The PDF viewer could not be loaded.'; };
             document.head.appendChild(script);
         }
 

@@ -12,6 +12,7 @@ This folder is a verbatim snapshot of the runtime's shipped files (`SNAPSHOT.jso
 | `core/lib/material-symbols/` | `LICENSE` in the folder |
 | `core/lib/atkinson-hyperlegible/` | `LICENSE` in the folder |
 | `core/lib/app-fonts/` | one folder per family (14: the fonts of the template apps), each with its `LICENSE.txt`, which for every one of them is the SIL Open Font License 1.1 (checked by reading each file when they were fetched); `core/styles/app-fonts.css` declares them |
+| `core/lib/pdfjs/` | pdf.js 3.11.174 (Mozilla Foundation), Apache License 2.0: `LICENSE` in the folder, a licence header in each `.js` file, and `SOURCE` with the source and the SHA-256 of the two files, which are unchanged from the published package |
 | `core/lib/marked/marked.js` | header marks it MIT licensed |
 | `core/lib/cssParser.js` | header offers the file under MPL 1.1, GPL 2.0 or LGPL 2.1 |
 

@@ -40,10 +40,33 @@ module('lively.data.EncryptedMedia')
     'lively.data.FileUpload',
     'lively.data.VideoUpload',
     'lively.data.PDFUpload',
+    'lively.data.AudioUpload',
     'lively.identity.FileCrypto',
     'lively.identity.DID',
   )
   .toRun(function () {
+
+    // ─── Where the bytes come from ─────────────────────────────────────────
+    // A reference whose handle is lively.identity.localFiles.HANDLE names a file in the library on THIS device (keo): the shell
+    // hands it over in slices and the blob is made here. Any other handle is a host's, and goes through FileCrypto as before.
+
+    function _isLocal(handle) {
+      return !!(lively.identity.localFiles && lively.identity.localFiles.isRef(handle));
+    }
+
+    // thenDo(err, objectUrl)
+    function _urlFor(handle, objId, mime, thenDo) {
+      if (_isLocal(handle)) return lively.identity.localFiles.urlFor(objId, mime, thenDo);
+      lively.identity.fileCrypto.objectUrlFor(handle, objId, thenDo);
+    }
+
+    // thenDo(err, { bytes: Uint8Array })
+    function _bytesFor(handle, objId, thenDo) {
+      if (_isLocal(handle)) {
+        return lively.identity.localFiles.bytesFor(objId, function (err, bytes) { thenDo(err, err ? undefined : { bytes: bytes }); });
+      }
+      lively.identity.fileCrypto.fetchAndDecrypt(handle, objId, thenDo);
+    }
 
     // ─── Image ─────────────────────────────────────────────────────────────
 
@@ -77,8 +100,8 @@ module('lively.data.EncryptedMedia')
 
       _resolveAndDisplay: function (thenDo) {
         var self = this;
-        lively.identity.fileCrypto.objectUrlFor(
-          this.shape.fileHandle, this.shape.fileObjId,
+        _urlFor(
+          this.shape.fileHandle, this.shape.fileObjId, null,
           function (err, url) {
             if (err) {
               console.error('[EncryptedImage] resolve failed', err);
@@ -143,8 +166,8 @@ module('lively.data.EncryptedMedia')
 
       _rebuildContent: function () {
         var self = this;
-        lively.identity.fileCrypto.objectUrlFor(
-          this.shape.fileHandle, this.shape.fileObjId,
+        _urlFor(
+          this.shape.fileHandle, this.shape.fileObjId, this.shape.mime,
           function (err, blobUrl) {
             if (err) { console.error('[EncryptedVideo] resolve failed', err); return; }
             var videoNode = lively.data.FileUpload.buildVideoNode(blobUrl, self.shape.mime);
@@ -152,6 +175,39 @@ module('lively.data.EncryptedMedia')
             while (node.firstChild) node.removeChild(node.firstChild);
             node.appendChild(videoNode);
             self.setExtent(pt(videoNode.width || 400, videoNode.height || 300));
+          },
+        );
+      },
+
+      onrestore: function () {
+        if (!this.shape || !this.shape.fileHandle) return;
+        var self = this;
+        this.whenOpenedInWorld(function () { self._rebuildContent(); });
+      },
+    });
+
+    // ─── Audio ─────────────────────────────────────────────────────────────
+
+    lively.morphic.Morph.subclass('lively.data.FileUpload.EncryptedAudio', {
+      // fileRef: {handle, objId}
+      initialize: function ($super, fileRef, mime) {
+        var shape = new lively.morphic.Shapes.EncryptedExternal(_loadingPlaceholder());
+        shape.fileHandle = fileRef.handle;
+        shape.fileObjId = fileRef.objId;
+        shape.mime = mime;
+        $super(shape);
+        this.applyStyle({ borderWidth: 1, borderColor: Color.black, extent: pt(320, 54) });
+      },
+
+      _rebuildContent: function () {
+        var self = this;
+        _urlFor(
+          this.shape.fileHandle, this.shape.fileObjId, this.shape.mime,
+          function (err, blobUrl) {
+            if (err) { console.error('[EncryptedAudio] resolve failed', err); return; }
+            var node = self.shape.shapeNode;
+            while (node.firstChild) node.removeChild(node.firstChild);
+            node.appendChild(lively.data.FileUpload.buildAudioNode(blobUrl));
           },
         );
       },
@@ -183,7 +239,7 @@ module('lively.data.EncryptedMedia')
       // than a resolved display URL.
       _rebuildContent: function () {
         var self = this;
-        lively.identity.fileCrypto.fetchAndDecrypt(
+        _bytesFor(
           this.shape.fileHandle, this.shape.fileObjId,
           function (err, result) {
             if (err) { console.error('[EncryptedPDF] resolve failed', err); return; }

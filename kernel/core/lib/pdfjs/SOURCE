@@ -1,0 +1,6 @@
+pdf.js 3.11.174 (Mozilla Foundation), Apache License 2.0 (LICENSE in this folder; each .js file keeps its own licence header).
+pdf.min.js and pdf.worker.min.js are the files published as pdfjs-dist 3.11.174 (build/), unchanged. The same bytes are served by cdnjs.
+SHA-256:
+  5b5799e6f8c680663207ac5b42ee14eed2a406fa7af48f50c154f0c0b1566946  pdf.min.js
+  feabdf309770ed24bba31a5467836cdc8cf639c705af27d52b585b041bb8527b  pdf.worker.min.js
+Loaded by core/lively/data/PDFUpload.js on the first PDF shown.
