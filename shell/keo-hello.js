@@ -405,7 +405,54 @@
     return { hello: o.hello, sig: o.sig };
   }
 
-  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, DIAL_AGE_MS: DIAL_AGE_MS, MAX_HELPERS: MAX_HELPERS, MAX_CARD_DEVICES: MAX_CARD_DEVICES, cardToText: cardToText, cardFromText: cardFromText, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
+  // ---- an introduction (small enough for a QR) -----------------------------------------------------------------------------------
+  // A signed card is a few kilobytes (the identity's log and the delegation come with it), which no QR holds. What a QR needs to say is
+  // only WHO (a DID) and WHERE (helper addresses), for two people who are in the same room: 'keointro1.' and that in base64url, about
+  // 250 characters. It is NOT signed and nothing can be concluded from it alone:
+  //  - the DID in it is only a claim of who the person means to introduce. It is for the person scanning to check it the way they check a
+  //    friend (the eight words, keo-fingerprint.js); the name in it is text somebody chose and is never what identifies anyone;
+  //  - the addresses in it are a hint to try first. A wrong or stale one only fails to connect; whoever answers still has to prove the DID
+  //    over the connection (that is what keeps a wrong address from being a way to impersonate anyone);
+  //  - it replaces nothing that is kept: the signed card the friend's device sends once connected is what gets stored (mergeCard).
+  var INTRO_PREFIX = 'keointro1.', MAX_INTRO_TEXT = 2000;
+  function introClean(o) {
+    if (!o || typeof o !== 'object' || !kd.parseDid(o.did)) throw new Error('That is not a valid introduction: it names no identity.');
+    var helpers = o.helpers === undefined ? [] : o.helpers;
+    if (!Array.isArray(helpers) || helpers.length > MAX_HELPERS) throw new Error('That is not a valid introduction: too many helpers.');
+    for (var j = 0; j < helpers.length; j++) {
+      if (helpers[j] && typeof helpers[j] === 'object' && !Array.isArray(helpers[j]) && Object.keys(helpers[j]).length !== 3) throw new Error('That is not a valid introduction: a helper has extra parts.');
+    }
+    helpers = helpers.map(function (x) { return x && typeof x === 'object' && typeof x.host === 'string' ? { kind: x.kind, host: canonicalHost(x.host), port: x.port } : x; });
+    for (var i = 0; i < helpers.length; i++) {
+      var e = helperError(helpers[i]);
+      if (e) throw new Error('That is not a valid introduction: ' + e + '.');
+    }
+    if (o.name !== undefined && o.name !== null && (typeof o.name !== 'string' || o.name.length > MAX_NAME)) throw new Error('That is not a valid introduction: the name is not valid.');
+    var out = { v: 1, did: o.did, helpers: helpers.map(plainHelper) };
+    if (o.name) out.name = String(o.name).replace(/\s+/g, ' ').trim().slice(0, MAX_NAME);
+    return out;
+  }
+  // o: { did, name?, helpers? }. Throws a sentence for what would not be accepted back.
+  function introToText(o) {
+    var text = INTRO_PREFIX + kd.b64u(enc.encode(JSON.stringify(introClean(o))));
+    if (text.length > MAX_INTRO_TEXT) throw new Error('That introduction is too long to write as text.');
+    return text;
+  }
+  // Like cardFromText the text may sit inside a longer string. Resolves { did, name (or null), helpers } and checks only the SHAPE.
+  function introFromText(text) {
+    var s = String(text == null ? '' : text);
+    if (s.length > MAX_INTRO_TEXT * 2) throw new Error('That is too long to be a keo introduction.');
+    var at = s.indexOf(INTRO_PREFIX);
+    if (at < 0) throw new Error('That is not a keo introduction.');
+    var m = /^[A-Za-z0-9_-]*/.exec(s.slice(at + INTRO_PREFIX.length))[0], o;
+    if (!m || m.length > MAX_INTRO_TEXT) throw new Error('That is not a valid keo introduction.');
+    try { o = JSON.parse(new TextDecoder().decode(kd.unb64u(m))); } catch (e) { throw new Error('That is not a valid keo introduction.'); }
+    if (!o || o.v !== 1) throw new Error('That is not a valid keo introduction.');
+    var c = introClean(o);
+    return { did: c.did, name: c.name || null, helpers: c.helpers };
+  }
+
+  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, DIAL_AGE_MS: DIAL_AGE_MS, MAX_HELPERS: MAX_HELPERS, MAX_CARD_DEVICES: MAX_CARD_DEVICES, introToText: introToText, introFromText: introFromText, cardToText: cardToText, cardFromText: cardFromText, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
     proofBuild: proofBuild, signedBytes: signedBytes, verifyProof: verifyProof, dialBuild: dialBuild, verifyDial: verifyDial,
     helperError: helperError, cardBuild: cardBuild, verifyCard: verifyCard, mergeCard: mergeCard, deviceIdOf: deviceIdOf };
 });

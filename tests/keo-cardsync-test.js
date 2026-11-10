@@ -165,11 +165,25 @@ const mkCard = (P, helpers, seq, edit) => P.page.evaluate(async ([helpers, seq, 
     const junk = await B.page.evaluate(() => window.keoCards.importText('hello').then(() => 'accepted', (e) => e.message));
     check('text with no card in it is refused with a sentence', /not a keo card/.test(junk), junk);
 
+    // ---- 6b. an introduction (who and where, unsigned, short enough for a QR)
+    const introT = await A.page.evaluate(() => window.keoCards.exportIntro());
+    check('an introduction is one short line (fits a QR) and starts with its prefix', /^keointro1\.[A-Za-z0-9_-]+$/.test(introT) && introT.length < 700, introT.length);
+    const seenBefore = (await cardsOf(B, A.did))[0].seq;
+    const introIn = await B.page.evaluate((t) => window.keoCards.importIntro(t).then((r) => r, (e) => ({ error: e.message })), introT);
+    check('read by a friend it names the DID, the name and the helpers, and says the DID is already added', introIn.did === A.did && introIn.name === 'Maya' && introIn.added === true && introIn.helpers.length === 1 && introIn.helpers[0].host === 'home.example.org', introIn);
+    check('reading it keeps nothing and changes no card', (await cardsOf(B, A.did))[0].seq === seenBefore);
+    const introBad = await B.page.evaluate(() => window.keoCards.importIntro('keointro1.AAAA').then(() => 'accepted', (e) => e.message));
+    check('an unreadable introduction is refused with a sentence', /not a valid keo introduction/.test(introBad), introBad);
+    const introNoSession = await B.page.evaluate((t) => window.keoCards.importIntro('hello ' + t.slice(0, 5)).then(() => 'accepted', (e) => e.message), introT);
+    check('text with no whole introduction is refused', introNoSession !== 'accepted', introNoSession);
+
     // ---- 7. a card from someone who is not in the friend book is not kept
     await B.page.evaluate((d) => window.keoContacts.remove(d), A.did);
     const stranger = await B.page.evaluate((t) => window.keoCards.importText(t).then((r) => r, (e) => ({ error: e.message })), text);
     check('a genuine card from someone not in the friend book is recognised but nothing is kept', stranger.added === false && stranger.changed === false && stranger.did === A.did, stranger);
     check('and the friend book still holds no card for them', (await cardsOf(B, A.did)).length === 0);
+    const introStranger = await B.page.evaluate((t) => window.keoCards.importIntro(t).then((r) => r, (e) => ({ error: e.message })), introT);
+    check('an introduction from someone not in the friend book is read, says they are not added, and keeps nothing', introStranger.added === false && introStranger.did === A.did && (await cardsOf(B, A.did)).length === 0 && !(await B.page.evaluate((d) => !!window.keoContacts.get(d), A.did)), introStranger);
 
     check('no page errors were logged', errors.length === 0, errors.slice(0, 5));
   } finally { clearTimeout(hard); for (const c of ctxs) await c.close().catch(() => {}); }

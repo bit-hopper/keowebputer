@@ -412,5 +412,28 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   ok('text of a message of another purpose reads (the text form checks nothing) and the checker then refuses it',
     (await cverify(hello.cardFromText('keocard1.' + kd.b64u(enc.encode(JSON.stringify({ hello: { purpose: 'x' }, sig: 's' })))))).error === 'That is not a keo card.');
 
+  // an introduction (who and where, unsigned, small enough for a QR)
+  const introText = hello.introToText({ did: A.did, name: 'Maya', helpers: HELP });
+  ok('an introduction is one line of safe characters with its prefix and is short enough for a QR: ' + introText.length, /^keointro1\.[A-Za-z0-9_-]+$/.test(introText) && introText.length < 600, introText.length);
+  const intro = hello.introFromText(introText);
+  ok('it reads back as the DID, the name and the helpers', intro.did === A.did && intro.name === 'Maya' && JSON.stringify(intro.helpers) === JSON.stringify(HELP), intro);
+  ok('an introduction with no helpers and no name is allowed', (() => { const i = hello.introFromText(hello.introToText({ did: A.did })); return i.did === A.did && i.name === null && i.helpers.length === 0; })());
+  ok('it is found inside a longer line', hello.introFromText('scan: https://example.org/#' + introText + ' ok').did === A.did);
+  ok('a name with line breaks is written on one line and cut to the limit', (() => { const i = hello.introFromText(hello.introToText({ did: A.did, name: 'A\n  B' })); return i.name === 'A B'; })());
+  ok('a host written in capitals is carried in lower case', hello.introFromText(hello.introToText({ did: A.did, helpers: [{ kind: 'http', host: 'Home.Example.ORG', port: 80 }] })).helpers[0].host === 'home.example.org');
+  ok('an introduction is not a card, and a card is not an introduction', (() => { try { hello.cardFromText(introText); return false; } catch (e) { return /not a keo card/.test(e.message); } })() && (() => { try { hello.introFromText(ctext); return false; } catch (e) { return /not a keo introduction/.test(e.message); } })());
+  const introThrows = (name, fn, re) => ok(name, (() => { try { fn(); return false; } catch (e) { return re.test(e.message); } })());
+  introThrows('the writer refuses text that is not an identity', () => hello.introToText({ did: 'did:keo:nope' }), /names no identity/);
+  introThrows('the writer refuses a loopback helper', () => hello.introToText({ did: A.did, helpers: [{ kind: 'ws', host: '127.0.0.1', port: 1 }] }), /cannot be reached/);
+  introThrows('the writer refuses five helpers', () => hello.introToText({ did: A.did, helpers: [1, 2, 3, 4, 5].map((i) => ({ kind: 'ws', host: '203.0.113.' + i, port: 1 })) }), /too many/);
+  introThrows('the writer refuses a helper with an extra part', () => hello.introToText({ did: A.did, helpers: [{ kind: 'ws', host: '203.0.113.9', port: 1, user: 'x' }] }), /extra parts/);
+  introThrows('the writer refuses a name that is not text', () => hello.introToText({ did: A.did, name: 5 }), /name/);
+  introThrows('the reader refuses text with no introduction', () => hello.introFromText('hello'), /not a keo introduction/);
+  introThrows('the reader refuses bytes that are not JSON', () => hello.introFromText('keointro1.AAAA'), /not a valid keo introduction/);
+  introThrows('the reader refuses another version', () => hello.introFromText('keointro1.' + kd.b64u(enc.encode(JSON.stringify({ v: 2, did: A.did })))), /not a valid keo introduction/);
+  introThrows('the reader refuses a loopback helper written by someone else', () => hello.introFromText('keointro1.' + kd.b64u(enc.encode(JSON.stringify({ v: 1, did: A.did, helpers: [{ kind: 'ws', host: '127.0.0.1', port: 1 }] })))), /not a valid introduction/);
+  introThrows('the reader refuses an identity that is not a DID', () => hello.introFromText('keointro1.' + kd.b64u(enc.encode(JSON.stringify({ v: 1, did: '<script>' })))), /names no identity/);
+  introThrows('the reader refuses a text far too long', () => hello.introFromText('keointro1.' + 'A'.repeat(9000)), /too long/);
+
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('FATAL', e); process.exit(2); });

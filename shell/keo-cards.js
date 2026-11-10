@@ -82,11 +82,29 @@
       });
     });
   }
+  // Who we are and where we can be asked, small enough for a QR (keo-hello.js introToText: unsigned, about 250 characters). The helpers are
+  // the ones set with setHelpers (none: the introduction names only the identity). Needs a signed-in identity.
+  function exportIntro() {
+    return ident.current().then(function (s) {
+      if (!s) throw new Error('Sign in first.');
+      return hello.introToText({ did: s.did, name: s.label, helpers: helpers || [] });
+    });
+  }
+  // Reads an introduction from text. Resolves { did, name, helpers, added }: `added` says whether that identity is already in the friend
+  // book. NOTHING is kept and nobody is added: the DID is only what the other person claims, so a screen must show it for the person to
+  // check (the eight words) before adding anyone, and must not treat `name` as who it is. Throws a sentence for text that is not valid.
+  function importIntro(text) {
+    var intro;
+    try { intro = hello.introFromText(text); } catch (e) { return Promise.reject(e); }
+    return contacts.ensure().then(function () {
+      return { did: intro.did, name: intro.name, helpers: intro.helpers, added: contacts.isAdded(intro.did) };
+    });
+  }
   // For tests and for a person reading the log: the last thing that happened to a card on each live connection.
   function diag() { return { notes: JSON.parse(JSON.stringify(notes)), live: Object.keys(live), helpers: helpers && helpers.slice() }; }
   // The session ended: nothing of one identity is left for the next.
   function reset() { helpers = null; lastSeq = 0; live = {}; counts = {}; notes = {}; }
 
   p2p.attach('card', { message: message, ready: ready, friend: friend, closed: closed });
-  window.keoCards = { setHelpers: setHelpers, exportText: exportText, importText: importText, diag: diag, reset: reset };
+  window.keoCards = { setHelpers: setHelpers, exportText: exportText, importText: importText, exportIntro: exportIntro, importIntro: importIntro, diag: diag, reset: reset };
 })();
