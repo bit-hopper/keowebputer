@@ -40,13 +40,14 @@
     var box = el('div', 'box'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', 'Introduction');
     var tabs = el('div', 'tabs'), tShow = el('button', 'tab', 'Show mine'), tRead = el('button', 'tab', 'Read one');
     tShow.type = tRead.type = 'button'; tShow.setAttribute('data-tab', 'show'); tRead.setAttribute('data-tab', 'read');
+    tabs.setAttribute('role', 'tablist'); tShow.setAttribute('role', 'tab'); tRead.setAttribute('role', 'tab');
     tabs.appendChild(tShow); tabs.appendChild(tRead);
 
     // show
     var vShow = el('div', 'view show');
     var sHead = el('div', 'head'), sImg = el('img', 'who-img'), sWho = el('div', 'who'), sName = el('div', 'who-name'), sDid = el('div', 'who-did');
     sImg.width = sImg.height = 40; sImg.alt = ''; sWho.appendChild(sName); sWho.appendChild(sDid); sHead.appendChild(sImg); sHead.appendChild(sWho);
-    var qrBox = el('div', 'qr'), canvas = document.createElement('canvas'); canvas.setAttribute('aria-label', 'QR code of your introduction'); qrBox.appendChild(canvas);
+    var qrBox = el('div', 'qr'), canvas = document.createElement('canvas'); canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', 'QR code of your introduction'); qrBox.appendChild(canvas);
     var sText = el('div', 'text', 'Show this to the person next to you and have them scan it with the keo phone app, or send them the text below. It says who you are and where you can be reached. It is not a password.');
     var sWordsL = el('div', 'label', 'Your words — read these to them'), sWords = el('div', 'words');
     var sReachL = el('div', 'label', 'Where you can be reached'), sReach = el('div', 'reach');
@@ -90,14 +91,30 @@
       if (b.getAttribute('data-ans') === 'no') return dismiss();
       add();
     });
-    // Escape closes the screen wherever the focus is while it is up (on the page, not only inside the box).
-    document.addEventListener('keydown', function (ev) { if (open && ev.key === 'Escape' && ev.isTrusted) dismiss(); });
+    // Escape closes the screen wherever the focus is while it is up (on the page, not only inside the box); Tab stays inside it, as a
+    // modal screen should: the page behind is not reachable from it.
+    document.addEventListener('keydown', function (ev) {
+      if (!open || !ev.isTrusted) return;
+      if (ev.key === 'Escape') return dismiss();
+      if (ev.key === 'Tab') trapTab(ev);
+    });
     box.tabIndex = -1;
     rPaste.addEventListener('input', readPasted);
     rTheir.addEventListener('input', checkWords);
     ui = { root: root, tShow: tShow, tRead: tRead, vShow: vShow, vRead: vRead, sImg: sImg, sName: sName, sDid: sDid, canvas: canvas, sWords: sWords, sReach: sReach, sRaw: sRaw, sHint: sHint,
       rPaste: rPaste, rHint: rHint, rResult: rResult, rImg: rImg, rName: rName, rDid: rDid, rReach: rReach, rTheir: rTheir, rCheck: rCheck, close: close, yes: yes };
     return ui;
+  }
+  // What Tab can reach inside the screen right now (the hidden view and disabled buttons are not in it).
+  function focusables() {
+    return Array.prototype.filter.call(ui.root.querySelectorAll('button, textarea, input'), function (x) { return !x.disabled && !x.hidden && x.offsetParent !== null; });
+  }
+  function trapTab(ev) {
+    var list = focusables();
+    if (!list.length) return;
+    var first = list[0], last = list[list.length - 1], a = document.activeElement, box = ui.root.querySelector('.box');
+    if (!ui.root.contains(a) || (ev.shiftKey && (a === first || a === box))) { ev.preventDefault(); (ev.shiftKey ? last : first).focus(); }
+    else if (!ev.shiftKey && a === last) { ev.preventDefault(); first.focus(); }
   }
   function hide() {
     open = null;
@@ -113,6 +130,7 @@
     open.mode = mode; open.id = ++serial;
     var u = ui;
     u.tShow.classList.toggle('on', mode === 'show'); u.tRead.classList.toggle('on', mode === 'read');
+    u.tShow.setAttribute('aria-selected', String(mode === 'show')); u.tRead.setAttribute('aria-selected', String(mode === 'read'));
     u.vShow.hidden = mode !== 'show'; u.vRead.hidden = mode !== 'read';
     u.yes.hidden = mode !== 'read'; u.yes.disabled = true;
     if (mode === 'show') fillShow(open); else { u.rPaste.focus(); }

@@ -11,6 +11,7 @@ const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const jsQR = require(path.join(REPO, 'node_modules', 'jsqr'));
+const { befriend } = require('./friends-helper.js');
 const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0, passed = 0;
@@ -49,7 +50,7 @@ async function device(label, name) {
   const created = await page.evaluate((l) => window.keoIdentity.create({ label: l }), label);
   await frame.evaluate(() => window.keo.call('world.go', { kind: 'enter' }, 60000)).catch(() => {});
   frame = await waitForWorld(page, 'homestar');
-  await frame.evaluate(() => { window.__fr = []; window.keo.on('friend', (e) => window.__fr.push(e)); });
+  await frame.evaluate(() => { window.__fr = []; window.keo.on('friend', (e) => window.__fr.push(e)); window.__p2p = []; window.keo.on('p2p', (e) => window.__p2p.push(e)); });
   return { label, name, ctx, page, frame, did: created.did };
 }
 // What the screen shows, as a person sees it.
@@ -72,6 +73,15 @@ async function scanCanvas(P) {
   const img = await P.page.evaluate(() => { const c = document.querySelector('#keo-intro canvas'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height); return { w: c.width, h: c.height, data: Array.from(d.data) }; });
   const r = jsQR(Uint8ClampedArray.from(img.data), img.w, img.h);
   return r ? r.data : null;
+}
+const findP2p = (P, pred, ms) => waitFor(async () => (await P.frame.evaluate(() => window.__p2p.slice())).find(pred), ms);
+async function connect(A, B) {
+  const inv = await call(A.frame, 'p2p.offer', { name: A.label });
+  const ans = await call(B.frame, 'p2p.answer', { code: inv.r.code, name: B.label });
+  await call(A.frame, 'p2p.finish', { id: inv.r.id, code: ans.r.code });
+  const ra = await findP2p(A, (e) => e.type === 'state' && e.id === inv.r.id && e.state === 'ready'), rb = await findP2p(B, (e) => e.type === 'state' && e.id === ans.r.id && e.state === 'ready');
+  if (!ra || !rb) throw new Error('the devices did not connect');
+  return { a: inv.r.id, b: ans.r.id };
 }
 const isAdded = (P, did) => P.page.evaluate((d) => window.keoContacts.ensure().then(() => window.keoContacts.isAdded(d)), did);
 
@@ -180,6 +190,84 @@ const isAdded = (P, did) => P.page.evaluate((d) => window.keoContacts.ensure().t
     check('the real owner\'s words do not match a look-alike DID, so it cannot be added', !!f1 && f2.yesDisabled === true && /not their words/.test(f2.checkHint), f2);
     check('and the look-alike was not added', (await isAdded(A, A.did.slice(0, -4) + 'AAAA')) === false);
     await A.page.keyboard.press('Escape');
+
+    // ---- 5. the whole path: each adds the other from an introduction, with no connection; then they connect and are friends at once; then a card
+    await sleep(10300);
+    await B.page.bringToFront();
+    await call(B.frame, 'intro.show');
+    const sB = await waitFor(async () => { const d = await screen(B); return d && d.raw ? d : null; }, 10000);
+    await B.page.keyboard.press('Escape');
+    await sleep(10300);
+    await A.page.bringToFront();
+    await call(A.frame, 'intro.read');
+    await screenOpen(A);
+    await A.page.fill('#keo-intro textarea.paste', sB.raw);
+    await A.page.fill('#keo-intro input.theirs', sB.words);
+    await waitFor(() => A.page.evaluate(() => !document.querySelector('#keo-intro button.yes').disabled), 8000);
+    await A.page.click('#keo-intro button.yes');
+    check('the first device adds the second from its introduction (the second had already added the first the same way)', (await waitFor(async () => (await isAdded(A, B.did)) ? true : null, 5000)) === true && (await isAdded(B, A.did)) === true);
+    const k = await connect(A, B);
+    const friendsNow = await befriend(A, B, k);
+    check('connected afterwards, they are friends at once: no friend dialog, both halves were already there', friendsNow === true && !(await A.page.evaluate(() => { const r = document.getElementById('keo-friend'); return !!r && !r.hidden; })));
+    await A.page.evaluate((h) => window.keoCards.setHelpers(h), H);
+    const gotCard = await waitFor(async () => { const c = await B.page.evaluate((d) => window.keoContacts.cards(d), A.did); return c.length ? c : null; }, 15000);
+    check('then the first device\'s card reaches the second and is kept for the friend that was added from the introduction', !!gotCard && gotCard[0].helpers[0].host === '203.0.113.9', gotCard);
+
+    // ---- 6. keyboard and roles: Tab stays inside the screen, Escape works from anywhere in it, Copy says what happened
+    await sleep(10300);
+    await call(A.frame, 'intro.show');
+    await waitFor(async () => { const d = await screen(A); return d && d.raw ? d : null; }, 10000);
+    const inside = () => A.page.evaluate(() => document.getElementById('keo-intro').contains(document.activeElement));
+    const focusName = () => A.page.evaluate(() => { const a = document.activeElement; return a ? (a.getAttribute('data-ans') || a.getAttribute('data-act') || a.getAttribute('data-tab') || a.className || a.tagName) : null; });
+    check('focus starts inside the screen', (await inside()) === true);
+    await A.page.keyboard.press('Shift+Tab');
+    check('Shift+Tab from the start goes to the last control (Close), not out to the page behind', (await focusName()) === 'no', await focusName());
+    let leaked = false; const seen = [];
+    for (let i = 0; i < 9; i++) { await A.page.keyboard.press('Tab'); if (!(await inside())) leaked = true; seen.push(await focusName()); }
+    check('nine Tab presses never leave the screen', leaked === false, seen);
+    check('and Tab comes back round to the first controls', seen.indexOf('show') >= 0 && seen.indexOf('copy') >= 0, seen);
+    const roles = await A.page.evaluate(() => { const r = document.getElementById('keo-intro'); return { list: r.querySelector('.tabs').getAttribute('role'), tabs: Array.from(r.querySelectorAll('.tab')).map((t) => t.getAttribute('role') + ':' + t.getAttribute('aria-selected')), canvas: r.querySelector('canvas').getAttribute('role'), dialog: r.querySelector('.box').getAttribute('role') }; });
+    check('the tabs, the picture and the dialog have their roles, and "Show mine" is selected', roles.list === 'tablist' && roles.tabs.join() === 'tab:true,tab:false' && roles.canvas === 'img' && roles.dialog === 'dialog', roles);
+    await A.page.click('#keo-intro button[data-tab="read"]');
+    check('switching tabs moves the selection', (await A.page.evaluate(() => Array.from(document.querySelectorAll('#keo-intro .tab')).map((t) => t.getAttribute('aria-selected')).join())) === 'false,true');
+    await A.page.click('#keo-intro button[data-tab="show"]');
+    await waitFor(async () => (await screen(A)).raw ? true : null, 8000);
+    await A.page.click('#keo-intro button[data-act="copy"]');
+    const c1 = await waitFor(async () => (await screen(A)).showHint === 'Copied.' ? true : null, 5000);
+    check('Copy says it copied when the browser accepts the text', !!c1, (await screen(A)).showHint);
+    await A.page.evaluate(() => { Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: () => Promise.reject(new Error('refused')) }); document.querySelector('#keo-intro .show .hint').textContent = ''; });
+    await A.page.click('#keo-intro button[data-act="copy"]');
+    const c2 = await waitFor(async () => /Ctrl\+C/.test((await screen(A)).showHint) ? true : null, 5000);
+    const sel = await A.page.evaluate(() => { const t = document.querySelector('#keo-intro textarea.raw'); return { all: t.selectionStart === 0 && t.selectionEnd === t.value.length, focused: document.activeElement === t }; });
+    check('when the browser refuses, the text is selected and the screen says to press Ctrl+C', !!c2 && sel.all && sel.focused, sel);
+    await A.page.keyboard.press('Escape');
+    check('Escape closes it from wherever the focus was', (await screenGone(A)) === true);
+
+    // ---- 7. a small window: the box scrolls and every control is still reachable
+    await sleep(10300);
+    await A.page.setViewportSize({ width: 420, height: 480 });
+    await call(A.frame, 'intro.show');
+    await waitFor(async () => (await screen(A)).raw ? true : null, 10000);
+    const fit = await A.page.evaluate(() => { const b = document.querySelector('#keo-intro .box').getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, vh: innerHeight, vw: innerWidth }; });
+    check('in a window 420 by 480 the box fits inside it', fit.top >= 0 && fit.bottom <= fit.vh && fit.left >= 0 && fit.right <= fit.vw, fit);
+    await A.page.evaluate(() => document.querySelector('#keo-intro button[data-ans="no"]').scrollIntoView());
+    const closeAt = await A.page.evaluate(() => { const r = document.querySelector('#keo-intro button[data-ans="no"]').getBoundingClientRect(); const t = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { onScreen: r.top >= 0 && r.bottom <= innerHeight, hit: !!t && t.getAttribute('data-ans') === 'no' }; });
+    check('Close can be scrolled to and is not covered', closeAt.onScreen && closeAt.hit, closeAt);
+    await A.page.click('#keo-intro button[data-ans="no"]');
+    check('and it closes the screen', (await screenGone(A)) === true);
+    await A.page.setViewportSize({ width: 1000, height: 800 });
+
+    // ---- 8. the session ends while a screen is up: nothing of it is left, and it cannot be opened again
+    await sleep(10300);
+    await B.page.bringToFront();
+    await call(B.frame, 'intro.show');
+    await waitFor(async () => (await screen(B)).raw ? true : null, 10000);
+    await B.page.evaluate(() => window.keoIdentity.signOut());
+    const ended = await waitFor(async () => { const d = await screen(B); return d && d.hidden ? d : null; }, 8000);
+    const left = await B.page.evaluate(() => { const r = document.getElementById('keo-intro'); return { raw: r.querySelector('textarea.raw').value, words: r.querySelector('.show .words').textContent, w: r.querySelector('canvas').width }; });
+    check('signing out takes the screen down and clears the text, the words and the code', !!ended && left.raw === '' && left.words === '' && left.w === 0, left);
+    const again = await B.page.evaluate(() => window.keoIntro.show().then(() => 'opened', (e) => e.message));
+    check('and with nobody signed in it cannot be opened', /Sign in first/.test(again), again);
 
     check('no page errors were logged', errors.length === 0, errors.slice(0, 5));
   } finally { clearTimeout(hard); for (const c of ctxs) await c.close().catch(() => {}); }
