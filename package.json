@@ -16,7 +16,8 @@
     "test:worldtext": "node tests/keo-worldtext-test.js",
     "refresh-kernel": "node extension/refresh-kernel.js",
     "dev-cycle": "node extension/dev-cycle.js",
-    "test:qr": "node tests/keo-qr-test.js"
+    "test:qr": "node tests/keo-qr-test.js",
+    "test:sha256": "node tests/keo-sha256-test.js"
   },
   "devDependencies": {
     "jsqr": "1.4.0",
