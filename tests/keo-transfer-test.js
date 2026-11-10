@@ -150,6 +150,130 @@ const flip = (s) => (s[0] === 'A' ? 'B' : 'A') + s.slice(1);
     check('B: still two worlds', same.ok && same.r === 2, same);
     await B.page.click(CLOSE);
 
+    // ---- large files: kept in chunks, moved in a second form of the file that is read a piece at a time
+    const SZ = { 'large-one.bin': 2 * 4194304 + 777, 'large-two.bin': 4194304, 'large-three.bin': 15 * 4194304 }, CH = { 'large-one.bin': 3, 'large-two.bin': 1, 'large-three.bin': 15 };
+    const LARGE = await call(A.page, async (list) => {
+      const L = window.keoLibrary, kd = window.keoDid, out = [], marker = 'KEO-BIG-MARKER-KEO-BIG-MARKER';
+      for (const [name, n, seed] of list) {
+        const u = new Uint8Array(n); let x = seed;
+        for (let i = 0; i < n; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; u[i] = x & 255; }
+        if (name === 'large-one.bin') for (let i = 0; i + marker.length < n; i += 1000) for (let j = 0; j < marker.length; j++) u[i + j] = marker.charCodeAt(j);
+        const b = await L.fileBegin({ name, type: 'application/octet-stream', size: n }); let k = 0;
+        for (let o = 0; o < n; o += b.chunkBytes) await L.fileChunk({ upload: b.upload, n: k++, bytes: u.slice(o, Math.min(o + b.chunkBytes, n)) });
+        const end = await L.fileEnd({ upload: b.upload });
+        out.push({ name, id: end.id, cid: kd.b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', u))), size: n });
+      }
+      return out;
+    }, [['large-one.bin', SZ['large-one.bin'], 5], ['large-two.bin', SZ['large-two.bin'], 6], ['large-three.bin', SZ['large-three.bin'], 7]]);
+    check('setup: A has three large files (three, one and fifteen chunks)', LARGE.ok && LARGE.r.length === 3 && LARGE.r.every((x) => x.id === x.cid), LARGE);
+    const IDS = {}; (LARGE.r || []).forEach((x) => { IDS[x.name] = x.id; });
+    await sleep(11000);
+    await A.page.bringToFront();
+    check('A: the dialog opens again', (await op(A.frame, 'transfer.open')).ok);
+    const BIGF = path.join(WORK, 'keo-data-big.keo');
+    const [dl2] = await Promise.all([A.page.waitForEvent('download', { timeout: 60000 }), A.page.click(SAVE)]);
+    await dl2.saveAs(BIGF);
+    check('A: with large files the download is named keo-data.keo', dl2.suggestedFilename() === 'keo-data.keo');
+    const big = fs.readFileSync(BIGF);
+    check('the second form starts with its marker', big.slice(0, 6).toString() === 'KEOD2\n');
+    check('nothing in it is readable: no file name, no marker text, no title', big.indexOf('large-') < 0 && big.indexOf('KEO-BIG-MARKER') < 0 && big.indexOf('Sample Quartz') < 0 && big.indexOf('zebra') < 0);
+    d = await poll(async () => { const x = await dlg(A); return /Saved keo-data\.keo/.test(x.result) ? x : null; }, 30000);
+    check('A: the dialog says what was saved, large files counted apart', !!d && /2 saved worlds, 1 library item, 1 file and 3 large files/.test(d.result), d);
+    await A.page.click(CLOSE);
+    const parse = (buf) => { let off = 6; const fr = []; while (off + 5 <= buf.length) { const len = buf.readUInt32BE(off + 1); fr.push({ type: buf[off], start: off, len, end: off + 5 + len }); off += 5 + len; } return fr; };
+    const frs = parse(big), groups = []; let curG = null;
+    for (const fr of frs.slice(1)) { if (fr.type === 2) { curG = { man: fr, chunks: [] }; groups.push(curG); } else if (fr.type === 3) curG.chunks.push(fr); }
+    const nameOf = (g) => Object.keys(CH).find((n) => CH[n] === g.chunks.length);
+    check('the frames: one text frame, three manifests, nineteen chunks, one end mark', frs[0].type === 1 && groups.length === 3 && groups.reduce((a, g) => a + g.chunks.length, 0) === 19 && frs[frs.length - 1].type === 4 && frs[frs.length - 1].end === big.length, groups.map((g) => g.chunks.length));
+
+    const bStat = () => call(B.page, async () => {
+      const idb = (st) => new Promise((res, rej) => { const q = indexedDB.open('keo-library'); q.onerror = () => rej(q.error); q.onsuccess = () => { const db = q.result, r = db.transaction(st).objectStore(st).getAll(); r.onsuccess = () => { db.close(); res(r.result); }; }; });
+      const found = await window.keoLibrary.fileSearch({ query: 'large-', limit: 200 }), tot = await idb('blobtotal');
+      return { names: found.items.map((i) => i.name).sort(), chunks: (await idb('chunks')).length, pending: (await idb('pending')).length, total: tot[0] ? tot[0].total : 0 };
+    });
+    const removeLarge = () => call(B.page, async (ids) => { for (const id of ids) await window.keoLibrary.fileRemove({ id }); return true; }, Object.values(IDS));
+    const hashesOk = (names) => call(B.page, async (list) => {
+      const out = {};
+      for (const [name, id] of list) {
+        const info = await window.keoLibrary.fileInfo({ id }); const parts = [];
+        for (let n = 0; n < info.chunks; n++) parts.push(await window.keoLibrary.fileRead({ id, n }));
+        const all = new Uint8Array(await new Blob(parts).arrayBuffer()), h = new Uint8Array(await crypto.subtle.digest('SHA-256', all));
+        let t = ''; for (const b of h) t += String.fromCharCode(b);
+        out[name] = btoa(t).split('+').join('-').split('/').join('_').split('=').join('') === id && info.name === name && info.size === all.length;
+      }
+      return out;
+    }, names.map((n) => [n, IDS[n]]));
+    const sumOf = (names) => names.reduce((a, n) => a + SZ[n], 0), chunksOf = (names) => names.reduce((a, n) => a + CH[n], 0);
+    const base = (await bStat()).r;
+
+    await sleep(11000);
+    await B.page.bringToFront();
+    check('B: asked for the dialog', (await op(B.frame, 'transfer.open')).ok);
+    d = await addFile(BIGF);
+    check('B: the large files are added and counted, with their size', !!d && /Added 0 saved worlds, 0 library items, 0 files and 3 large files \(72\.0 MB\)/.test(d.result), d);
+    let st = (await bStat()).r;
+    check('B: all three are there, their chunks too, nothing left unfinished, and the total grew by their size', st.names.join() === 'large-one.bin,large-three.bin,large-two.bin' && st.chunks === 19 && st.pending === 0 && st.total === base.total + sumOf(Object.keys(SZ)), st);
+    const hv = (await hashesOk(Object.keys(SZ))).r;
+    check('B: each one reads back whole, and its bytes come to its name (the hash), name and size', hv && Object.values(hv).every(Boolean) && Object.keys(hv).length === 3, hv);
+    d = await addFile(BIGF);
+    check('B: adding the same file again adds nothing and says they are already here', !!d && /and 0 large files/.test(d.result) && /3 large files/.test(d.result.split('already here')[1] || ''), d);
+    st = (await bStat()).r;
+    check('B: and the stores did not grow', st.chunks === 19 && st.total === base.total + sumOf(Object.keys(SZ)), st);
+
+    // ---- files that are cut, changed or wrong: every case starts from B without the large files
+    const victim = groups.find((g) => g.chunks.length === 15), vName = nameOf(victim), vIdx = groups.indexOf(victim);
+    const others = Object.keys(SZ).filter((n) => n !== vName), before = groups.slice(0, vIdx).map(nameOf);
+    const CASE = path.join(WORK, 'keo-data-case.keo');
+    const run = async (buf, expect) => {
+      fs.writeFileSync(CASE, buf);
+      await removeLarge();
+      const dd = await addFile(CASE);
+      await expect(dd, (await bStat()).r);
+    };
+    const flipAt = (buf, at) => { const b = Buffer.from(buf); b[at] ^= 1; return b; };
+    await run(big.slice(0, victim.chunks[0].end), (dd, got) => {
+      check('B: a file cut short: the files before it are added, the cut one is not, and the person is told it stops early', !!dd && got.names.join() === before.slice().sort().join() && /stops early or is damaged/.test(dd.result), { dd, got, before });
+      check('B: what the cut file stored is gone (chunks only for the added files, none unfinished)', got.chunks === chunksOf(before) && got.pending === 0 && got.total === base.total + sumOf(before), got);
+    });
+    await run(flipAt(big, victim.chunks[1].start + 5 + 12 + 100), (dd, got) => {
+      check('B: one changed bit in a chunk: that file is not added, the others are, and it says so', !!dd && got.names.join() === others.slice().sort().join() && /Could not be used \(damaged, or not valid here\): 1/.test(dd.result) && !/stops early/.test(dd.result), { dd, got });
+      check('B: and nothing of it is left behind', got.chunks === chunksOf(others) && got.pending === 0 && got.total === base.total + sumOf(others), got);
+    });
+    const manBuf = Buffer.from(big), ctAt = manBuf.slice(victim.man.start, victim.man.end).indexOf('"ct":"') + victim.man.start + 6 + 20;
+    manBuf[ctAt] = manBuf[ctAt] === 65 ? 66 : 65;
+    await run(manBuf, (dd, got) => {
+      check('B: a changed manifest: that file is not added (and its chunks are skipped, not misread), the others are', !!dd && got.names.join() === others.slice().sort().join() && /Could not be used \(damaged, or not valid here\): 1/.test(dd.result) && got.chunks === chunksOf(others) && got.pending === 0, { dd, got });
+    });
+    const swapBuf = Buffer.from(big), c0 = victim.chunks[0], c1 = victim.chunks[1];
+    big.slice(c0.start + 5, c0.end).copy(swapBuf, c1.start + 5); big.slice(c1.start + 5, c1.end).copy(swapBuf, c0.start + 5);
+    await run(swapBuf, (dd, got) => {
+      check('B: two chunks of one file swapped: refused (each is sealed to its own place), the others are added', !!dd && got.names.join() === others.slice().sort().join() && /Could not be used/.test(dd.result) && got.chunks === chunksOf(others), { dd, got });
+    });
+    const didBuf = Buffer.from(big), didAt = didBuf.slice(frs[0].start + 5, frs[0].end).indexOf('"did":"did:keo:') + frs[0].start + 5 + 40;
+    didBuf[didAt] = didBuf[didAt] === 65 ? 66 : 65;
+    await run(didBuf, (dd, got) => {
+      check('B: data made for another identity is refused, naming it, and nothing is added', !!dd && /another identity \(keo:/.test(dd.hint) && got.names.length === 0 && got.chunks === 0, { dd, got });
+    });
+    await run(big.slice(0, frs[0].end - 10), (dd, got) => {
+      check('B: a file that ends inside its first part is refused with a sentence, and nothing changes', !!dd && /ends too early/.test(dd.hint) && got.chunks === 0 && got.names.length === 0, { dd, got });
+    });
+    const typeBuf = Buffer.from(big); typeBuf[frs[0].start] = 2;
+    await run(typeBuf, (dd, got) => {
+      check('B: a file whose first part is of the wrong kind is "not a valid keo data file"', !!dd && /not a valid keo data file/.test(dd.hint) && got.chunks === 0, { dd, got });
+    });
+    const lenBuf = Buffer.from(big); lenBuf.writeUInt32BE(0xffffffff, frs[0].start + 1);
+    await run(lenBuf, (dd, got) => {
+      check('B: a first part that claims an absurd length is refused as damaged', !!dd && /damaged/.test(dd.hint) && got.chunks === 0, { dd, got });
+    });
+    await run(Buffer.from('KEOD2\n'), (dd, got) => {
+      check('B: a file with only the marker is "not a valid keo data file"', !!dd && /not a valid keo data file/.test(dd.hint) && got.chunks === 0, { dd, got });
+    });
+    d = await addFile(BIGF);
+    check('B: after all that the good file still adds all three', !!d && /and 3 large files \(72\.0 MB\)/.test(d.result), d);
+    const hv2 = (await hashesOk(Object.keys(SZ))).r;
+    check('B: and they read back whole', hv2 && Object.values(hv2).every(Boolean), hv2);
+    await B.page.click(CLOSE);
+
   } catch (e) { check('the test crashed: ' + (e && e.message), false, e && e.stack); }
   finally { await A.ctx.close().catch(() => {}); await B.ctx.close().catch(() => {}); }
   console.log(`\n${passed} passed, ${failed} failed`);

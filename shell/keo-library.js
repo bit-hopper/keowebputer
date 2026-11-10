@@ -22,8 +22,9 @@
 // be moved, dropped or reordered; the sealed manifest (name, type, size, chunk count) is stored under the file's name. IndexedDB `files`
 // (manifests), `chunks`, `pending` (an upload that has not finished: whatever is left of it is swept at the next upload, at purge).
 // A file of the first kind (one record in `blobs`) is still read the same way: as one chunk. Files count toward the same running total
-// as blobs. A search by name opens the manifests as it goes (fileSearch). Not here yet: moving them with "Move my data"
-// (keo-transfer.js does NOT carry them), a limit that follows the browser's quota, reclaiming a file nothing refers to any more.
+// as blobs. A search by name opens the manifests as it goes (fileSearch). They move with "Move my data" one chunk at a time
+// (exportFileList, exportFileChunk, importFile: for keo-transfer.js only). Not here yet: a limit that follows the browser's quota,
+// reclaiming a file nothing refers to any more.
 // Not here: sync to a host, signatures (a host checks them; a local object is unsigned), a version history (a put replaces the
 // previous document), listing or searching the library, reclaiming a blob that nothing refers to any more (removing an item
 // leaves its blob, as the host's store does).
@@ -247,7 +248,8 @@
     var m;
     try { m = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(rec.iv), additionalData: enc.encode(fileAad(s.did, cid)) }, s.key, rec.ct))); }
     catch (e) { throw new Error('A library file could not be decrypted (wrong identity, or the record was changed).'); }
-    if (!m || m.v !== 1 || m.cid !== cid || typeof m.fid !== 'string' || !(m.chunks >= 0) || !(m.size >= 0) || m.chunkBytes !== CHUNK_BYTES) throw new Error('A library file is damaged.');
+    if (!m || m.v !== 1 || m.cid !== cid || typeof m.fid !== 'string' || !(m.chunks >= 0) || !(m.size >= 0) || m.chunkBytes !== CHUNK_BYTES
+      || m.chunks !== Math.ceil(m.size / m.chunkBytes)) throw new Error('A library file is damaged.');
     return m;
   }
   // Opens the manifest of the file with that name, or null when this identity has no such file of this kind.
@@ -418,6 +420,94 @@
       return true;
     });
   }
+  // ---- moving files in chunks between origins (keo-transfer.js) ----------------------------------------------------------
+  // The sealed manifests and chunks AS THEY ARE ON DISK, like exportSealed, one chunk at a time so a large file is never held whole.
+  // Not for anything but keo-transfer.js: nothing here is a bridge op.
+  // { files: [{ id, fid, chunks, size, manifest: { iv, ct } }], unreadable } for the signed-in identity. A manifest that cannot be
+  // opened is counted, not listed: the person is told how many files could not be saved.
+  function exportFileList() {
+    return serial(async function () {
+      var s = session(), prefix = s.did + '|';
+      var recs = await tx(['files'], 'readonly', function (t) { var r = t.objectStore('files').index('did').getAll(IDBKeyRange.only(s.did)); return function () { return r.result; }; });
+      var files = [], unreadable = 0;
+      for (var i = 0; i < recs.length; i++) {
+        var cid = String(recs[i].id).slice(prefix.length), m;
+        try { m = await openRecord(s, recs[i], cid); } catch (e) { unreadable++; continue; }
+        files.push({ id: cid, fid: m.fid, chunks: m.chunks, size: m.size, manifest: { iv: recs[i].iv, ct: recs[i].ct } });
+      }
+      return { files: files, unreadable: unreadable };
+    });
+  }
+  // args: { fid, n }. { iv, ct } of that chunk as stored (nothing is opened).
+  function exportFileChunk(args) {
+    return serial(async function () {
+      var s = session(), fid = String(args.fid), n = args.n;
+      if (!(typeof n === 'number' && Math.floor(n) === n && n >= 0)) throw new Error('A chunk number is a whole number.');
+      var rec = await tx(['chunks'], 'readonly', function (t) { return get(t, 'chunks', s.did + '|' + fid + '|' + n); });
+      if (!rec || rec.did !== s.did) throw new Error('A library file is damaged: a chunk is missing.');
+      return { iv: rec.iv, ct: rec.ct };
+    });
+  }
+  // args: { id, manifest: { iv, ct }, readChunk: async (n) => { iv, ct } }. Adds one file of a pack made by exportFileList and
+  // exportFileChunk (for the same identity) that this identity does not have yet. The manifest is opened with this identity's key
+  // (so a file made for another identity, or changed, is refused), each chunk is opened with its own place in its additional data, the
+  // bytes are hashed as they come and must come to the file's name, and only then is the file made visible; whatever it stored
+  // before that is removed if anything fails. The same bytes already here (either kind) are left alone. Resolves
+  // { status: 'added' | 'skipped', size }, or throws a sentence.
+  async function importFile(args) {
+    var begun = await serial(async function () {
+      var s = session(), cid = cidOf(args.id), man = args.manifest;
+      if (!man || typeof man.iv !== 'string' || !(man.ct instanceof Uint8Array)) throw new Error('This file is damaged.');
+      var m = await openRecord(s, man, cid);
+      var have = await tx(['files', 'blobs'], 'readonly', function (t) { var a = get(t, 'files', idOf(s.did, cid)), b = get(t, 'blobs', idOf(s.did, cid)); return function () { return a() || b(); }; });
+      if (have && have.did === s.did) return { skip: true };
+      if (await readTotal(s.did) + m.size > MAX_BLOBS_TOTAL) throw new Error('The library would be full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.');
+      await sweepPending(s.did);
+      var fk = s.did + '|' + m.fid;
+      var clash = await tx(['chunks'], 'readonly', function (t) { var r = t.objectStore('chunks').index('fk').count(IDBKeyRange.only(fk)); return function () { return r.result; }; });
+      if (clash) throw new Error('A file in this data clashes with one that is already here.');
+      await tx(['pending'], 'readwrite', function (t) { t.objectStore('pending').put({ id: fk, did: s.did, at: Date.now() }); });
+      return { did: s.did, m: m, cid: cid, fk: fk, man: man };
+    });
+    if (begun.skip) return { status: 'skipped', size: 0 };
+    var hasher = window.keoSha256.create(), m = begun.m;
+    try {
+      for (var n = 0; n < m.chunks; n++) {
+        var rec = await args.readChunk(n);
+        if (!rec || typeof rec.iv !== 'string' || !(rec.ct instanceof Uint8Array)) throw new Error('This file is damaged.');
+        await serial(async function () {
+          var cur = session();
+          if (cur.did !== begun.did) throw new Error('The signed-in identity changed.');
+          var plain;
+          try { plain = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(rec.iv), additionalData: enc.encode(chunkAad(cur.did, m.fid, n)) }, cur.key, rec.ct)); }
+          catch (e) { throw new Error('A file in this data could not be decrypted (wrong identity, or it was changed).'); }
+          if (plain.length !== chunkLength(m, n)) throw new Error('A file in this data is damaged: a chunk has the wrong length.');
+          hasher.update(plain);
+          await tx(['chunks', 'pending'], 'readwrite', function (t) {
+            t.objectStore('chunks').put({ id: begun.fk + '|' + n, did: cur.did, fk: begun.fk, iv: rec.iv, ct: rec.ct });
+            t.objectStore('pending').put({ id: begun.fk, did: cur.did, at: Date.now() });
+          });
+        });
+      }
+      return await serial(async function () {
+        var cur = session();
+        if (cur.did !== begun.did) throw new Error('The signed-in identity changed.');
+        if (kd.b64u(hasher.digest()) !== begun.cid) throw new Error('A file in this data does not match its name.');
+        var used = await readTotal(cur.did);
+        if (used + m.size > MAX_BLOBS_TOTAL) throw new Error('The library would be full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.');
+        await tx(['files', 'pending', 'blobtotal'], 'readwrite', function (t) {
+          t.objectStore('files').put({ id: idOf(cur.did, begun.cid), did: cur.did, iv: begun.man.iv, ct: begun.man.ct });
+          t.objectStore('pending').delete(begun.fk);
+          t.objectStore('blobtotal').put({ did: cur.did, total: used + m.size });
+        });
+        return { status: 'added', size: m.size };
+      });
+    } catch (e) {
+      await serial(function () { return tx(['chunks', 'pending'], 'readwrite', function (t) { dropChunks(t, begun.fk); t.objectStore('pending').delete(begun.fk); }); }).catch(function () {});
+      throw e;
+    }
+  }
+
   // The session ended: uploads that were open are gone (their chunks are swept by the next upload).
   function reset() { uploads = {}; }
 
@@ -503,5 +593,6 @@
 
   window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob,
     fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSearch: fileSearch, fileRemove: fileRemove,
+    exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile,
     reset: reset, purge: purge, CHUNK_BYTES: CHUNK_BYTES };
 })();

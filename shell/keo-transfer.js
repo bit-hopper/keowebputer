@@ -9,6 +9,13 @@
 // Adding a file never overwrites: a world whose name is taken, and a library item or file that is already there, are left alone and
 // reported. Every record is opened with the signed-in identity's key before anything is written, so a damaged file, or one made for
 // another identity, is refused with a sentence and changes nothing.
+// LARGE FILES (library files kept in chunks, keo-library.js) are too big for that one text. When there are any, the data is saved in
+// a second form instead, which is read a piece at a time and so is never held whole: the marker KEOD2 and a newline, then frames of
+// one type byte, a four-byte length and the payload: 1 the same text as above (worlds, library items, small files), 2 a large file's
+// sealed manifest, 3 one sealed chunk of it (raw bytes: iv then ciphertext), 4 an end mark with the counts. Without large files the
+// first form is written exactly as before. Adding is then in two steps: the text first, as a whole or not at all, then the large
+// files one by one; a file is made visible only once every chunk has been opened and the bytes have come to its name, so a file cut
+// short is not added and the ones before it stay.
 //
 // The rules (the world is assumed hostile):
 //  - The world can only ASK for the dialog (transfer.open). There is no op that saves, adds, or reads what is in a file.
@@ -20,7 +27,10 @@
   var kd = window.keoDid, ident = window.keoIdentity, icons = window.keoIdenticon;
   var MAX_FILE = 256 * 1024 * 1024;        // one file: a guard (the whole thing is held in memory), not a quota
   var DISMISS_MS = 10000;
-  var FILE_NAME = 'keo-data.json';
+  var FILE_NAME = 'keo-data.json', FILE_NAME_BIG = 'keo-data.keo';
+  var MAGIC = 'KEOD2\n', T_BODY = 1, T_FILE = 2, T_CHUNK = 3, T_END = 4;
+  var MAX_FRAME = 8 * 1024 * 1024;                 // any frame but the first holds one chunk (4 MiB and a few bytes)
+  var MAX_EXPORT = 2 * 1024 * 1024 * 1024;         // a file with large files in it
   var B64U = /^[A-Za-z0-9_-]*$/;
   var open = null, lastClosed = 0, listener = null, ui = null;
 
@@ -50,8 +60,72 @@
       worlds: { index: w.index && encRec(w.index), bodies: w.bodies.map(encRec), texts: w.texts.map(encRec) },
       library: { docs: l.docs.map(encRec), blobs: l.blobs.map(encRec) } });
     if (body.length > MAX_FILE) throw new Error('Your data is too big for one file here.');
-    return { blob: new Blob([body], { type: 'application/json' }), worlds: w.bodies.length, docs: l.docs.length, blobs: l.blobs.length, };
+    var big = await window.keoLibrary.exportFileList();
+    var counts = { worlds: w.bodies.length, docs: l.docs.length, blobs: l.blobs.length, files: big.files.length, skippedFiles: big.unreadable };
+    if (!big.files.length) return Object.assign({ blob: new Blob([body], { type: 'application/json' }), name: FILE_NAME }, counts);
+    // the second form: one chunk is read, wrapped in its own blob and let go, so the browser can keep the file off the page's memory
+    if (big.files.reduce(function (a, f) { return a + f.size; }, 0) + body.length > MAX_EXPORT) throw new Error('Your data is too big for one file here.');
+    var te = new TextEncoder(), bodyBytes = te.encode(body), parts = [te.encode(MAGIC), frameHead(T_BODY, bodyBytes.length), bodyBytes], chunks = 0;
+    for (var i = 0; i < big.files.length; i++) {
+      var f = big.files[i], man = te.encode(JSON.stringify({ id: f.id, iv: f.manifest.iv, ct: kd.b64u(f.manifest.ct), chunks: f.chunks }));
+      parts.push(frameHead(T_FILE, man.length), man);
+      for (var n = 0; n < f.chunks; n++) {
+        var rec = await window.keoLibrary.exportFileChunk({ fid: f.fid, n: n }), iv = kd.unb64u(rec.iv);
+        parts.push(frameHead(T_CHUNK, iv.length + rec.ct.length), new Blob([iv, rec.ct]));
+        chunks++;
+      }
+    }
+    var end = te.encode(JSON.stringify({ files: big.files.length, chunks: chunks }));
+    parts.push(frameHead(T_END, end.length), end);
+    return Object.assign({ blob: new Blob(parts, { type: 'application/octet-stream' }), name: FILE_NAME_BIG }, counts);
   }
+  function frameHead(type, len) { var h = new Uint8Array(5); h[0] = type; new DataView(h.buffer).setUint32(1, len); return h; }
+  // Reads the frames of a file in the second form one after another; a payload is read only when asked for, so a frame can be skipped.
+  function frames(f) {
+    var off = MAGIC.length;
+    return { next: async function () {
+      if (off + 5 > f.size) return null;
+      var h = new DataView(await f.slice(off, off + 5).arrayBuffer()), type = h.getUint8(0), len = h.getUint32(1);
+      if (type < T_BODY || type > T_END || len > (type === T_BODY ? MAX_FILE : MAX_FRAME)) throw new Error('This file is damaged.');
+      if (off + 5 + len > f.size) throw new Error('This file ends too early.');
+      var start = off + 5; off = start + len;
+      return { type: type, len: len, bytes: async function () { return new Uint8Array(await f.slice(start, start + len).arrayBuffer()); } };
+    } };
+  }
+  // The large files of a file in the second form, one by one (the frames after the first). Never throws for a damaged file: it stops
+  // and says so. { added, skipped, bad (could not be used), bytes, ended (the end mark was there), broken (it stopped being readable) }.
+  async function addLarge(cur, q) {
+    var out = { added: 0, skipped: 0, bad: 0, bytes: 0, ended: false, broken: false }, n = 0, dec = new TextDecoder();
+    try {
+      for (;;) {
+        var fr = await cur.next();
+        if (!fr) break;
+        if (fr.type === T_END) { out.ended = true; break; }
+        if (fr.type !== T_FILE) throw new Error('This file is damaged.');
+        var info = JSON.parse(dec.decode(await fr.bytes()));
+        if (!info || typeof info.id !== 'string' || typeof info.iv !== 'string' || info.iv.length > 32 || !B64U.test(info.iv) || typeof info.ct !== 'string' || !B64U.test(info.ct)
+          || typeof info.chunks !== 'number' || Math.floor(info.chunks) !== info.chunks || info.chunks < 0 || info.chunks > 1000000) throw new Error('This file is damaged.');
+        n++; say('Adding large file ' + n + ' …');
+        if (open !== q) return out;
+        var used = 0;
+        var readChunk = async function () {
+          var c = await cur.next();
+          if (!c || c.type !== T_CHUNK) throw new Error('This file is damaged.');
+          used++;
+          var b = await c.bytes();
+          if (b.length < 12 + 16) throw new Error('This file is damaged.');
+          return { iv: kd.b64u(b.subarray(0, 12)), ct: b.subarray(12) };
+        };
+        var res = null, failed = false;
+        try { res = await window.keoLibrary.importFile({ id: info.id, manifest: { iv: info.iv, ct: kd.unb64u(info.ct) }, readChunk: readChunk }); } catch (e) { failed = true; }
+        // line up with the next file: skip the chunks this one did not take (the frame headers only)
+        for (; used < info.chunks; used++) { var sk = await cur.next(); if (!sk || sk.type !== T_CHUNK) throw new Error('This file is damaged.'); }
+        if (failed) out.bad++; else if (res.status === 'added') { out.added++; out.bytes += res.size; } else out.skipped++;
+      }
+    } catch (e) { out.broken = true; }
+    return out;
+  }
+  function mb(n) { return (n / 1048576).toFixed(1) + ' MB'; }
   function readFile(text, did) {
     var j;
     try { j = JSON.parse(text); } catch (e) { throw new Error('That is not a valid keo data file.'); }
@@ -74,10 +148,10 @@
     var head = el('div', 'head'), img = el('img', 'who-img'), who = el('div', 'who'), wname = el('div', 'who-name'), wdid = el('div', 'who-did');
     img.width = img.height = 40; img.alt = '';
     who.appendChild(wname); who.appendChild(wdid); head.appendChild(img); head.appendChild(who);
-    var text = el('div', 'text', 'Your saved worlds and your library (Books, Music and Gallery, with their pictures and files) go into one file that only this identity can open. Take the file to the other webputer, signed in as the same identity, and add it there. Nothing is overwritten: what is already on a webputer stays. Not included: friends, messages and settings.');
+    var text = el('div', 'text', 'Your saved worlds and your library (Books, Music and Gallery, with their pictures and files, large ones too) go into one file that only this identity can open. Take the file to the other webputer, signed in as the same identity, and add it there. Nothing is overwritten: what is already on a webputer stays. Not included: friends, messages and settings.');
     var save = el('button', 'yes', 'Save my data as a file'), add = el('button', 'tool', 'Add data from a file ...');
     save.type = add.type = 'button'; save.setAttribute('data-act', 'save'); add.setAttribute('data-act', 'add');
-    var file = el('input', 'file'); file.type = 'file'; file.hidden = true; file.accept = '.json,application/json,text/plain';
+    var file = el('input', 'file'); file.type = 'file'; file.hidden = true; file.accept = '.json,.keo,application/json,application/octet-stream,text/plain';
     var acts = el('div', 'acts'); acts.appendChild(save); acts.appendChild(add); acts.appendChild(file);
     var result = el('div', 'result'); result.setAttribute('role', 'status');
     var hint = el('div', 'hint'), btns = el('div', 'btns'), close = el('button', 'no', 'Close'); close.type = 'button'; close.setAttribute('data-act', 'close');
@@ -113,12 +187,15 @@
       var f = await makeFile();
       if (open !== q) return;
       // Nothing saved yet: no file is made, so nobody carries an empty one to another webputer and wonders why nothing arrived.
-      if (f.worlds + f.docs + f.blobs === 0) { ui.result.textContent = ''; return say('There is nothing to save yet: no saved worlds and no library items.', 'bad'); }
+      if (f.worlds + f.docs + f.blobs + f.files === 0) { ui.result.textContent = ''; return say('There is nothing to save yet: no saved worlds and no library items.', 'bad'); }
       var url = URL.createObjectURL(f.blob);
-      var a = el('a'); a.href = url; a.download = FILE_NAME;
+      var a = el('a'); a.href = url; a.download = f.name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-      ui.result.textContent = 'Saved ' + FILE_NAME + ': ' + plural(f.worlds, 'saved world', 'saved worlds') + ', ' + plural(f.docs, 'library item', 'library items') + ' and ' + plural(f.blobs, 'file', 'files') + '. Only this identity can open it.';
+      var what = [plural(f.worlds, 'saved world', 'saved worlds'), plural(f.docs, 'library item', 'library items'), plural(f.blobs, 'file', 'files')];
+      if (f.files) what.push(plural(f.files, 'large file', 'large files'));
+      ui.result.textContent = 'Saved ' + f.name + ': ' + what.slice(0, -1).join(', ') + ' and ' + what[what.length - 1] + '. Only this identity can open it.'
+        + (f.skippedFiles ? ' ' + plural(f.skippedFiles, 'large file', 'large files') + ' could not be read and ' + (f.skippedFiles === 1 ? 'is' : 'are') + ' not in it.' : '');
       say('');
     } catch (e) { if (open === q) { ui.result.textContent = ''; say((e && e.message) || String(e), 'bad'); } }
     finally { if (open === q) busy(false); }
@@ -129,25 +206,36 @@
     if (!q || q.busy) return;
     busy(true); ui.result.textContent = '';
     try {
-      if (f.size > MAX_FILE) throw new Error('That file is too big to be keo data.');
-      say('Checking the file …');
+      say('Checking the file …');        // first: the last message must not stay on screen while the file is looked at
+      var isBig = (await f.slice(0, MAGIC.length).text()) === MAGIC;
+      if (isBig ? f.size > MAX_EXPORT : f.size > MAX_FILE) throw new Error('That file is too big to be keo data.');
       var s = await ident.current();
       if (!s || s.did !== q.did) throw new Error('The signed-in identity changed. Close this and open it again.');
-      var pack = readFile(await f.text(), s.did);
+      var cur = null, pack;
+      if (isBig) {
+        cur = frames(f);
+        var first = await cur.next();
+        if (!first || first.type !== T_BODY) throw new Error('That is not a valid keo data file.');
+        pack = readFile(new TextDecoder().decode(await first.bytes()), s.did);
+      } else pack = readFile(await f.text(), s.did);
       if (open !== q) return;
       say('Adding …');
       var w = await window.keoWorlds.importSealed(pack.worlds);
       var l = await window.keoLibrary.importSealed(pack.library);
+      var big = isBig ? await addLarge(cur, q) : { added: 0, skipped: 0, bad: 0, bytes: 0, ended: true, broken: false };
       if (open !== q) return;
       var lines = [];
-      lines.push('Added ' + plural(w.added.length, 'saved world', 'saved worlds') + ', ' + plural(l.docs, 'library item', 'library items') + ' and ' + plural(l.blobs, 'file', 'files') + '.');
-      var left = w.skipped.length + l.skippedDocs + l.skippedBlobs;
-      if (left) lines.push('Left alone because they are already here: ' + [w.skipped.length ? plural(w.skipped.length, 'saved world', 'saved worlds') + ' (' + w.skipped.slice(0, 5).join(', ') + (w.skipped.length > 5 ? ', …' : '') + ')' : '', l.skippedDocs ? plural(l.skippedDocs, 'library item', 'library items') : '', l.skippedBlobs ? plural(l.skippedBlobs, 'file', 'files') : ''].filter(Boolean).join(', ') + '.');
-      var bad = w.unreadable.length + l.unreadable;
+      var added = [plural(w.added.length, 'saved world', 'saved worlds'), plural(l.docs, 'library item', 'library items'), plural(l.blobs, 'file', 'files')];
+      if (isBig) added.push(plural(big.added, 'large file', 'large files') + (big.added ? ' (' + mb(big.bytes) + ')' : ''));
+      lines.push('Added ' + added.slice(0, -1).join(', ') + ' and ' + added[added.length - 1] + '.');
+      var left = w.skipped.length + l.skippedDocs + l.skippedBlobs + big.skipped;
+      if (left) lines.push('Left alone because they are already here: ' + [w.skipped.length ? plural(w.skipped.length, 'saved world', 'saved worlds') + ' (' + w.skipped.slice(0, 5).join(', ') + (w.skipped.length > 5 ? ', …' : '') + ')' : '', l.skippedDocs ? plural(l.skippedDocs, 'library item', 'library items') : '', l.skippedBlobs ? plural(l.skippedBlobs, 'file', 'files') : '', big.skipped ? plural(big.skipped, 'large file', 'large files') : ''].filter(Boolean).join(', ') + '.');
+      var bad = w.unreadable.length + l.unreadable + big.bad;
       if (bad) lines.push('Could not be used (damaged, or not valid here): ' + bad + '.');
+      if (big.broken || (isBig && !big.ended)) lines.push('The file stops early or is damaged, so some large files may be missing. Save it again on the other webputer and add the new file.');
       ui.result.textContent = lines.join(' ');
-      say('Open My worlds again to see them.', w.added.length + l.docs + l.blobs ? 'good' : '');
-      emit({ type: 'transfer', kind: 'added', worlds: w.added.length, docs: l.docs, blobs: l.blobs });
+      say('Open My worlds again to see them.', w.added.length + l.docs + l.blobs + big.added ? 'good' : '');
+      emit({ type: 'transfer', kind: 'added', worlds: w.added.length, docs: l.docs, blobs: l.blobs, files: big.added });
     } catch (e) { if (open === q) { ui.result.textContent = ''; say((e && e.message) || String(e), 'bad'); } }
     finally { if (open === q) busy(false); }
   }
