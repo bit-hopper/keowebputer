@@ -561,7 +561,7 @@
   // A module takes the messages whose type starts with `<prefix>.`: attach('call', { message(handle, m), closed(handle, why, lost) }).
   // `message` gets each one from a peer that has proven itself AND is a friend (a message from anyone else closes the connection);
   // if it throws, the connection is closed like for any message that cannot be handled. `ready(handle)`, if given, is called when a
-  // connection becomes ready. `closed` is told when any connection ends. One module per prefix, and the file protocol's own types (file, go,
+  // connection becomes ready, and `friend(handle)` when a connection becomes one to a friend (it may already be ready, or not yet). `closed` is told when any connection ends. One module per prefix, and the file protocol's own types (file, go,
   // no, done, ok, cancel) have no dot, so a module cannot take those. `open: true` (only keo-friend.js) also takes messages from a
   // peer that is not a friend yet: that is how two devices become friends.
   function attach(prefix, ext, opts) {
@@ -582,6 +582,8 @@
     if (now && !was) noteSeen(c);
     // Not a 'state' event: the connection's state did not change, and a world that counts states must not see 'ready' twice.
     emit({ type: 'friendship', id: c.id, peer: c.peer, friend: now, added: addedOf(c), theirs: !!c.theirs });
+    // A module that has something to say to a friend (keo-cards.js) is told when a connection becomes one. Not when it stops: that closes it.
+    if (now && !was) Object.keys(hooks).forEach(function (k) { if (hooks[k].friend) { try { hooks[k].friend(handleOf(c)); } catch (e) {} } });
   }
   // The peer on this connection said whether it has added us.
   function setTheirs(id, value) {

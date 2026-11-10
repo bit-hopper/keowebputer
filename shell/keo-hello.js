@@ -378,7 +378,34 @@
     return { devices: out, changed: true };
   }
 
-  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, DIAL_AGE_MS: DIAL_AGE_MS, MAX_HELPERS: MAX_HELPERS, MAX_CARD_DEVICES: MAX_CARD_DEVICES, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
+  // ---- a card as text ------------------------------------------------------------------------------------------------------
+  // The same signed message written as one line, to be shown as a link or a QR or pasted: 'keocard1.' and the message in base64url. It
+  // adds nothing the signature does not cover, and reading it back proves nothing: the result goes to verifyCard like a card that arrived
+  // any other way. A card holds the identity's log and a delegation certificate, so the text is a few kilobytes (too long for a small QR);
+  // and the certificate it carries lasts as long as the session that signed it (12 hours), after which verifyCard refuses the card.
+  var CARD_TEXT_PREFIX = 'keocard1.', MAX_CARD_TEXT = 24000;
+  function cardToText(msg) {
+    if (!msg || typeof msg.sig !== 'string' || !msg.hello || typeof msg.hello !== 'object' || msg.hello.purpose !== CARD_PURPOSE) throw new Error('That is not a keo card.');
+    var text = CARD_TEXT_PREFIX + kd.b64u(enc.encode(JSON.stringify({ hello: msg.hello, sig: msg.sig })));
+    if (text.length > MAX_CARD_TEXT) throw new Error('That card is too long to write as text.');
+    return text;
+  }
+  // `text` may have the card inside a longer string (a link whose address ends with it, a line with words around it): the first 'keocard1.'
+  // and the base64url characters after it are taken. Throws a sentence when no card can be read; the result is NOT checked.
+  function cardFromText(text) {
+    var s = String(text == null ? '' : text);
+    if (s.length > MAX_CARD_TEXT * 2) throw new Error('That is too long to be a keo card.');
+    var at = s.indexOf(CARD_TEXT_PREFIX);
+    if (at < 0) throw new Error('That is not a keo card.');
+    var m = /^[A-Za-z0-9_-]*/.exec(s.slice(at + CARD_TEXT_PREFIX.length))[0];
+    if (!m || m.length > MAX_CARD_TEXT) throw new Error('That is not a valid keo card.');
+    var o;
+    try { o = JSON.parse(new TextDecoder().decode(kd.unb64u(m))); } catch (e) { throw new Error('That is not a valid keo card.'); }
+    if (!o || typeof o !== 'object' || !o.hello || typeof o.hello !== 'object' || typeof o.sig !== 'string') throw new Error('That is not a valid keo card.');
+    return { hello: o.hello, sig: o.sig };
+  }
+
+  return { PREFIX: PREFIX, MAX_AGE_MS: MAX_AGE_MS, DIAL_AGE_MS: DIAL_AGE_MS, MAX_HELPERS: MAX_HELPERS, MAX_CARD_DEVICES: MAX_CARD_DEVICES, cardToText: cardToText, cardFromText: cardFromText, fromSdp: fromSdp, codeSdp: codeSdp, offerTag: offerTag, encodeCode: encodeCode, decodeCode: decodeCode,
     proofBuild: proofBuild, signedBytes: signedBytes, verifyProof: verifyProof, dialBuild: dialBuild, verifyDial: verifyDial,
     helperError: helperError, cardBuild: cardBuild, verifyCard: verifyCard, mergeCard: mergeCard, deviceIdOf: deviceIdOf };
 });

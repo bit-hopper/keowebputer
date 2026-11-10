@@ -387,5 +387,30 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   const upd = hello.mergeCard(full.devices, cardOf('x3', 2, 6000));
   ok('a newer card for a device already kept pushes nobody out', upd.changed && Object.keys(upd.devices).length === hello.MAX_CARD_DEVICES && !!upd.devices.x0);
 
+  // a card written as text (a link, a QR, a paste)
+  const cm = await cardMsg(A, { seq: 7 }), ctext = hello.cardToText(cm);
+  ok('a card written as text starts with its prefix and is one line of safe characters', /^keocard1\.[A-Za-z0-9_-]+$/.test(ctext), ctext.slice(0, 40));
+  ok('the text reads back as the same message, and that message verifies', JSON.stringify(hello.cardFromText(ctext)) === JSON.stringify(cm) && (await cverify(hello.cardFromText(ctext))).seq === 7);
+  ok('the text is a few kilobytes (printed so a change is noticed): ' + ctext.length, ctext.length > 500 && ctext.length < 12000);
+  ok('a card inside a longer line (a link with the card at its end, words around it) is found',
+    JSON.stringify(hello.cardFromText('see https://example.org/add#' + ctext + ' thanks')) === JSON.stringify(cm) && JSON.stringify(hello.cardFromText('  \n' + ctext + '\n')) === JSON.stringify(cm));
+  const altered = ctext.slice(0, -40) + (ctext.slice(-40, -36) === 'AAAA' ? 'BBBB' : 'AAAA') + ctext.slice(-36);
+  let alteredOutcome = 'verified';
+  try { alteredOutcome = (await cverify(hello.cardFromText(altered))).ok ? 'verified' : 'refused'; } catch (e) { alteredOutcome = /not a valid keo card/.test(e.message) ? 'refused' : 'wrong error ' + e.message; }
+  ok('text altered on the way is either unreadable or fails the check, never accepted', alteredOutcome === 'refused', alteredOutcome);
+  const edited = hello.cardFromText(hello.cardToText(Object.assign({}, cm, { hello: Object.assign({}, cm.hello, { helpers: [{ kind: 'ws', host: '203.0.113.66', port: 1 }] }) })));
+  ok('text made from a card whose helper was changed fails the signature', /signature/.test((await cverify(edited)).error));
+  const textThrows = (name, fn, re) => ok(name, (() => { try { fn(); return false; } catch (e) { return re.test(e.message); } })());
+  textThrows('text with no card in it is refused', () => hello.cardFromText('hello there'), /not a keo card/);
+  textThrows('an empty or missing text is refused', () => { hello.cardFromText(''); }, /not a keo card/);
+  textThrows('the prefix with nothing behind it is refused', () => hello.cardFromText('keocard1.'), /not a valid keo card/);
+  textThrows('the prefix with bytes that are not JSON is refused', () => hello.cardFromText('keocard1.AAAA'), /not a valid keo card/);
+  textThrows('JSON that is not a card message is refused', () => hello.cardFromText('keocard1.' + kd.b64u(enc.encode('{"a":1}'))), /not a valid keo card/);
+  textThrows('a text far too long is refused before it is decoded', () => hello.cardFromText('keocard1.' + 'A'.repeat(60000)), /too long/);
+  textThrows('the writer refuses a message that is not a card', () => hello.cardToText(cm.hello), /not a keo card/);
+  textThrows('the writer refuses a proof (another purpose)', () => hello.cardToText(JSON.parse(JSON.stringify({ hello: { purpose: 'keo-p2p-channel' }, sig: 's' }))), /not a keo card/);
+  ok('text of a message of another purpose reads (the text form checks nothing) and the checker then refuses it',
+    (await cverify(hello.cardFromText('keocard1.' + kd.b64u(enc.encode(JSON.stringify({ hello: { purpose: 'x' }, sig: 's' })))))).error === 'That is not a keo card.');
+
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('FATAL', e); process.exit(2); });
