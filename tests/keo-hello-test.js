@@ -210,6 +210,18 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await refused('a log-kind certificate cannot vouch for a device nothing lists', proofMsg(A, 'offer', FPS, { edit: (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.via = 'log'; h.cert.devicePubKeyJwk = plain(B.cert.devicePubKeyJwk); } }), 'offer', {}, /not listed/);
   await refused('events grafted onto another identity are refused', proofMsg(B, 'offer', FPS, { edit: (h) => { h.events = A2.events; } }), 'offer', {}, /identity does not verify/);
 
+  // ---- a delegation that only the log vouches for carries no signature of its own, so its dates are the holder's say-so: it may cover
+  // ---- only the session made when the device was listed (found by a probe: a one-year and a hundred-year certificate were accepted)
+  const stretch = (ms, issuedMs) => (h) => { h.cert = JSON.parse(JSON.stringify(h.cert)); h.cert.exp = new Date(Date.now() + ms).toISOString(); if (issuedMs !== undefined) h.cert.issuedAt = new Date(Date.now() + issuedMs).toISOString(); };
+  const DAY = 24 * 3600e3;
+  await refused('an inception-kind certificate that runs for a year is refused', proofMsg(A, 'offer', FPS, { edit: stretch(365 * DAY) }), 'offer', {}, /first session has run out/);
+  await refused('an inception-kind certificate that runs for a hundred years is refused', proofMsg(A, 'offer', FPS, { edit: stretch(100 * 365 * DAY) }), 'offer', {}, /first session has run out/);
+  await refused('a log-kind certificate that runs for a year is refused', proofMsg(A2, 'offer', FPS, { edit: stretch(365 * DAY) }), 'offer', {}, /first session has run out/);
+  await refused('a fresh 12-hour inception-kind certificate made two days later (the device key vouching for itself) is refused', proofMsg(A, 'offer', FPS, { now: Date.now() + 2 * DAY, edit: stretch(2 * DAY + 12 * 3600e3, 2 * DAY) }), 'offer', { now: Date.now() + 2 * DAY }, /first session has run out/);
+  await refused('the same for a log-kind certificate', proofMsg(A2, 'offer', FPS, { now: Date.now() + 2 * DAY, edit: stretch(2 * DAY + 12 * 3600e3, 2 * DAY) }), 'offer', { now: Date.now() + 2 * DAY }, /first session has run out/);
+  ok('the first session still verifies a few hours after the device was listed', (await verify(await proofMsg(A, 'offer', FPS, { now: Date.now() + 5 * 3600e3 }), 'offer', { now: Date.now() + 5 * 3600e3 })).ok === true);
+  ok('a sign-in certificate (the passkey signs it) verifies two days after the identity was made', (await verify(await proofMsg(await makeIdentity('signin', { now: Date.now() + 2 * DAY }), 'offer', FPS, { now: Date.now() + 2 * DAY }), 'offer', { now: Date.now() + 2 * DAY })).ok === true);
+
   // ---- an identity whose only authority is a phone (raw signatures, kind 'phone'); software stands in for the phone
   const phoneSig = async (pair, purpose, h) => ({ scheme: 'p256-raw', signature: kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, Buffer.concat([Buffer.from('keo/authority/v1'), Buffer.from([0]), Buffer.from(purpose), Buffer.from([0]), Buffer.from(h)])))) });
   async function makePhoneIdentity(mode, o) {

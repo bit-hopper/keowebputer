@@ -33,6 +33,12 @@
   var PREFIX = 'keo2.', FORMAT = 2, PURPOSE = 'keo-p2p-channel';
   var MAX_CODE = 1024, MAX_CANDS = 8, MAX_NAME = 64, TAG_BYTES = 6, SUM_BYTES = 3;
   var MAX_AGE_MS = 15 * 60 * 1000, SKEW_MS = 2 * 60 * 1000;
+  // How long after a device was LISTED in the log (the inception, or the event that added it) a delegation that only the log vouches
+  // for may still run: the 12-hour session made right then, plus room for the two devices' clocks and the time the prompts took.
+  // A delegation of that kind carries no signature of its own, so its own dates are the holder's say-so; this bound is what stops
+  // the device key from being used for ever without a passkey. After it, the device must sign in again (a certificate the passkey
+  // signs).
+  var FIRST_SESSION_MS = 12 * 60 * 60 * 1000 + 30 * 60 * 1000;
 
   // ---- addresses and fingerprints -------------------------------------------------------------------------------------
   function ipv4ToBytes(s) {
@@ -183,7 +189,19 @@
   // null when the certificate is good, else a sentence saying what is wrong.
   // `state` is the identity's keys and devices after the whole log (keo-did.js verifyLog); `inception` is the inception alone, which a
   // certificate of kind 'inception' is checked against.
-  async function certError(cert, state, inception, did, now, audience) {
+  // The time (ms) at which the log lists this device: the inception's own time, or that of the first event that adds it; null if none.
+  function listedAt(devJwk, inception, events) {
+    var want = kd.canonicalJson(plainJwk(devJwk));
+    function has(list) { return (list || []).some(function (d) { return d && d.jwk && kd.canonicalJson(plainJwk(d.jwk)) === want; }); }
+    if (inception && inception.state && has(inception.state.devices)) return Date.parse(inception.time);
+    for (var i = 0; i < (events || []).length; i++) {
+      var e = events[i] && events[i].event;
+      if (e && e.add && e.add.device && has([e.add.device])) return Date.parse(e.time);
+    }
+    return null;
+  }
+
+  async function certError(cert, state, inception, did, now, audience, events) {
     if (!cert || typeof cert !== 'object' || cert.v !== 1 || cert.did !== did) return 'the delegation is not for this identity';
     var exp = Date.parse(cert.exp), iat = Date.parse(cert.issuedAt);
     if (!(exp > now)) return 'the delegation has expired';
@@ -200,7 +218,12 @@
       var want = kd.canonicalJson(plainJwk(dj));
       var from = cert.via === 'inception' ? inception.state.devices : state.devices;
       var listed = (from || []).some(function (d) { return kd.canonicalJson(plainJwk(d.jwk)) === want; });
-      return listed ? null : 'the device is not listed in the identity\'s ' + (cert.via === 'inception' ? 'inception' : 'log');
+      if (!listed) return 'the device is not listed in the identity\'s ' + (cert.via === 'inception' ? 'inception' : 'log');
+      // No signature stands behind the dates of this kind of delegation, so it may only cover the session made when the device was
+      // listed. Without this a device key could vouch for itself, for ever, with no passkey.
+      var at = listedAt(dj, inception, events);
+      if (!(at > 0) || !(exp <= at + FIRST_SESSION_MS)) return 'the device\'s first session has run out (it must sign in again with its passkey)';
+      return null;
     }
     if (cert.via !== undefined) return 'the delegation is of an unknown kind';
     // a sign-in certificate: the passkey signed H(cert as it was before the assertion was added)
@@ -240,7 +263,7 @@
     var v = await kd.verifyLog({ inception: h.inception, sigs: h.inceptionSigs, events: h.events });
     if (!v.ok) return { error: 'The identity does not verify: ' + v.error };
     if (v.did !== h.did) return { error: 'The identity does not match its proof.' };
-    var ce = await certError(h.cert, v.state, h.inception, h.did, now, audience);
+    var ce = await certError(h.cert, v.state, h.inception, h.did, now, audience, h.events);
     if (ce) return { error: 'The other side\'s device is not vouched for: ' + ce + '.' };
     var devKey = await subtle.importKey('jwk', plainJwk(h.cert.devicePubKeyJwk), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
     if (!(await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, devKey, kd.unb64u(msg.sig), signedBytes(h)))) return { error: 'The other side\'s signature does not match.' };
