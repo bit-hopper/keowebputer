@@ -80,7 +80,7 @@ module("lively.identity.ConstellationLounge")
     "lively.identity.PostCardView",
     "lively.identity.WikiView",
     "lively.identity.PostCardUtils",
-    "lively.identity.QuiltPatterns",
+    "lively.identity.BannerLines",
     "lively.identity.ConstellationSettingsDialog",
     "lively.identity.EditEventDialog",
     "lively.identity.ConstellationMap",
@@ -1606,7 +1606,7 @@ module("lively.identity.ConstellationLounge")
         this._spacesBox.addMorph(card);
 
         // A creator-set header image (RoomSettingsDialog.js) replaces the
-        // generated quilt pattern when present -- lively.morphic.Image
+        // generated contour-map banner when present -- lively.morphic.Image
         // renders through a real <img> node (HTML.js's setImageURLHTML),
         // so an animated GIF header keeps animating here, not just in the
         // dialog's own preview.
@@ -1620,7 +1620,7 @@ module("lively.identity.ConstellationLounge")
           banner.applyStyle({ clipMode: "hidden", fill: Color.rgb(243, 243, 243) });
         } else {
           banner = noDrag(new lively.morphic.Box(lively.rect(0, 0, w, ROOM_BANNER_H)));
-          lively.identity.quiltPatterns.applyQuiltBackground(banner, String(room.id));
+          lively.identity.bannerLines.applyBannerBackground(banner, String(room.id));
         }
         banner.eventsAreIgnored = true;
         card.addMorph(banner);
@@ -2177,7 +2177,7 @@ module("lively.identity.ConstellationLounge")
         // bottom-left corner in a white "ring") scaled down for this much
         // shorter panel. Uses the real uploaded bannerUrl/avatarUrl once a
         // controller has set one via the settings gear below; falls back to
-        // the permanent quilt-pattern banner / deterministic identicon
+        // the permanent contour-map banner / deterministic identicon
         // (same seeded-pick treatment as ProfileCard.js's own "no
         // bannerUrl" fallback), both seeded off this constellation's own
         // name, exactly like every member/comment avatar elsewhere in this
@@ -2189,7 +2189,7 @@ module("lively.identity.ConstellationLounge")
           banner.setImageURL(qi.bannerUrl);
           banner.applyStyle({ borderWidth: 0, clipMode: "hidden" });
         } else {
-          lively.identity.quiltPatterns.applyQuiltBackground(banner, "c/" + this._name);
+          lively.identity.bannerLines.applyBannerBackground(banner, "c/" + this._name);
         }
         this._quickInfoBox.addMorph(banner);
 

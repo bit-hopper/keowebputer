@@ -18,7 +18,7 @@ module("lively.identity.ProfileCard")
     "lively.identity.FileCrypto",
     "lively.identity.ImageCropper",
     "lively.identity.PostCardUtils",
-    "lively.identity.QuiltPatterns",
+    "lively.identity.BannerLines",
     "lively.identity.WebKey",
     "lively.identity.NatalChart",
     "lively.persistence.BuildSpec",
@@ -413,7 +413,7 @@ module("lively.identity.ProfileCard")
           pane.addMorph(banner);
         } else {
           var bannerBg = new lively.morphic.Box(lively.rect(0, 0, pw, BH));
-          lively.identity.quiltPatterns.applyQuiltBackground(bannerBg, handle);
+          lively.identity.bannerLines.applyBannerBackground(bannerBg, handle);
           pane.addMorph(bannerBg);
         }
 

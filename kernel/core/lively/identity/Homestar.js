@@ -37,7 +37,7 @@ module("lively.identity.Homestar")
     "lively.identity.BadgesDialog",
     "lively.transit.TransitClient",
     "lively.identity.PostcardAudience",
-    "lively.identity.QuiltPatterns",
+    "lively.identity.BannerLines",
     "lively.morphic.Complete",
   )
   .toRun(function () {
@@ -496,7 +496,7 @@ module("lively.identity.Homestar")
         this._add(hero);
 
         // Same banner and avatar defaults as the profile card (ProfileCard.js): a
-        // quilt pattern seeded by the handle when there is no banner image, and
+        // contour-map banner seeded by the handle when there is no banner image, and
         // the handle-seeded blockie when there is no avatar image. A banner image
         // is cover-fitted (the card stretches it, which distorts it at this width).
         var banner = new lively.morphic.Box(lively.rect(0, 0, w, BANNER_H));
@@ -508,7 +508,7 @@ module("lively.identity.Homestar")
         if (bannerUrl) {
           banner.renderContext().shapeNode.style.background = "center / cover no-repeat url(" + JSON.stringify(bannerUrl) + ")";
         } else {
-          lively.identity.quiltPatterns.applyQuiltBackground(banner, this._handle);
+          lively.identity.bannerLines.applyBannerBackground(banner, this._handle);
         }
 
         var avatar = new lively.morphic.Image(lively.rect(PAD, BANNER_H - AVATAR / 2, AVATAR, AVATAR));
