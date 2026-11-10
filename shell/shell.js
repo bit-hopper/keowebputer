@@ -129,6 +129,7 @@
     'library.fileAbort': function (a) { return window.keoLibrary.fileAbort({ upload: a.upload }); },
     'library.fileInfo': function (a) { return window.keoLibrary.fileInfo({ id: a.id }); },
     'library.fileRead': function (a) { return window.keoLibrary.fileRead({ id: a.id, n: a.n }); },
+    'library.fileSearch': function (a) { return window.keoLibrary.fileSearch({ query: a.query, type: a.type, limit: a.limit, offset: a.offset }); },
     'library.fileRemove': function (a) { return window.keoLibrary.fileRemove({ id: a.id }); },
     // A read of the music catalogue's search or lookup (keo-catalog.js): the world cannot read it itself, the shell can. Signed in only.
     'catalog.get': function (a) {

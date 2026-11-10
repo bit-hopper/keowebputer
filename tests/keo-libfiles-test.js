@@ -262,6 +262,56 @@ const SETUP = () => {
     check('and it comes back through the bridge exactly as it went in', viaWorld.equal === true, viaWorld);
     check('the bridge removes it, and the total is back where it was', viaWorld.removed === true && (await T(() => window.__t.total())) === totalBefore - SIZE - 70000);
 
+    // ---- search by name
+    const S = (a) => T((x) => window.__t.tryp(window.keoLibrary.fileSearch(x)), a);
+    const putText = (name, type, text) => T(([n, t, x]) => window.__t.tryp((async () => { window.__t.data.tx = new TextEncoder().encode(x); return (await window.__t.send('tx', n, t)).end.id; })()), [name, type, text]);
+    const names = [['Holiday Photos 2024.png', 'image/png'], ['holiday-notes.TXT', 'text/plain'], ['Résumé.pdf', 'application/pdf'], ['Budget.xlsx', 'application/vnd.ms-excel'], ['report final.pdf', 'application/pdf']];
+    const sid = {};
+    for (const [n, t] of names) { const p = await putText(n, t, 'content of ' + n); sid[n] = p.r; await sleep(5); }
+    const nm = (x) => x.r.items.map((i) => i.name).sort().join('|');
+    r = await S({ query: 'holiday' }); check('a word finds the files that have it in the name', r.ok && r.r.total === 2 && nm(r) === 'Holiday Photos 2024.png|holiday-notes.TXT', r);
+    r = await S({ query: 'HOLIDAY' }); check('in any case', r.ok && r.r.total === 2, r);
+    r = await S({ query: 'photos 2024' }); check('several words must all be there', r.ok && r.r.total === 1 && r.r.items[0].name === 'Holiday Photos 2024.png', r);
+    r = await S({ query: '2024 photos' }); check('in any order', r.ok && r.r.total === 1, r);
+    r = await S({ query: 'holiday zzz' }); check('one missing word means no match', r.ok && r.r.total === 0, r);
+    r = await S({ query: 'zzz' }); check('a word that is in no name finds nothing', r.ok && r.r.total === 0 && r.r.items.length === 0, r);
+    r = await S({ query: 'résumé' }); check('a name with accents is found', r.ok && r.r.total === 1, r);
+    r = await S({ query: 'RÉSUMÉ' }); check('and in capitals', r.ok && r.r.total === 1, r);
+    r = await S({ query: '' }); check('no words lists every file, the newest first', r.ok && r.r.total === 6 && r.r.items[0].name === 'report final.pdf' && names.every(([n]) => r.r.items.some((i) => i.name === n)), r);
+    check('an item is only the id, name, type, size and date', r.ok && Object.keys(r.r.items[0]).sort().join(',') === 'created,id,name,size,type', r.ok && r.r.items[0]);
+    r = await S({ type: 'application/pdf' }); check('a kind of file narrows the list (no words at all)', r.ok && r.r.total === 2, r);
+    r = await S({ type: 'IMAGE/' }); check('the start of a kind is enough, in any case', r.ok && r.r.total === 1 && r.r.items[0].name === 'Holiday Photos 2024.png', r);
+    r = await S({ type: 'video/' }); check('a kind with no files finds none', r.ok && r.r.total === 0, r);
+    r = await S({ query: 'report', type: 'application/pdf' }); check('words and a kind together', r.ok && r.r.total === 1, r);
+    r = await S({ query: 'holiday', type: 'application/pdf' }); check('and they both have to match', r.ok && r.r.total === 0, r);
+    r = await S({ limit: 2 }); check('a limit cuts the list and the total still says how many match', r.ok && r.r.items.length === 2 && r.r.total === 6, r);
+    r = await S({ limit: 2, offset: 5 }); check('an offset moves along the list', r.ok && r.r.items.length === 1 && r.r.total === 6, r);
+    r = await S({ limit: 0, offset: -3 }); check('a limit or offset that makes no sense falls back to the defaults', r.ok && r.r.items.length === 6, r);
+    r = await S({ query: 'a'.repeat(201) }); check('a search of more than 200 characters is refused', !r.ok && /at most 200/.test(r.e), r);
+    r = await S({ query: 'a b c d e f g h i' }); check('and one of more than 8 words', !r.ok && /at most 8 words/.test(r.e), r);
+    r = await S({ type: 'x'.repeat(101) }); check('and a kind that is too long', !r.ok && /not a kind/.test(r.e), r);
+    r = await S({ query: null }); check('a missing query lists everything', r.ok && r.r.total === 6, r);
+    const legSearch = await T(async () => { const u = window.__t.fill(1000, 123); const c = await window.__t.cid(u); await window.keoLibrary.putBlob({ cid: c, bytes: u.buffer }); return c; });
+    r = await S({ query: '' }); check('a file of the older kind has no name and is not listed', r.ok && r.r.total === 6, r);
+    await T((id) => window.keoLibrary.fileRemove({ id }), legSearch);
+    await T((id) => window.keoLibrary.fileRemove({ id }), sid['Budget.xlsx']);
+    r = await S({ query: 'budget' }); check('a removed file is no longer found', r.ok && r.r.total === 0, r);
+    const repKey = (await T(() => window.__t.keys('files'))).find((k) => k.endsWith('|' + sid['report final.pdf']));
+    await T(([k]) => window.__t.flip('files', k, 20), [repKey]);
+    r = await S({ query: 'holiday' }); check('a damaged record is skipped and counted, the rest is still found', r.ok && r.r.total === 2 && r.r.unreadable === 1, r);
+    await T(([k]) => window.__t.flip('files', k, 20), [repKey]);
+    r = await S({ query: 'report' }); check('repaired, it is found again', r.ok && r.r.total === 1 && r.r.unreadable === 0, r);
+    // a thousand files: how long does a search take (it opens every manifest)
+    const t0 = Date.now();
+    await T(async () => { for (let i = 0; i < 1000; i++) { window.__t.data.tx = new TextEncoder().encode('bulk file number ' + i); await window.__t.send('tx', 'bulk-' + i + '.txt', 'text/plain'); } return true; });
+    const bulkMs = Date.now() - t0;
+    const t1 = Date.now(); r = await S({ query: 'bulk-99' }); const oneMs = Date.now() - t1;
+    check('among a thousand more files, a word finds the eleven that have it', r.ok && r.r.total === 11, r);
+    const t2 = Date.now(); r = await S({ query: '', limit: 50 }); const allMs = Date.now() - t2;
+    check('and the whole list has the right total', r.ok && r.r.total === 1005 && r.r.items.length === 50, r);
+    console.log('     (a thousand one-chunk files made in ' + bulkMs + ' ms; a search over ' + r.r.total + ' manifests took ' + oneMs + ' ms, listing took ' + allMs + ' ms)');
+    check('a search over a thousand files takes less than ten seconds on this machine', oneMs < 10000 && allMs < 10000, [oneMs, allMs]);
+
     // ---- removing the identity removes its files
     await T(([n]) => window.__t.make('g', n, 41), [C + 7]);
     await T(() => window.__t.send('g', 'g.bin', 'text/plain'));

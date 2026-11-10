@@ -22,8 +22,8 @@
 // be moved, dropped or reordered; the sealed manifest (name, type, size, chunk count) is stored under the file's name. IndexedDB `files`
 // (manifests), `chunks`, `pending` (an upload that has not finished: whatever is left of it is swept at the next upload, at purge).
 // A file of the first kind (one record in `blobs`) is still read the same way: as one chunk. Files count toward the same running total
-// as blobs. Not here yet: listing and search by name, moving them with "Move my data" (keo-transfer.js does NOT carry them), a limit
-// that follows the browser's quota, reclaiming a file nothing refers to any more.
+// as blobs. A search by name opens the manifests as it goes (fileSearch). Not here yet: moving them with "Move my data"
+// (keo-transfer.js does NOT carry them), a limit that follows the browser's quota, reclaiming a file nothing refers to any more.
 // Not here: sync to a host, signatures (a host checks them; a local object is unsigned), a version history (a put replaces the
 // previous document), listing or searching the library, reclaiming a blob that nothing refers to any more (removing an item
 // leaves its blob, as the host's store does).
@@ -40,6 +40,7 @@
   var MAX_UPLOADS = 2;                              // files being added at once
   var UPLOAD_IDLE_MS = 5 * 60 * 1000;               // an upload that sends nothing for this long is given up
   var MAX_NAME = 255;
+  var MAX_QUERY = 200, MAX_TERMS = 8, MAX_RESULTS = 200, DEFAULT_RESULTS = 50;
   var CID = /^[A-Za-z0-9_-]{43}$/;
   var OBJ_ID = /^[A-Za-z0-9_-]{12}$/;
   // What kind of object a document may be. The runtime's apps use these; anything else is refused so the store is not a general
@@ -241,15 +242,19 @@
     if (!rows.length) return;
     await tx(['pending', 'chunks'], 'readwrite', function (t) { rows.forEach(function (p) { dropChunks(t, p.id); t.objectStore('pending').delete(p.id); }); });
   }
-  // Opens the manifest of the file with that name, or null when this identity has no such file of this kind.
-  async function openManifest(s, cid) {
-    var rec = await tx(['files'], 'readonly', function (t) { return get(t, 'files', idOf(s.did, cid)); });
-    if (!rec || rec.did !== s.did) return null;
+  // Opens one stored manifest record (of the identity in s) for the file named cid.
+  async function openRecord(s, rec, cid) {
     var m;
     try { m = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(rec.iv), additionalData: enc.encode(fileAad(s.did, cid)) }, s.key, rec.ct))); }
     catch (e) { throw new Error('A library file could not be decrypted (wrong identity, or the record was changed).'); }
     if (!m || m.v !== 1 || m.cid !== cid || typeof m.fid !== 'string' || !(m.chunks >= 0) || !(m.size >= 0) || m.chunkBytes !== CHUNK_BYTES) throw new Error('A library file is damaged.');
     return m;
+  }
+  // Opens the manifest of the file with that name, or null when this identity has no such file of this kind.
+  async function openManifest(s, cid) {
+    var rec = await tx(['files'], 'readonly', function (t) { return get(t, 'files', idOf(s.did, cid)); });
+    if (!rec || rec.did !== s.did) return null;
+    return openRecord(s, rec, cid);
   }
   function chunkLength(m, n) { return n < m.chunks - 1 ? m.chunkBytes : m.size - n * m.chunkBytes; }
 
@@ -366,6 +371,39 @@
       return plain;
     });
   }
+  // Search by name (and, optionally, by kind of file). A name lives only in the sealed manifest, and a manifest is a few hundred bytes,
+  // so a search opens them as it goes instead of keeping a second, readable index of names that would have to be kept in step and
+  // protected. Files of the older single-record kind have no name and are not found.
+  function fold(v) { return String(v == null ? '' : v).normalize('NFC').toLowerCase(); }
+  // args: { query, type, limit, offset }. query: words that must ALL appear in the name, in any case ('' matches every file);
+  // type: a media type or the start of one ('image/', 'application/pdf'); newest first. Resolves
+  // { items: [{ id, name, type, size, created }], total (all matches), unreadable (records that could not be opened and were skipped) }.
+  function fileSearch(args) {
+    return serial(async function () {
+      var s = session(); args = args || {};
+      var q = fold(args.query).trim();
+      if (q.length > MAX_QUERY) throw new Error('A search can be at most ' + MAX_QUERY + ' characters.');
+      var terms = q ? q.split(/\s+/) : [];
+      if (terms.length > MAX_TERMS) throw new Error('A search can have at most ' + MAX_TERMS + ' words.');
+      var type = fold(args.type).trim();
+      if (type.length > 100) throw new Error('That is not a kind of file.');
+      var limit = typeof args.limit === 'number' && Math.floor(args.limit) === args.limit && args.limit >= 1 ? Math.min(args.limit, MAX_RESULTS) : DEFAULT_RESULTS;
+      var offset = typeof args.offset === 'number' && Math.floor(args.offset) === args.offset && args.offset >= 0 ? args.offset : 0;
+      var recs = await tx(['files'], 'readonly', function (t) { var r = t.objectStore('files').index('did').getAll(IDBKeyRange.only(s.did)); return function () { return r.result; }; });
+      var found = [], unreadable = 0, prefix = s.did + '|';
+      for (var i = 0; i < recs.length; i++) {
+        var rec = recs[i], cid = String(rec.id).slice(prefix.length), m;
+        try { m = await openRecord(s, rec, cid); } catch (e) { unreadable++; continue; }
+        var name = fold(m.name);
+        if (type && String(m.type).indexOf(type) !== 0) continue;
+        if (terms.some(function (w) { return name.indexOf(w) < 0; })) continue;
+        found.push({ id: cid, name: m.name, type: m.type, size: m.size, created: m.created });
+      }
+      found.sort(function (a, b) { return a.created < b.created ? 1 : a.created > b.created ? -1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
+      return { items: found.slice(offset, offset + limit), total: found.length, unreadable: unreadable };
+    });
+  }
+
   // args: { id }. true when a file (of either kind) was removed.
   function fileRemove(args) {
     return serial(async function () {
@@ -464,6 +502,6 @@
   }
 
   window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob,
-    fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileRemove: fileRemove,
+    fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSearch: fileSearch, fileRemove: fileRemove,
     reset: reset, purge: purge, CHUNK_BYTES: CHUNK_BYTES };
 })();
