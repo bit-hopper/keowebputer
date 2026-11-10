@@ -1,0 +1,508 @@
+{
+  "about": "Test vectors for keo's two text forms (shell/keo-hello.js). INTRODUCTION: a reader must turn every text of introductions.writer and introductions.reader into its expect (the DID, the name or null, the helpers), and must refuse every text of introductions.refused (the error sentence is what the reference code says; only the refusal matters). A writer must produce exactly the text of introductions.writer from its input: the keys in the order v, did, helpers, name, a helper's keys kind, host, port, no spaces, base64url without padding. CARD: a reader must read cards.valid texts back into their message, verify each at `at` for `audience` (the signature, the identity, the device, the certificate, the helper rules) and get its expect, and must refuse every cards.refused at its `at`. A card is only ever READ and checked by a phone; its signature is made by a computer's device key. cards.textRefused are texts that hold no card. Introductions are not signed: nothing here says who a person is, only what a text means. The card part is made with new keys every time the vectors are written.",
+  "introductions": {
+    "prefix": "keointro1.",
+    "maxPart": 2000,
+    "maxWhole": 4000,
+    "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+    "writer": [
+      {
+        "name": "only an identity",
+        "input": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA"
+        },
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOltdfQ",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": null,
+          "helpers": []
+        }
+      },
+      {
+        "name": "an identity and a name",
+        "input": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Maya"
+        },
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOltdLCJuYW1lIjoiTWF5YSJ9",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Maya",
+          "helpers": []
+        }
+      },
+      {
+        "name": "an identity, a name and two helpers",
+        "input": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Maya",
+          "helpers": [
+            {
+              "kind": "ws",
+              "host": "203.0.113.9",
+              "port": 47431
+            },
+            {
+              "kind": "http",
+              "host": "home.example.org",
+              "port": 8443
+            }
+          ]
+        },
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjQ3NDMxfSx7ImtpbmQiOiJodHRwIiwiaG9zdCI6ImhvbWUuZXhhbXBsZS5vcmciLCJwb3J0Ijo4NDQzfV0sIm5hbWUiOiJNYXlhIn0",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Maya",
+          "helpers": [
+            {
+              "kind": "ws",
+              "host": "203.0.113.9",
+              "port": 47431
+            },
+            {
+              "kind": "http",
+              "host": "home.example.org",
+              "port": 8443
+            }
+          ]
+        }
+      },
+      {
+        "name": "four helpers and the longest name (64 characters)",
+        "input": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+          "helpers": [
+            {
+              "kind": "http",
+              "host": "helper-1.example.org",
+              "port": 8443
+            },
+            {
+              "kind": "http",
+              "host": "helper-2.example.org",
+              "port": 8443
+            },
+            {
+              "kind": "http",
+              "host": "helper-3.example.org",
+              "port": 8443
+            },
+            {
+              "kind": "http",
+              "host": "helper-4.example.org",
+              "port": 8443
+            }
+          ]
+        },
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJodHRwIiwiaG9zdCI6ImhlbHBlci0xLmV4YW1wbGUub3JnIiwicG9ydCI6ODQ0M30seyJraW5kIjoiaHR0cCIsImhvc3QiOiJoZWxwZXItMi5leGFtcGxlLm9yZyIsInBvcnQiOjg0NDN9LHsia2luZCI6Imh0dHAiLCJob3N0IjoiaGVscGVyLTMuZXhhbXBsZS5vcmciLCJwb3J0Ijo4NDQzfSx7ImtpbmQiOiJodHRwIiwiaG9zdCI6ImhlbHBlci00LmV4YW1wbGUub3JnIiwicG9ydCI6ODQ0M31dLCJuYW1lIjoiTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTiJ9",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+          "helpers": [
+            {
+              "kind": "http",
+              "host": "helper-1.example.org",
+              "port": 8443
+            },
+            {
+              "kind": "http",
+              "host": "helper-2.example.org",
+              "port": 8443
+            },
+            {
+              "kind": "http",
+              "host": "helper-3.example.org",
+              "port": 8443
+            },
+            {
+              "kind": "http",
+              "host": "helper-4.example.org",
+              "port": 8443
+            }
+          ]
+        }
+      },
+      {
+        "name": "a helper at an IPv6 address in the full form",
+        "input": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:x16wddkVpwy_bmitr7JDZgVqMtmr50jYuObX12AyMoY",
+          "helpers": [
+            {
+              "kind": "ws",
+              "host": "2001:db8:0:0:0:0:0:7",
+              "port": 1234
+            }
+          ]
+        },
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6eDE2d2Rka1Zwd3lfYm1pdHI3SkRaZ1ZxTXRtcjUwall1T2JYMTJBeU1vWSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDAxOmRiODowOjA6MDowOjA6NyIsInBvcnQiOjEyMzR9XX0",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:x16wddkVpwy_bmitr7JDZgVqMtmr50jYuObX12AyMoY",
+          "name": null,
+          "helpers": [
+            {
+              "kind": "ws",
+              "host": "2001:db8:0:0:0:0:0:7",
+              "port": 1234
+            }
+          ]
+        }
+      },
+      {
+        "name": "a name with non-ASCII text",
+        "input": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Zoë ✓"
+        },
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOltdLCJuYW1lIjoiWm_DqyDinJMifQ",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Zoë ✓",
+          "helpers": []
+        }
+      }
+    ],
+    "reader": [
+      {
+        "name": "the same record with its keys in another order",
+        "text": "keointro1.eyJuYW1lIjoiTWF5YSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjQ3NDMxfV0sImRpZCI6ImRpZDprZW86eXJieWdieWZ5YWRvb25la2JjZ3k0ZG94bnlldHJyYXdud21icWd5M2RlcHRhOGU2ZGhveTptbmdIblZvenYzZ1lvQW96MTd1UGh5cXllQ01Hd01zRXA0QmlOalM1YWRBIiwidiI6MX0",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Maya",
+          "helpers": [
+            {
+              "kind": "ws",
+              "host": "203.0.113.9",
+              "port": 47431
+            }
+          ]
+        }
+      },
+      {
+        "name": "a helper host written in capitals (read as lower case)",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJodHRwIiwiaG9zdCI6IkhvbWUuRXhhbXBsZS5PUkciLCJwb3J0Ijo4MH1dfQ",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": null,
+          "helpers": [
+            {
+              "kind": "http",
+              "host": "home.example.org",
+              "port": 80
+            }
+          ]
+        }
+      },
+      {
+        "name": "a helper at an IPv6 address written short (read in the full form)",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDAxOkRCODo6NyIsInBvcnQiOjEyMzR9XX0",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": null,
+          "helpers": [
+            {
+              "kind": "ws",
+              "host": "2001:db8:0:0:0:0:0:7",
+              "port": 1234
+            }
+          ]
+        }
+      },
+      {
+        "name": "a name with line breaks and runs of spaces (read on one line, spaces collapsed)",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsIm5hbWUiOiJBXG4gICBCICBDIn0",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "A B C",
+          "helpers": []
+        }
+      },
+      {
+        "name": "an extra top-level part (ignored)",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImV4dHJhIjoiaWdub3JlZCJ9",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": null,
+          "helpers": []
+        }
+      },
+      {
+        "name": "inside a link",
+        "text": "https://example.org/add#keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOltdLCJuYW1lIjoiTWF5YSJ9",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Maya",
+          "helpers": []
+        }
+      },
+      {
+        "name": "inside a message with words before and after, and a line break",
+        "text": "hello\nhere: keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOltdLCJuYW1lIjoiTWF5YSJ9 (see you)",
+        "expect": {
+          "did": "did:keo:yrbygbyfyadoonekbcgy4doxnyetrrawnwmbqgy3depta8e6dhoy:mngHnVozv3gYoAoz17uPhyqyeCMGwMsEp4BiNjS5adA",
+          "name": "Maya",
+          "helpers": []
+        }
+      }
+    ],
+    "refused": [
+      {
+        "name": "no introduction in it",
+        "text": "hello there",
+        "error": "That is not a keo introduction."
+      },
+      {
+        "name": "empty text",
+        "text": "",
+        "error": "That is not a keo introduction."
+      },
+      {
+        "name": "the prefix and nothing else",
+        "text": "keointro1.",
+        "error": "That is not a valid keo introduction."
+      },
+      {
+        "name": "bytes that are not JSON",
+        "text": "keointro1.AAAA",
+        "error": "That is not a valid keo introduction."
+      },
+      {
+        "name": "a card, not an introduction",
+        "text": "keocard1.e30",
+        "error": "That is not a keo introduction."
+      },
+      {
+        "name": "another version",
+        "text": "keointro1.eyJ2IjoyLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSJ9",
+        "error": "That is not a valid keo introduction."
+      },
+      {
+        "name": "no version",
+        "text": "keointro1.eyJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSJ9",
+        "error": "That is not a valid keo introduction."
+      },
+      {
+        "name": "no identity",
+        "text": "keointro1.eyJ2IjoxfQ",
+        "error": "That is not a valid introduction: it names no identity."
+      },
+      {
+        "name": "an identity that is not one",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiI8c2NyaXB0PiJ9",
+        "error": "That is not a valid introduction: it names no identity."
+      },
+      {
+        "name": "an identity with the wrong parts",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOmFiYzpkZWYifQ",
+        "error": "That is not a valid introduction: it names no identity."
+      },
+      {
+        "name": "a list that is not a list",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOiJ3czovLzIwMy4wLjExMy45OjQ3NDMxIn0",
+        "error": "That is not a valid introduction: too many helpers."
+      },
+      {
+        "name": "five helpers",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuMSIsInBvcnQiOjF9LHsia2luZCI6IndzIiwiaG9zdCI6IjIwMy4wLjExMy4yIiwicG9ydCI6MX0seyJraW5kIjoid3MiLCJob3N0IjoiMjAzLjAuMTEzLjMiLCJwb3J0IjoxfSx7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuNCIsInBvcnQiOjF9LHsia2luZCI6IndzIiwiaG9zdCI6IjIwMy4wLjExMy41IiwicG9ydCI6MX1dfQ",
+        "error": "That is not a valid introduction: too many helpers."
+      },
+      {
+        "name": "a helper with an extra part",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjEsInVzZXIiOiJ4In1dfQ",
+        "error": "That is not a valid introduction: a helper has extra parts."
+      },
+      {
+        "name": "a helper on this machine itself (loopback)",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIxMjcuMC4wLjEiLCJwb3J0IjoxfV19",
+        "error": "That is not a valid introduction: a helper has an address that cannot be reached from elsewhere."
+      },
+      {
+        "name": "a helper at \"any address\"",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIwLjAuMC4wIiwicG9ydCI6MX1dfQ",
+        "error": "That is not a valid introduction: a helper has an address that cannot be reached from elsewhere."
+      },
+      {
+        "name": "a helper at a link-local IPv6 address",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiJmZTgwOjA6MDowOjA6MDowOjEiLCJwb3J0IjoxfV19",
+        "error": "That is not a valid introduction: a helper has an address that cannot be reached from elsewhere."
+      },
+      {
+        "name": "a helper named localhost",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiJsb2NhbGhvc3QiLCJwb3J0IjoxfV19",
+        "error": "That is not a valid introduction: a helper has a bad host name."
+      },
+      {
+        "name": "a helper with a \".local\" name",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiJwcmludGVyLmxvY2FsIiwicG9ydCI6MX1dfQ",
+        "error": "That is not a valid introduction: a helper has a bad host name."
+      },
+      {
+        "name": "a helper with a one-word name",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiJpbnRyYW5ldCIsInBvcnQiOjF9XX0",
+        "error": "That is not a valid introduction: a helper has a bad host name."
+      },
+      {
+        "name": "a helper with a path in its host",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiJodHRwczovL2hvbWUuZXhhbXBsZS5vcmcveCIsInBvcnQiOjF9XX0",
+        "error": "That is not a valid introduction: a helper has a bad host name."
+      },
+      {
+        "name": "a helper with port 0",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjB9XX0",
+        "error": "That is not a valid introduction: a helper has a bad port."
+      },
+      {
+        "name": "a helper with port 70000",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjcwMDAwfV19",
+        "error": "That is not a valid introduction: a helper has a bad port."
+      },
+      {
+        "name": "a helper with a port that is text",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOiIxMjM0In1dfQ",
+        "error": "That is not a valid introduction: a helper has a bad port."
+      },
+      {
+        "name": "a helper with a kind the page would not speak",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOlt7ImtpbmQiOiJmaWxlIiwiaG9zdCI6IjIwMy4wLjExMy45IiwicG9ydCI6MX1dfQ",
+        "error": "That is not a valid introduction: a helper has an unknown kind."
+      },
+      {
+        "name": "a name that is a number",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsIm5hbWUiOjV9",
+        "error": "That is not a valid introduction: the name is not valid."
+      },
+      {
+        "name": "a name over 64 characters",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsIm5hbWUiOiJOTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTiJ9",
+        "error": "That is not a valid introduction: the name is not valid."
+      },
+      {
+        "name": "the part after the prefix over 2000 characters",
+        "text": "keointro1.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "error": "That is not a valid keo introduction."
+      },
+      {
+        "name": "a whole text over 4000 characters",
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxkeointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOltdfQ",
+        "error": "That is too long to be a keo introduction."
+      }
+    ]
+  },
+  "cards": {
+    "prefix": "keocard1.",
+    "audience": "chrome-extension://example",
+    "at": "2026-01-01T01:00:00.000Z",
+    "valid": [
+      {
+        "name": "a card with two helpers",
+        "text": "keocard1.eyJoZWxsbyI6eyJ2IjoxLCJwdXJwb3NlIjoia2VvLWNhcmQiLCJzZXEiOjE3MDAwMDAwMDAsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjQ3NDMxfSx7ImtpbmQiOiJodHRwIiwiaG9zdCI6ImhvbWUuZXhhbXBsZS5vcmciLCJwb3J0Ijo4NDQzfV0sInRpbWUiOiIyMDI2LTAxLTAxVDAwOjAxOjAwLjAwMFoiLCJkaWQiOiJkaWQ6a2VvOmc1YWk5MWVlbWpiOXJiZ2N1aDU1enM5MW1vNXN6eTZncXk5ZGNuYXlpeGticW9rbmp4cW86Ul9OVXVaVnVqRXZJZkdlOFV3TkVpdkRsamtZLU1BakZNc1ZVVDQ1VExmMCIsImluY2VwdGlvbiI6eyJ2IjoxLCJ0eXBlIjoiaW5jZXB0aW9uIiwic2VxIjowLCJwcmV2IjpudWxsLCJ0aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwic3RhdGUiOnsiYXV0aG9yaXR5Ijp7InRocmVzaG9sZCI6MSwia2V5cyI6W3siaWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiczZISDVNdmZ6Xzh5Q3RxUlozam5xQWVKcllVTkJUTTBTZU1NZHFQWHUwNCIsInkiOiJfem5ZNGU5alp5MXNpeUZkVDNYaGhMT0huMEpxUlIzYWhrN1FrdTdqdHpZIn0sImtpbmQiOiJwaG9uZSIsImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifV19LCJuZXh0IjpudWxsLCJyZWNvdmVyeSI6eyJndWFyZGlhbnMiOltdLCJ0aHJlc2hvbGQiOjIsImRlbGF5RGF5cyI6M30sImRpc2NvdmVyeSI6eyJrZXkiOiJnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvIiwidmVyc2lvbiI6MX0sInNlcnZpY2VzIjpbXSwiY2xhaW1zIjp7ImhhbmRsZXMiOltdfSwicmV2b2tlZCI6W119fSwiaW5jZXB0aW9uU2lncyI6eyJkaXNjb3ZlcnkiOiJrUFZQYUdlTml3T2hWOWpaNzN4OW9KV1FYS2tISWprcFc1V3BaT2FRQkFlZUpsWFpkdFVya3dqQXpjNlgtbzYwNF9VV0pFdGFPVG92b1hDS3VBRDJDUSIsImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiJVdDVZTVNUQklYc0M0LWhLUnU0emQ0Uk1sSENUVTEyNEdIdzRudWRWZDlyajB0XzV4ZDY2T29YaXNkV0NCVjFQV09Fa0lSMzhTSlhHVVlYaHY4MWxTQSJ9XX0sImNlcnQiOnsidmlhIjoibG9nIiwidiI6MSwiZGlkIjoiZGlkOmtlbzpnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvOlJfTlV1WlZ1akV2SWZHZThVd05FaXZEbGprWS1NQWpGTXNWVVQ0NVRMZjAiLCJkZXZpY2VQdWJLZXlKd2siOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiIxSlVFRHZlc3NJMk1LSjNUVHBhN2lidW5zeU1YdlFIRzFFamtZcVg4ak80IiwieSI6ImtOekx1WnR2T0cxdTQ0MVNFQU1VR2xfR3NNMVktTXU0M1N4bFo5VGo5QjgifSwiaXNzdWVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJleHAiOiIyMDI2LTAxLTAxVDEyOjAwOjAwLjAwMFoiLCJhdWQiOiJjaHJvbWUtZXh0ZW5zaW9uOi8vZXhhbXBsZSIsInNjb3BlIjpbIndvcmxkOnJlYWQiLCJ3b3JsZDp3cml0ZSIsInNpZ24iXSwiYXV0aG9yaXR5S2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIn0sImV2ZW50cyI6W3siZXZlbnQiOnsidiI6MSwidHlwZSI6ImFkZC1kZXZpY2UiLCJzZXEiOjEsInByZXYiOiJSX05VdVpWdWpFdklmR2U4VXdORWl2RGxqa1ktTUFqRk1zVlVUNDVUTGYwIiwidGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImFkZCI6eyJkZXZpY2UiOnsiaWQiOiJWbGF5Unl5blRCVmVDS3cxWUtERE84ekRxVEtnaDdQT3plVGM4WGhRQ3B3IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiMUpVRUR2ZXNzSTJNS0ozVFRwYTdpYnVuc3lNWHZRSEcxRWprWXFYOGpPNCIsInkiOiJrTnpMdVp0dk9HMXU0NDFTRUFNVUdsX0dzTTFZLU11NDNTeGxaOVRqOUI4In0sImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifX19LCJzaWdzIjp7ImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiIzOUVPd0VUSkZJcDBOV2VqYlJ4NXNZcXNGU2JwYldtaU9zQWxsV3JBWlJxeFpzRDlBeWhUblhwYWtfOXNEeDg2d2wtMHdrNDJodHdCRW5ybzlfTTBoQSJ9XX19XX0sInNpZyI6IkNJUXFSdEZFY1J6UVQtV2lpeWMtTkstVllsckxydzM1SUVvLUVmN0JuRVFPVTJqbWI3clQwdjhOM2YzbTllQzEtbFFSQTFtRlJhTUtYV1JJR2NHYTJBIn0",
+        "at": "2026-01-01T01:00:00.000Z",
+        "audience": "chrome-extension://example",
+        "expect": {
+          "ok": true,
+          "did": "did:keo:g5ai91eemjb9rbgcuh55zs91mo5szy6gqy9dcnayixkbqoknjxqo:R_NUuZVujEvIfGe8UwNEivDljkY-MAjFMsVUT45TLf0",
+          "deviceId": "VlayRyynTBVeCKw1YKDDO8zDqTKgh7POzeTc8XhQCpw",
+          "helpers": [
+            {
+              "kind": "ws",
+              "host": "203.0.113.9",
+              "port": 47431
+            },
+            {
+              "kind": "http",
+              "host": "home.example.org",
+              "port": 8443
+            }
+          ],
+          "seq": 1700000000,
+          "time": "2026-01-01T00:01:00.000Z"
+        }
+      },
+      {
+        "name": "a card with no helpers (\"not reachable there\")",
+        "text": "keocard1.eyJoZWxsbyI6eyJ2IjoxLCJwdXJwb3NlIjoia2VvLWNhcmQiLCJzZXEiOjE3MDAwMDAwMDEsImhlbHBlcnMiOltdLCJ0aW1lIjoiMjAyNi0wMS0wMVQwMDowMTowMC4wMDBaIiwiZGlkIjoiZGlkOmtlbzpnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvOlJfTlV1WlZ1akV2SWZHZThVd05FaXZEbGprWS1NQWpGTXNWVVQ0NVRMZjAiLCJpbmNlcHRpb24iOnsidiI6MSwidHlwZSI6ImluY2VwdGlvbiIsInNlcSI6MCwicHJldiI6bnVsbCwidGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDAuMDAwWiIsInN0YXRlIjp7ImF1dGhvcml0eSI6eyJ0aHJlc2hvbGQiOjEsImtleXMiOlt7ImlkIjoiZG1WamRHOXlMWEJvYjI1bExXdGxlUSIsImp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6InM2SEg1TXZmel84eUN0cVJaM2pucUFlSnJZVU5CVE0wU2VNTWRxUFh1MDQiLCJ5IjoiX3puWTRlOWpaeTFzaXlGZFQzWGhoTE9IbjBKcVJSM2FoazdRa3U3anR6WSJ9LCJraW5kIjoicGhvbmUiLCJhZGRlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIn1dfSwibmV4dCI6bnVsbCwicmVjb3ZlcnkiOnsiZ3VhcmRpYW5zIjpbXSwidGhyZXNob2xkIjoyLCJkZWxheURheXMiOjN9LCJkaXNjb3ZlcnkiOnsia2V5IjoiZzVhaTkxZWVtamI5cmJnY3VoNTV6czkxbW81c3p5NmdxeTlkY25heWl4a2Jxb2tuanhxbyIsInZlcnNpb24iOjF9LCJzZXJ2aWNlcyI6W10sImNsYWltcyI6eyJoYW5kbGVzIjpbXX0sInJldm9rZWQiOltdfX0sImluY2VwdGlvblNpZ3MiOnsiZGlzY292ZXJ5Ijoia1BWUGFHZU5pd09oVjlqWjczeDlvSldRWEtrSElqa3BXNVdwWk9hUUJBZWVKbFhaZHRVcmt3akF6YzZYLW82MDRfVVdKRXRhT1Rvdm9YQ0t1QUQyQ1EiLCJhdXRob3JpdHkiOlt7ImtleUlkIjoiZG1WamRHOXlMWEJvYjI1bExXdGxlUSIsInNjaGVtZSI6InAyNTYtcmF3Iiwic2lnbmF0dXJlIjoiVXQ1WU1TVEJJWHNDNC1oS1J1NHpkNFJNbEhDVFUxMjRHSHc0bnVkVmQ5cmowdF81eGQ2Nk9vWGlzZFdDQlYxUFdPRWtJUjM4U0pYR1VZWGh2ODFsU0EifV19LCJjZXJ0Ijp7InZpYSI6ImxvZyIsInYiOjEsImRpZCI6ImRpZDprZW86ZzVhaTkxZWVtamI5cmJnY3VoNTV6czkxbW81c3p5NmdxeTlkY25heWl4a2Jxb2tuanhxbzpSX05VdVpWdWpFdklmR2U4VXdORWl2RGxqa1ktTUFqRk1zVlVUNDVUTGYwIiwiZGV2aWNlUHViS2V5SndrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiMUpVRUR2ZXNzSTJNS0ozVFRwYTdpYnVuc3lNWHZRSEcxRWprWXFYOGpPNCIsInkiOiJrTnpMdVp0dk9HMXU0NDFTRUFNVUdsX0dzTTFZLU11NDNTeGxaOVRqOUI4In0sImlzc3VlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwiZXhwIjoiMjAyNi0wMS0wMVQxMjowMDowMC4wMDBaIiwiYXVkIjoiY2hyb21lLWV4dGVuc2lvbjovL2V4YW1wbGUiLCJzY29wZSI6WyJ3b3JsZDpyZWFkIiwid29ybGQ6d3JpdGUiLCJzaWduIl0sImF1dGhvcml0eUtleUlkIjoiZG1WamRHOXlMWEJvYjI1bExXdGxlUSJ9LCJldmVudHMiOlt7ImV2ZW50Ijp7InYiOjEsInR5cGUiOiJhZGQtZGV2aWNlIiwic2VxIjoxLCJwcmV2IjoiUl9OVXVaVnVqRXZJZkdlOFV3TkVpdkRsamtZLU1BakZNc1ZVVDQ1VExmMCIsInRpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJhZGQiOnsiZGV2aWNlIjp7ImlkIjoiVmxheVJ5eW5UQlZlQ0t3MVlLRERPOHpEcVRLZ2g3UE96ZVRjOFhoUUNwdyIsImp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6IjFKVUVEdmVzc0kyTUtKM1RUcGE3aWJ1bnN5TVh2UUhHMUVqa1lxWDhqTzQiLCJ5Ijoia056THVadHZPRzF1NDQxU0VBTVVHbF9Hc00xWS1NdTQzU3hsWjlUajlCOCJ9LCJhZGRlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIn19fSwic2lncyI6eyJhdXRob3JpdHkiOlt7ImtleUlkIjoiZG1WamRHOXlMWEJvYjI1bExXdGxlUSIsInNjaGVtZSI6InAyNTYtcmF3Iiwic2lnbmF0dXJlIjoiMzlFT3dFVEpGSXAwTldlamJSeDVzWXFzRlNicGJXbWlPc0FsbFdyQVpScXhac0Q5QXloVG5YcGFrXzlzRHg4NndsLTB3azQyaHR3QkVucm85X00waEEifV19fV19LCJzaWciOiJaSThDczFUT2E5bHFSMFFLZkNFcHFVYXNYVlNOSEVvbndHcE5ScGxfTW5Dd19lUVk5VlpkYmRpdGZpVGcwX3pkeEYwY3hMdTRLN3VDM1F2Qk4wY0hMUSJ9",
+        "at": "2026-01-01T01:00:00.000Z",
+        "audience": "chrome-extension://example",
+        "expect": {
+          "ok": true,
+          "did": "did:keo:g5ai91eemjb9rbgcuh55zs91mo5szy6gqy9dcnayixkbqoknjxqo:R_NUuZVujEvIfGe8UwNEivDljkY-MAjFMsVUT45TLf0",
+          "deviceId": "VlayRyynTBVeCKw1YKDDO8zDqTKgh7POzeTc8XhQCpw",
+          "helpers": [],
+          "seq": 1700000001,
+          "time": "2026-01-01T00:01:00.000Z"
+        }
+      }
+    ],
+    "refused": [
+      {
+        "name": "checked after its certificate has expired",
+        "text": "keocard1.eyJoZWxsbyI6eyJ2IjoxLCJwdXJwb3NlIjoia2VvLWNhcmQiLCJzZXEiOjE3MDAwMDAwMDAsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjQ3NDMxfSx7ImtpbmQiOiJodHRwIiwiaG9zdCI6ImhvbWUuZXhhbXBsZS5vcmciLCJwb3J0Ijo4NDQzfV0sInRpbWUiOiIyMDI2LTAxLTAxVDAwOjAxOjAwLjAwMFoiLCJkaWQiOiJkaWQ6a2VvOmc1YWk5MWVlbWpiOXJiZ2N1aDU1enM5MW1vNXN6eTZncXk5ZGNuYXlpeGticW9rbmp4cW86Ul9OVXVaVnVqRXZJZkdlOFV3TkVpdkRsamtZLU1BakZNc1ZVVDQ1VExmMCIsImluY2VwdGlvbiI6eyJ2IjoxLCJ0eXBlIjoiaW5jZXB0aW9uIiwic2VxIjowLCJwcmV2IjpudWxsLCJ0aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwic3RhdGUiOnsiYXV0aG9yaXR5Ijp7InRocmVzaG9sZCI6MSwia2V5cyI6W3siaWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiczZISDVNdmZ6Xzh5Q3RxUlozam5xQWVKcllVTkJUTTBTZU1NZHFQWHUwNCIsInkiOiJfem5ZNGU5alp5MXNpeUZkVDNYaGhMT0huMEpxUlIzYWhrN1FrdTdqdHpZIn0sImtpbmQiOiJwaG9uZSIsImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifV19LCJuZXh0IjpudWxsLCJyZWNvdmVyeSI6eyJndWFyZGlhbnMiOltdLCJ0aHJlc2hvbGQiOjIsImRlbGF5RGF5cyI6M30sImRpc2NvdmVyeSI6eyJrZXkiOiJnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvIiwidmVyc2lvbiI6MX0sInNlcnZpY2VzIjpbXSwiY2xhaW1zIjp7ImhhbmRsZXMiOltdfSwicmV2b2tlZCI6W119fSwiaW5jZXB0aW9uU2lncyI6eyJkaXNjb3ZlcnkiOiJrUFZQYUdlTml3T2hWOWpaNzN4OW9KV1FYS2tISWprcFc1V3BaT2FRQkFlZUpsWFpkdFVya3dqQXpjNlgtbzYwNF9VV0pFdGFPVG92b1hDS3VBRDJDUSIsImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiJVdDVZTVNUQklYc0M0LWhLUnU0emQ0Uk1sSENUVTEyNEdIdzRudWRWZDlyajB0XzV4ZDY2T29YaXNkV0NCVjFQV09Fa0lSMzhTSlhHVVlYaHY4MWxTQSJ9XX0sImNlcnQiOnsidmlhIjoibG9nIiwidiI6MSwiZGlkIjoiZGlkOmtlbzpnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvOlJfTlV1WlZ1akV2SWZHZThVd05FaXZEbGprWS1NQWpGTXNWVVQ0NVRMZjAiLCJkZXZpY2VQdWJLZXlKd2siOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiIxSlVFRHZlc3NJMk1LSjNUVHBhN2lidW5zeU1YdlFIRzFFamtZcVg4ak80IiwieSI6ImtOekx1WnR2T0cxdTQ0MVNFQU1VR2xfR3NNMVktTXU0M1N4bFo5VGo5QjgifSwiaXNzdWVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJleHAiOiIyMDI2LTAxLTAxVDEyOjAwOjAwLjAwMFoiLCJhdWQiOiJjaHJvbWUtZXh0ZW5zaW9uOi8vZXhhbXBsZSIsInNjb3BlIjpbIndvcmxkOnJlYWQiLCJ3b3JsZDp3cml0ZSIsInNpZ24iXSwiYXV0aG9yaXR5S2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIn0sImV2ZW50cyI6W3siZXZlbnQiOnsidiI6MSwidHlwZSI6ImFkZC1kZXZpY2UiLCJzZXEiOjEsInByZXYiOiJSX05VdVpWdWpFdklmR2U4VXdORWl2RGxqa1ktTUFqRk1zVlVUNDVUTGYwIiwidGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImFkZCI6eyJkZXZpY2UiOnsiaWQiOiJWbGF5Unl5blRCVmVDS3cxWUtERE84ekRxVEtnaDdQT3plVGM4WGhRQ3B3IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiMUpVRUR2ZXNzSTJNS0ozVFRwYTdpYnVuc3lNWHZRSEcxRWprWXFYOGpPNCIsInkiOiJrTnpMdVp0dk9HMXU0NDFTRUFNVUdsX0dzTTFZLU11NDNTeGxaOVRqOUI4In0sImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifX19LCJzaWdzIjp7ImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiIzOUVPd0VUSkZJcDBOV2VqYlJ4NXNZcXNGU2JwYldtaU9zQWxsV3JBWlJxeFpzRDlBeWhUblhwYWtfOXNEeDg2d2wtMHdrNDJodHdCRW5ybzlfTTBoQSJ9XX19XX0sInNpZyI6IkNJUXFSdEZFY1J6UVQtV2lpeWMtTkstVllsckxydzM1SUVvLUVmN0JuRVFPVTJqbWI3clQwdjhOM2YzbTllQzEtbFFSQTFtRlJhTUtYV1JJR2NHYTJBIn0",
+        "at": "2026-01-01T13:00:00.000Z",
+        "audience": "chrome-extension://example",
+        "error": "The other side's device is not vouched for: the delegation has expired."
+      },
+      {
+        "name": "checked for another app's origin",
+        "text": "keocard1.eyJoZWxsbyI6eyJ2IjoxLCJwdXJwb3NlIjoia2VvLWNhcmQiLCJzZXEiOjE3MDAwMDAwMDAsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjQ3NDMxfSx7ImtpbmQiOiJodHRwIiwiaG9zdCI6ImhvbWUuZXhhbXBsZS5vcmciLCJwb3J0Ijo4NDQzfV0sInRpbWUiOiIyMDI2LTAxLTAxVDAwOjAxOjAwLjAwMFoiLCJkaWQiOiJkaWQ6a2VvOmc1YWk5MWVlbWpiOXJiZ2N1aDU1enM5MW1vNXN6eTZncXk5ZGNuYXlpeGticW9rbmp4cW86Ul9OVXVaVnVqRXZJZkdlOFV3TkVpdkRsamtZLU1BakZNc1ZVVDQ1VExmMCIsImluY2VwdGlvbiI6eyJ2IjoxLCJ0eXBlIjoiaW5jZXB0aW9uIiwic2VxIjowLCJwcmV2IjpudWxsLCJ0aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwic3RhdGUiOnsiYXV0aG9yaXR5Ijp7InRocmVzaG9sZCI6MSwia2V5cyI6W3siaWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiczZISDVNdmZ6Xzh5Q3RxUlozam5xQWVKcllVTkJUTTBTZU1NZHFQWHUwNCIsInkiOiJfem5ZNGU5alp5MXNpeUZkVDNYaGhMT0huMEpxUlIzYWhrN1FrdTdqdHpZIn0sImtpbmQiOiJwaG9uZSIsImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifV19LCJuZXh0IjpudWxsLCJyZWNvdmVyeSI6eyJndWFyZGlhbnMiOltdLCJ0aHJlc2hvbGQiOjIsImRlbGF5RGF5cyI6M30sImRpc2NvdmVyeSI6eyJrZXkiOiJnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvIiwidmVyc2lvbiI6MX0sInNlcnZpY2VzIjpbXSwiY2xhaW1zIjp7ImhhbmRsZXMiOltdfSwicmV2b2tlZCI6W119fSwiaW5jZXB0aW9uU2lncyI6eyJkaXNjb3ZlcnkiOiJrUFZQYUdlTml3T2hWOWpaNzN4OW9KV1FYS2tISWprcFc1V3BaT2FRQkFlZUpsWFpkdFVya3dqQXpjNlgtbzYwNF9VV0pFdGFPVG92b1hDS3VBRDJDUSIsImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiJVdDVZTVNUQklYc0M0LWhLUnU0emQ0Uk1sSENUVTEyNEdIdzRudWRWZDlyajB0XzV4ZDY2T29YaXNkV0NCVjFQV09Fa0lSMzhTSlhHVVlYaHY4MWxTQSJ9XX0sImNlcnQiOnsidmlhIjoibG9nIiwidiI6MSwiZGlkIjoiZGlkOmtlbzpnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvOlJfTlV1WlZ1akV2SWZHZThVd05FaXZEbGprWS1NQWpGTXNWVVQ0NVRMZjAiLCJkZXZpY2VQdWJLZXlKd2siOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiIxSlVFRHZlc3NJMk1LSjNUVHBhN2lidW5zeU1YdlFIRzFFamtZcVg4ak80IiwieSI6ImtOekx1WnR2T0cxdTQ0MVNFQU1VR2xfR3NNMVktTXU0M1N4bFo5VGo5QjgifSwiaXNzdWVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJleHAiOiIyMDI2LTAxLTAxVDEyOjAwOjAwLjAwMFoiLCJhdWQiOiJjaHJvbWUtZXh0ZW5zaW9uOi8vZXhhbXBsZSIsInNjb3BlIjpbIndvcmxkOnJlYWQiLCJ3b3JsZDp3cml0ZSIsInNpZ24iXSwiYXV0aG9yaXR5S2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIn0sImV2ZW50cyI6W3siZXZlbnQiOnsidiI6MSwidHlwZSI6ImFkZC1kZXZpY2UiLCJzZXEiOjEsInByZXYiOiJSX05VdVpWdWpFdklmR2U4VXdORWl2RGxqa1ktTUFqRk1zVlVUNDVUTGYwIiwidGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImFkZCI6eyJkZXZpY2UiOnsiaWQiOiJWbGF5Unl5blRCVmVDS3cxWUtERE84ekRxVEtnaDdQT3plVGM4WGhRQ3B3IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiMUpVRUR2ZXNzSTJNS0ozVFRwYTdpYnVuc3lNWHZRSEcxRWprWXFYOGpPNCIsInkiOiJrTnpMdVp0dk9HMXU0NDFTRUFNVUdsX0dzTTFZLU11NDNTeGxaOVRqOUI4In0sImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifX19LCJzaWdzIjp7ImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiIzOUVPd0VUSkZJcDBOV2VqYlJ4NXNZcXNGU2JwYldtaU9zQWxsV3JBWlJxeFpzRDlBeWhUblhwYWtfOXNEeDg2d2wtMHdrNDJodHdCRW5ybzlfTTBoQSJ9XX19XX0sInNpZyI6IkNJUXFSdEZFY1J6UVQtV2lpeWMtTkstVllsckxydzM1SUVvLUVmN0JuRVFPVTJqbWI3clQwdjhOM2YzbTllQzEtbFFSQTFtRlJhTUtYV1JJR2NHYTJBIn0",
+        "at": "2026-01-01T01:00:00.000Z",
+        "audience": "chrome-extension://other",
+        "error": "The other side's device is not vouched for: the delegation is for another app."
+      },
+      {
+        "name": "a helper address changed after signing",
+        "text": "keocard1.eyJoZWxsbyI6eyJ2IjoxLCJwdXJwb3NlIjoia2VvLWNhcmQiLCJzZXEiOjE3MDAwMDAwMDAsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuNjYiLCJwb3J0Ijo0NzQzMX0seyJraW5kIjoiaHR0cCIsImhvc3QiOiJob21lLmV4YW1wbGUub3JnIiwicG9ydCI6ODQ0M31dLCJ0aW1lIjoiMjAyNi0wMS0wMVQwMDowMTowMC4wMDBaIiwiZGlkIjoiZGlkOmtlbzpnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvOlJfTlV1WlZ1akV2SWZHZThVd05FaXZEbGprWS1NQWpGTXNWVVQ0NVRMZjAiLCJpbmNlcHRpb24iOnsidiI6MSwidHlwZSI6ImluY2VwdGlvbiIsInNlcSI6MCwicHJldiI6bnVsbCwidGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDAuMDAwWiIsInN0YXRlIjp7ImF1dGhvcml0eSI6eyJ0aHJlc2hvbGQiOjEsImtleXMiOlt7ImlkIjoiZG1WamRHOXlMWEJvYjI1bExXdGxlUSIsImp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6InM2SEg1TXZmel84eUN0cVJaM2pucUFlSnJZVU5CVE0wU2VNTWRxUFh1MDQiLCJ5IjoiX3puWTRlOWpaeTFzaXlGZFQzWGhoTE9IbjBKcVJSM2FoazdRa3U3anR6WSJ9LCJraW5kIjoicGhvbmUiLCJhZGRlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIn1dfSwibmV4dCI6bnVsbCwicmVjb3ZlcnkiOnsiZ3VhcmRpYW5zIjpbXSwidGhyZXNob2xkIjoyLCJkZWxheURheXMiOjN9LCJkaXNjb3ZlcnkiOnsia2V5IjoiZzVhaTkxZWVtamI5cmJnY3VoNTV6czkxbW81c3p5NmdxeTlkY25heWl4a2Jxb2tuanhxbyIsInZlcnNpb24iOjF9LCJzZXJ2aWNlcyI6W10sImNsYWltcyI6eyJoYW5kbGVzIjpbXX0sInJldm9rZWQiOltdfX0sImluY2VwdGlvblNpZ3MiOnsiZGlzY292ZXJ5Ijoia1BWUGFHZU5pd09oVjlqWjczeDlvSldRWEtrSElqa3BXNVdwWk9hUUJBZWVKbFhaZHRVcmt3akF6YzZYLW82MDRfVVdKRXRhT1Rvdm9YQ0t1QUQyQ1EiLCJhdXRob3JpdHkiOlt7ImtleUlkIjoiZG1WamRHOXlMWEJvYjI1bExXdGxlUSIsInNjaGVtZSI6InAyNTYtcmF3Iiwic2lnbmF0dXJlIjoiVXQ1WU1TVEJJWHNDNC1oS1J1NHpkNFJNbEhDVFUxMjRHSHc0bnVkVmQ5cmowdF81eGQ2Nk9vWGlzZFdDQlYxUFdPRWtJUjM4U0pYR1VZWGh2ODFsU0EifV19LCJjZXJ0Ijp7InZpYSI6ImxvZyIsInYiOjEsImRpZCI6ImRpZDprZW86ZzVhaTkxZWVtamI5cmJnY3VoNTV6czkxbW81c3p5NmdxeTlkY25heWl4a2Jxb2tuanhxbzpSX05VdVpWdWpFdklmR2U4VXdORWl2RGxqa1ktTUFqRk1zVlVUNDVUTGYwIiwiZGV2aWNlUHViS2V5SndrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiMUpVRUR2ZXNzSTJNS0ozVFRwYTdpYnVuc3lNWHZRSEcxRWprWXFYOGpPNCIsInkiOiJrTnpMdVp0dk9HMXU0NDFTRUFNVUdsX0dzTTFZLU11NDNTeGxaOVRqOUI4In0sImlzc3VlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwiZXhwIjoiMjAyNi0wMS0wMVQxMjowMDowMC4wMDBaIiwiYXVkIjoiY2hyb21lLWV4dGVuc2lvbjovL2V4YW1wbGUiLCJzY29wZSI6WyJ3b3JsZDpyZWFkIiwid29ybGQ6d3JpdGUiLCJzaWduIl0sImF1dGhvcml0eUtleUlkIjoiZG1WamRHOXlMWEJvYjI1bExXdGxlUSJ9LCJldmVudHMiOlt7ImV2ZW50Ijp7InYiOjEsInR5cGUiOiJhZGQtZGV2aWNlIiwic2VxIjoxLCJwcmV2IjoiUl9OVXVaVnVqRXZJZkdlOFV3TkVpdkRsamtZLU1BakZNc1ZVVDQ1VExmMCIsInRpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJhZGQiOnsiZGV2aWNlIjp7ImlkIjoiVmxheVJ5eW5UQlZlQ0t3MVlLRERPOHpEcVRLZ2g3UE96ZVRjOFhoUUNwdyIsImp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6IjFKVUVEdmVzc0kyTUtKM1RUcGE3aWJ1bnN5TVh2UUhHMUVqa1lxWDhqTzQiLCJ5Ijoia056THVadHZPRzF1NDQxU0VBTVVHbF9Hc00xWS1NdTQzU3hsWjlUajlCOCJ9LCJhZGRlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIn19fSwic2lncyI6eyJhdXRob3JpdHkiOlt7ImtleUlkIjoiZG1WamRHOXlMWEJvYjI1bExXdGxlUSIsInNjaGVtZSI6InAyNTYtcmF3Iiwic2lnbmF0dXJlIjoiMzlFT3dFVEpGSXAwTldlamJSeDVzWXFzRlNicGJXbWlPc0FsbFdyQVpScXhac0Q5QXloVG5YcGFrXzlzRHg4NndsLTB3azQyaHR3QkVucm85X00waEEifV19fV19LCJzaWciOiJ1N2RaUnM2TDlGTl9Xd3RXd1pNSnRyNXZNaXNiTmkzUWpHQ1lMZHhFM2FEdzhIMTkyT2ZENXB4aGlmZnJMenpxQTQ0YVhqY28zSkFEa3VEVmVKU0RpdyJ9",
+        "at": "2026-01-01T01:00:00.000Z",
+        "audience": "chrome-extension://example",
+        "error": "The other side's signature does not match."
+      },
+      {
+        "name": "the version number changed after signing (still near its date: the signature fails)",
+        "text": "keocard1.eyJoZWxsbyI6eyJ2IjoxLCJwdXJwb3NlIjoia2VvLWNhcmQiLCJzZXEiOjE3MDAwMDAwMDUsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjQ3NDMxfV0sInRpbWUiOiIyMDI2LTAxLTAxVDAwOjAxOjAwLjAwMFoiLCJkaWQiOiJkaWQ6a2VvOmc1YWk5MWVlbWpiOXJiZ2N1aDU1enM5MW1vNXN6eTZncXk5ZGNuYXlpeGticW9rbmp4cW86Ul9OVXVaVnVqRXZJZkdlOFV3TkVpdkRsamtZLU1BakZNc1ZVVDQ1VExmMCIsImluY2VwdGlvbiI6eyJ2IjoxLCJ0eXBlIjoiaW5jZXB0aW9uIiwic2VxIjowLCJwcmV2IjpudWxsLCJ0aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwic3RhdGUiOnsiYXV0aG9yaXR5Ijp7InRocmVzaG9sZCI6MSwia2V5cyI6W3siaWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiczZISDVNdmZ6Xzh5Q3RxUlozam5xQWVKcllVTkJUTTBTZU1NZHFQWHUwNCIsInkiOiJfem5ZNGU5alp5MXNpeUZkVDNYaGhMT0huMEpxUlIzYWhrN1FrdTdqdHpZIn0sImtpbmQiOiJwaG9uZSIsImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifV19LCJuZXh0IjpudWxsLCJyZWNvdmVyeSI6eyJndWFyZGlhbnMiOltdLCJ0aHJlc2hvbGQiOjIsImRlbGF5RGF5cyI6M30sImRpc2NvdmVyeSI6eyJrZXkiOiJnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvIiwidmVyc2lvbiI6MX0sInNlcnZpY2VzIjpbXSwiY2xhaW1zIjp7ImhhbmRsZXMiOltdfSwicmV2b2tlZCI6W119fSwiaW5jZXB0aW9uU2lncyI6eyJkaXNjb3ZlcnkiOiJrUFZQYUdlTml3T2hWOWpaNzN4OW9KV1FYS2tISWprcFc1V3BaT2FRQkFlZUpsWFpkdFVya3dqQXpjNlgtbzYwNF9VV0pFdGFPVG92b1hDS3VBRDJDUSIsImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiJVdDVZTVNUQklYc0M0LWhLUnU0emQ0Uk1sSENUVTEyNEdIdzRudWRWZDlyajB0XzV4ZDY2T29YaXNkV0NCVjFQV09Fa0lSMzhTSlhHVVlYaHY4MWxTQSJ9XX0sImNlcnQiOnsidmlhIjoibG9nIiwidiI6MSwiZGlkIjoiZGlkOmtlbzpnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvOlJfTlV1WlZ1akV2SWZHZThVd05FaXZEbGprWS1NQWpGTXNWVVQ0NVRMZjAiLCJkZXZpY2VQdWJLZXlKd2siOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiIxSlVFRHZlc3NJMk1LSjNUVHBhN2lidW5zeU1YdlFIRzFFamtZcVg4ak80IiwieSI6ImtOekx1WnR2T0cxdTQ0MVNFQU1VR2xfR3NNMVktTXU0M1N4bFo5VGo5QjgifSwiaXNzdWVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJleHAiOiIyMDI2LTAxLTAxVDEyOjAwOjAwLjAwMFoiLCJhdWQiOiJjaHJvbWUtZXh0ZW5zaW9uOi8vZXhhbXBsZSIsInNjb3BlIjpbIndvcmxkOnJlYWQiLCJ3b3JsZDp3cml0ZSIsInNpZ24iXSwiYXV0aG9yaXR5S2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIn0sImV2ZW50cyI6W3siZXZlbnQiOnsidiI6MSwidHlwZSI6ImFkZC1kZXZpY2UiLCJzZXEiOjEsInByZXYiOiJSX05VdVpWdWpFdklmR2U4VXdORWl2RGxqa1ktTUFqRk1zVlVUNDVUTGYwIiwidGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImFkZCI6eyJkZXZpY2UiOnsiaWQiOiJWbGF5Unl5blRCVmVDS3cxWUtERE84ekRxVEtnaDdQT3plVGM4WGhRQ3B3IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiMUpVRUR2ZXNzSTJNS0ozVFRwYTdpYnVuc3lNWHZRSEcxRWprWXFYOGpPNCIsInkiOiJrTnpMdVp0dk9HMXU0NDFTRUFNVUdsX0dzTTFZLU11NDNTeGxaOVRqOUI4In0sImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifX19LCJzaWdzIjp7ImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiIzOUVPd0VUSkZJcDBOV2VqYlJ4NXNZcXNGU2JwYldtaU9zQWxsV3JBWlJxeFpzRDlBeWhUblhwYWtfOXNEeDg2d2wtMHdrNDJodHdCRW5ybzlfTTBoQSJ9XX19XX0sInNpZyI6InNMOV9meE55R3h0MHdHNlRkQ3NjNEdHWEtqYmsxZ2k1Y3paT3BnRHJONmJ1aU1SclYydXBzbmQyeGhZeHNWa2h2WGVDTG5TcUMtMEEybWQ5cjdiODdBIn0",
+        "at": "2026-01-01T01:00:00.000Z",
+        "audience": "chrome-extension://example",
+        "error": "The other side's signature does not match."
+      },
+      {
+        "name": "a version number far ahead of the date of the card, signed properly (refused for the number, whoever signed it)",
+        "text": "keocard1.eyJoZWxsbyI6eyJ2IjoxLCJwdXJwb3NlIjoia2VvLWNhcmQiLCJzZXEiOjE4MDAwMDAwMDAsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIyMDMuMC4xMTMuOSIsInBvcnQiOjQ3NDMxfV0sInRpbWUiOiIyMDI2LTAxLTAxVDAwOjAxOjAwLjAwMFoiLCJkaWQiOiJkaWQ6a2VvOmc1YWk5MWVlbWpiOXJiZ2N1aDU1enM5MW1vNXN6eTZncXk5ZGNuYXlpeGticW9rbmp4cW86Ul9OVXVaVnVqRXZJZkdlOFV3TkVpdkRsamtZLU1BakZNc1ZVVDQ1VExmMCIsImluY2VwdGlvbiI6eyJ2IjoxLCJ0eXBlIjoiaW5jZXB0aW9uIiwic2VxIjowLCJwcmV2IjpudWxsLCJ0aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwic3RhdGUiOnsiYXV0aG9yaXR5Ijp7InRocmVzaG9sZCI6MSwia2V5cyI6W3siaWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiczZISDVNdmZ6Xzh5Q3RxUlozam5xQWVKcllVTkJUTTBTZU1NZHFQWHUwNCIsInkiOiJfem5ZNGU5alp5MXNpeUZkVDNYaGhMT0huMEpxUlIzYWhrN1FrdTdqdHpZIn0sImtpbmQiOiJwaG9uZSIsImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifV19LCJuZXh0IjpudWxsLCJyZWNvdmVyeSI6eyJndWFyZGlhbnMiOltdLCJ0aHJlc2hvbGQiOjIsImRlbGF5RGF5cyI6M30sImRpc2NvdmVyeSI6eyJrZXkiOiJnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvIiwidmVyc2lvbiI6MX0sInNlcnZpY2VzIjpbXSwiY2xhaW1zIjp7ImhhbmRsZXMiOltdfSwicmV2b2tlZCI6W119fSwiaW5jZXB0aW9uU2lncyI6eyJkaXNjb3ZlcnkiOiJrUFZQYUdlTml3T2hWOWpaNzN4OW9KV1FYS2tISWprcFc1V3BaT2FRQkFlZUpsWFpkdFVya3dqQXpjNlgtbzYwNF9VV0pFdGFPVG92b1hDS3VBRDJDUSIsImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiJVdDVZTVNUQklYc0M0LWhLUnU0emQ0Uk1sSENUVTEyNEdIdzRudWRWZDlyajB0XzV4ZDY2T29YaXNkV0NCVjFQV09Fa0lSMzhTSlhHVVlYaHY4MWxTQSJ9XX0sImNlcnQiOnsidmlhIjoibG9nIiwidiI6MSwiZGlkIjoiZGlkOmtlbzpnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvOlJfTlV1WlZ1akV2SWZHZThVd05FaXZEbGprWS1NQWpGTXNWVVQ0NVRMZjAiLCJkZXZpY2VQdWJLZXlKd2siOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiIxSlVFRHZlc3NJMk1LSjNUVHBhN2lidW5zeU1YdlFIRzFFamtZcVg4ak80IiwieSI6ImtOekx1WnR2T0cxdTQ0MVNFQU1VR2xfR3NNMVktTXU0M1N4bFo5VGo5QjgifSwiaXNzdWVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJleHAiOiIyMDI2LTAxLTAxVDEyOjAwOjAwLjAwMFoiLCJhdWQiOiJjaHJvbWUtZXh0ZW5zaW9uOi8vZXhhbXBsZSIsInNjb3BlIjpbIndvcmxkOnJlYWQiLCJ3b3JsZDp3cml0ZSIsInNpZ24iXSwiYXV0aG9yaXR5S2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIn0sImV2ZW50cyI6W3siZXZlbnQiOnsidiI6MSwidHlwZSI6ImFkZC1kZXZpY2UiLCJzZXEiOjEsInByZXYiOiJSX05VdVpWdWpFdklmR2U4VXdORWl2RGxqa1ktTUFqRk1zVlVUNDVUTGYwIiwidGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImFkZCI6eyJkZXZpY2UiOnsiaWQiOiJWbGF5Unl5blRCVmVDS3cxWUtERE84ekRxVEtnaDdQT3plVGM4WGhRQ3B3IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiMUpVRUR2ZXNzSTJNS0ozVFRwYTdpYnVuc3lNWHZRSEcxRWprWXFYOGpPNCIsInkiOiJrTnpMdVp0dk9HMXU0NDFTRUFNVUdsX0dzTTFZLU11NDNTeGxaOVRqOUI4In0sImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifX19LCJzaWdzIjp7ImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiIzOUVPd0VUSkZJcDBOV2VqYlJ4NXNZcXNGU2JwYldtaU9zQWxsV3JBWlJxeFpzRDlBeWhUblhwYWtfOXNEeDg2d2wtMHdrNDJodHdCRW5ybzlfTTBoQSJ9XX19XX0sInNpZyI6Ii0zRWxCVXBDWEx0RXpqbWVfWmg1VjJUbl9oVnpBcktnaW9pWXFyS2k4dS1pZ0RTWFgxWXlQX2pTYXJJM3EyT3hZTFlqU2NLN0J1M1JxdF84WlBoU2F3In0",
+        "at": "2026-01-01T01:00:00.000Z",
+        "audience": "chrome-extension://example",
+        "error": "That card has a version number that is ahead of its date."
+      },
+      {
+        "name": "a loopback helper (a card that was signed anyway)",
+        "text": "keocard1.eyJoZWxsbyI6eyJ2IjoxLCJwdXJwb3NlIjoia2VvLWNhcmQiLCJzZXEiOjE3MDAwMDAwMDAsImhlbHBlcnMiOlt7ImtpbmQiOiJ3cyIsImhvc3QiOiIxMjcuMC4wLjEiLCJwb3J0IjoxfV0sInRpbWUiOiIyMDI2LTAxLTAxVDAwOjAxOjAwLjAwMFoiLCJkaWQiOiJkaWQ6a2VvOmc1YWk5MWVlbWpiOXJiZ2N1aDU1enM5MW1vNXN6eTZncXk5ZGNuYXlpeGticW9rbmp4cW86Ul9OVXVaVnVqRXZJZkdlOFV3TkVpdkRsamtZLU1BakZNc1ZVVDQ1VExmMCIsImluY2VwdGlvbiI6eyJ2IjoxLCJ0eXBlIjoiaW5jZXB0aW9uIiwic2VxIjowLCJwcmV2IjpudWxsLCJ0aW1lIjoiMjAyNi0wMS0wMVQwMDowMDowMC4wMDBaIiwic3RhdGUiOnsiYXV0aG9yaXR5Ijp7InRocmVzaG9sZCI6MSwia2V5cyI6W3siaWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiczZISDVNdmZ6Xzh5Q3RxUlozam5xQWVKcllVTkJUTTBTZU1NZHFQWHUwNCIsInkiOiJfem5ZNGU5alp5MXNpeUZkVDNYaGhMT0huMEpxUlIzYWhrN1FrdTdqdHpZIn0sImtpbmQiOiJwaG9uZSIsImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifV19LCJuZXh0IjpudWxsLCJyZWNvdmVyeSI6eyJndWFyZGlhbnMiOltdLCJ0aHJlc2hvbGQiOjIsImRlbGF5RGF5cyI6M30sImRpc2NvdmVyeSI6eyJrZXkiOiJnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvIiwidmVyc2lvbiI6MX0sInNlcnZpY2VzIjpbXSwiY2xhaW1zIjp7ImhhbmRsZXMiOltdfSwicmV2b2tlZCI6W119fSwiaW5jZXB0aW9uU2lncyI6eyJkaXNjb3ZlcnkiOiJrUFZQYUdlTml3T2hWOWpaNzN4OW9KV1FYS2tISWprcFc1V3BaT2FRQkFlZUpsWFpkdFVya3dqQXpjNlgtbzYwNF9VV0pFdGFPVG92b1hDS3VBRDJDUSIsImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiJVdDVZTVNUQklYc0M0LWhLUnU0emQ0Uk1sSENUVTEyNEdIdzRudWRWZDlyajB0XzV4ZDY2T29YaXNkV0NCVjFQV09Fa0lSMzhTSlhHVVlYaHY4MWxTQSJ9XX0sImNlcnQiOnsidmlhIjoibG9nIiwidiI6MSwiZGlkIjoiZGlkOmtlbzpnNWFpOTFlZW1qYjlyYmdjdWg1NXpzOTFtbzVzenk2Z3F5OWRjbmF5aXhrYnFva25qeHFvOlJfTlV1WlZ1akV2SWZHZThVd05FaXZEbGprWS1NQWpGTXNWVVQ0NVRMZjAiLCJkZXZpY2VQdWJLZXlKd2siOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiIxSlVFRHZlc3NJMk1LSjNUVHBhN2lidW5zeU1YdlFIRzFFamtZcVg4ak80IiwieSI6ImtOekx1WnR2T0cxdTQ0MVNFQU1VR2xfR3NNMVktTXU0M1N4bFo5VGo5QjgifSwiaXNzdWVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJleHAiOiIyMDI2LTAxLTAxVDEyOjAwOjAwLjAwMFoiLCJhdWQiOiJjaHJvbWUtZXh0ZW5zaW9uOi8vZXhhbXBsZSIsInNjb3BlIjpbIndvcmxkOnJlYWQiLCJ3b3JsZDp3cml0ZSIsInNpZ24iXSwiYXV0aG9yaXR5S2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIn0sImV2ZW50cyI6W3siZXZlbnQiOnsidiI6MSwidHlwZSI6ImFkZC1kZXZpY2UiLCJzZXEiOjEsInByZXYiOiJSX05VdVpWdWpFdklmR2U4VXdORWl2RGxqa1ktTUFqRk1zVlVUNDVUTGYwIiwidGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImFkZCI6eyJkZXZpY2UiOnsiaWQiOiJWbGF5Unl5blRCVmVDS3cxWUtERE84ekRxVEtnaDdQT3plVGM4WGhRQ3B3IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiMUpVRUR2ZXNzSTJNS0ozVFRwYTdpYnVuc3lNWHZRSEcxRWprWXFYOGpPNCIsInkiOiJrTnpMdVp0dk9HMXU0NDFTRUFNVUdsX0dzTTFZLU11NDNTeGxaOVRqOUI4In0sImFkZGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwLjAwMFoifX19LCJzaWdzIjp7ImF1dGhvcml0eSI6W3sia2V5SWQiOiJkbVZqZEc5eUxYQm9iMjVsTFd0bGVRIiwic2NoZW1lIjoicDI1Ni1yYXciLCJzaWduYXR1cmUiOiIzOUVPd0VUSkZJcDBOV2VqYlJ4NXNZcXNGU2JwYldtaU9zQWxsV3JBWlJxeFpzRDlBeWhUblhwYWtfOXNEeDg2d2wtMHdrNDJodHdCRW5ybzlfTTBoQSJ9XX19XX0sInNpZyI6InlNRkhOYmFqQjFpajdaTFFsV0lPYkY4dzhEN0stUVpaR3NicGVyX01JZ0dGX2Vpb3k2OGt6M1JfYTlFZ2lRLV9UQjlDbmt5cEMxMG84a1FScmhBUThRIn0",
+        "at": "2026-01-01T01:00:00.000Z",
+        "audience": "chrome-extension://example",
+        "error": "That card is not valid: a helper has an address that cannot be reached from elsewhere."
+      }
+    ],
+    "textRefused": [
+      {
+        "name": "no card in it",
+        "text": "hello there",
+        "error": "That is not a keo card."
+      },
+      {
+        "name": "the prefix and nothing else",
+        "text": "keocard1.",
+        "error": "That is not a valid keo card."
+      },
+      {
+        "name": "bytes that are not JSON",
+        "text": "keocard1.AAAA",
+        "error": "That is not a valid keo card."
+      },
+      {
+        "name": "an introduction, not a card",
+        "text": "keointro1.eyJ2IjoxLCJkaWQiOiJkaWQ6a2VvOnlyYnlnYnlmeWFkb29uZWtiY2d5NGRveG55ZXRycmF3bndtYnFneTNkZXB0YThlNmRob3k6bW5nSG5Wb3p2M2dZb0FvejE3dVBoeXF5ZUNNR3dNc0VwNEJpTmpTNWFkQSIsImhlbHBlcnMiOltdfQ",
+        "error": "That is not a keo card."
+      },
+      {
+        "name": "JSON that is not a card message",
+        "text": "keocard1.eyJhIjoxfQ",
+        "error": "That is not a valid keo card."
+      }
+    ]
+  }
+}
