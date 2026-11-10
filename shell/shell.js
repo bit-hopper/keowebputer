@@ -170,6 +170,10 @@
     'friend.list': function () { return window.keoFriend.list(); },
     'friend.words': function () { return window.keoFriend.myWords(); },
     'friend.remove': function (a) { return window.keoFriend.remove({ did: a.did }); },
+    // Introductions (keo-intro.js): the screen with our QR code, and the one that reads someone else's and adds them after the eight-word
+    // check. The world can only ASK for a screen to open. It is handed no text, no address and no answer; it cannot fill, add or close.
+    'intro.show': function () { return window.keoIntro.show(); },
+    'intro.read': function () { return window.keoIntro.read(); },
     // Friends on the local network (keo-lan.js), in the desktop app: who of the friends is on this network, whether this device is
     // visible to them, and a dial to one of them (the ordinary connection, its two codes carried over the network). The world gets
     // names and DIDs and a connection id, never an address, a tag or a code. Elsewhere `available` is false and a dial is refused.
@@ -210,6 +214,7 @@
   window.keoCall.onEvent(function (data) { toWorld({ keo: 1, event: 'call', data: data }); });
   window.keoDm.onEvent(function (data) { toWorld({ keo: 1, event: 'dm', data: data }); });
   window.keoFriend.onEvent(function (data) { toWorld({ keo: 1, event: 'friend', data: data }); });
+  window.keoIntro.onEvent(function (data) { toWorld({ keo: 1, event: 'friend', data: data }); });   // adding a friend from an introduction is told the same way
   window.keoLan.onEvent(function (data) { toWorld({ keo: 1, event: 'lan', data: data }); });
   window.keoEnroll.onEvent(function (data) { toWorld({ keo: 1, event: 'enroll', data: data }); });
   window.keoTransfer.onEvent(function (data) { toWorld({ keo: 1, event: 'transfer', data: data }); });
@@ -222,7 +227,7 @@
   // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
   // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
   // connections were proven with that identity's device key, and the next one to sign in must not inherit them.
-  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoCards.reset(); window.keoLan.reset(); window.keoEnroll.reset(); window.keoTransfer.reset(); window.keoContacts.clear(); });
+  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoCards.reset(); window.keoIntro.reset(); window.keoLan.reset(); window.keoEnroll.reset(); window.keoTransfer.reset(); window.keoContacts.clear(); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;

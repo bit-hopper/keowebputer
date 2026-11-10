@@ -15,9 +15,11 @@
     "test:devcycle": "node tests/keo-dev-cycle-test.js",
     "test:worldtext": "node tests/keo-worldtext-test.js",
     "refresh-kernel": "node extension/refresh-kernel.js",
-    "dev-cycle": "node extension/dev-cycle.js"
+    "dev-cycle": "node extension/dev-cycle.js",
+    "test:qr": "node tests/keo-qr-test.js"
   },
   "devDependencies": {
+    "jsqr": "1.4.0",
     "playwright-core": "1.63.0"
   }
 }

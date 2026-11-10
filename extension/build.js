@@ -146,7 +146,7 @@ lively.Config.set('checkWriteAuthorizationOfUsers', false);
 
   // 4. shell page, the vault page and the manifest
   put('start.html', fs.readFileSync(path.join(SHELL, 'start.html')));
-  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-hello.js', 'keo-identity.js', 'keo-p2p.js', 'keo-callsdp.js', 'keo-identicon.js', 'keo-confirm.js', 'keo-call.js', 'keo-dm.js', 'keo-chatlog.js', 'keo-contacts.js', 'keo-wordlist.js', 'keo-fingerprint.js', 'keo-friend.js', 'keo-cards.js', 'keo-enroll-code.js', 'keo-enroll.js', 'keo-transfer.js', 'keo-status.js', 'keo-worldtext.js', 'keo-worlds.js', 'keo-library.js', 'keo-catalog.js', 'keo-lan.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
+  for (const f of ['shell.js', 'shell-store.js', 'keo-overlay.js', 'keo-did.js', 'keo-hello.js', 'keo-identity.js', 'keo-p2p.js', 'keo-callsdp.js', 'keo-identicon.js', 'keo-confirm.js', 'keo-call.js', 'keo-dm.js', 'keo-chatlog.js', 'keo-contacts.js', 'keo-wordlist.js', 'keo-fingerprint.js', 'keo-friend.js', 'keo-cards.js', 'keo-qrcodegen.js', 'keo-qr.js', 'keo-intro.js', 'keo-enroll-code.js', 'keo-enroll.js', 'keo-transfer.js', 'keo-status.js', 'keo-worldtext.js', 'keo-worlds.js', 'keo-library.js', 'keo-catalog.js', 'keo-lan.js', 'keo-gate.js']) put(f, fs.readFileSync(path.join(SHELL, f)));
   // The vault page as the server builds it (IdentityServer.js buildIdentityVaultPage), with the shell's origin as the one
   // app origin it will answer. Relative script paths: this page lives at the package root.
   put('vault.html', '<!DOCTYPE html><html><head><meta charset="utf-8">' +

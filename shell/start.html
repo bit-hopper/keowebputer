@@ -72,6 +72,39 @@
   #keo-friend button:hover { background: #444a5e; }
   #keo-friend button.yes { background: #2f9e5b; color: #fff; }
   #keo-friend button:disabled { opacity: .4; cursor: default; }
+  /* The introduction screen (keo-intro.js): our QR code to show, and someone else's to read and add. Drawn and placed by this page only, BELOW the
+     vault's unlock frame. The QR sits on white whatever the theme is (a scanner needs dark on light). */
+  #keo-intro { position: fixed; inset: 0; z-index: 2147483002; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  #keo-intro[hidden], #keo-intro [hidden] { display: none !important; }
+  #keo-intro .box { width: 400px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow: auto; box-sizing: border-box; padding: 16px; background: #1d1f27; color: #f2f3f7;
+                    border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.45); scrollbar-color: #ff9cc1 rgba(255,156,193,.14); }
+  #keo-intro .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  #keo-intro .tab { flex: 1; font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 7px 10px; cursor: pointer; background: #2a2d3a; color: #a9adbd; }
+  #keo-intro .tab.on { background: #e8497e; color: #fff; }
+  #keo-intro .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  #keo-intro .who-img { width: 40px; height: 40px; border-radius: 6px; image-rendering: pixelated; flex: none; }
+  #keo-intro .who { min-width: 0; }
+  #keo-intro .who-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #keo-intro .who-did { font: 12px ui-monospace, monospace; color: #a9adbd; }
+  #keo-intro .qr { display: flex; justify-content: center; margin-bottom: 12px; }
+  #keo-intro .qr canvas { background: #fff; border-radius: 6px; max-width: 100%; height: auto; image-rendering: pixelated; }
+  #keo-intro .text { color: #d6d9e4; line-height: 1.4; margin-bottom: 12px; }
+  #keo-intro .label { display: block; font-size: 12px; color: #a9adbd; margin: 10px 0 4px; }
+  #keo-intro .words { font: 15px ui-monospace, monospace; padding: 8px 10px; background: #2a2d3a; border-radius: 8px; line-height: 1.5; word-spacing: 4px; user-select: all; }
+  #keo-intro .reach { font: 12px ui-monospace, monospace; color: #d6d9e4; white-space: pre-wrap; word-break: break-all; margin: 6px 0; }
+  #keo-intro textarea, #keo-intro input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font: 12px ui-monospace, monospace; padding: 8px 10px; border: 1px solid #444a5e; border-radius: 8px; background: #14161c; color: inherit; word-break: break-all; }
+  #keo-intro input { font-size: 15px; }
+  #keo-intro textarea { resize: vertical; }
+  #keo-intro .hint { min-height: 18px; margin-top: 6px; font-size: 12px; color: #a9adbd; }
+  #keo-intro .hint.good { color: #6fd39a; }
+  #keo-intro .hint.bad { color: #f1948a; }
+  #keo-intro .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  #keo-intro button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
+  #keo-intro button:hover { background: #444a5e; }
+  #keo-intro button.tab.on:hover { background: #e8497e; }
+  #keo-intro button.copy { margin-top: 6px; }
+  #keo-intro button.yes { background: #2f9e5b; color: #fff; }
+  #keo-intro button:disabled { opacity: .4; cursor: default; }
   /* The dialog for adding an identity to a second device (keo-enroll.js): drawn and placed by this page only, BELOW the vault's unlock frame. */
   #keo-enroll { position: fixed; inset: 0; z-index: 2147483003; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
   #keo-enroll[hidden], #keo-enroll [hidden] { display: none !important; }
@@ -149,6 +182,9 @@
 <script src="keo-dm.js"></script>
 <script src="keo-friend.js"></script>
 <script src="keo-cards.js"></script>
+<script src="keo-qrcodegen.js"></script>
+<script src="keo-qr.js"></script>
+<script src="keo-intro.js"></script>
 <script src="keo-enroll-code.js"></script>
 <script src="keo-enroll.js"></script>
 <script src="keo-transfer.js"></script>
