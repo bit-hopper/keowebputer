@@ -102,17 +102,16 @@ module("lively.identity.WorldsBrowser")
         // tells the page, and the list is read again while it is showing.
         if (this.isLocal()) {
           var self = this;
-          this._onChanged = function () { if (self.world()) self.refreshLocal(); };
+          // remove() runs whenever the window is taken out of the world, which also happens when it is brought forward (taken out and
+          // put back at once), so the listener cannot be dropped there, nor a request still on its way be cancelled. A window that is
+          // really closed is not in the world when the next event comes, and stops listening then; an answer or a search timer that
+          // arrives for it is ignored because both check that the window is in the world.
+          this._onChanged = function () {
+            if (!self.world()) { window.removeEventListener("keo-worlds-changed", self._onChanged); return; }
+            self.refreshLocal();
+          };
           window.addEventListener("keo-worlds-changed", this._onChanged);
         }
-      },
-
-      remove: function remove() {
-        if (this._onChanged) window.removeEventListener("keo-worlds-changed", this._onChanged);
-        this._onChanged = null;
-        clearTimeout(this._debounce);
-        this._seq = (this._seq || 0) + 1;     // an answer still on its way is for a window that is gone
-        $super();
       },
 
       // True inside keo with a local identity signed in: the worlds are saved on this device (shell/keo-worlds.js), searched and

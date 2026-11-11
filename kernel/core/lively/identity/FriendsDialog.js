@@ -67,19 +67,22 @@ module("lively.identity.FriendsDialog")
         this._ensureAccentChromeCss();
         this.addStyleClassName("identity-accent-chrome");
         this._d = { friends: null, words: null, conns: {}, status: null, lan: null, dialing: {}, waitingFor: null };
+        // remove() runs whenever the window is taken out of the world, which also happens when it is brought forward (taken out and put
+        // back at once, e.g. by a click on it while another window is in front), so the subscriptions cannot be dropped there. A window
+        // that is really closed is not in the world when the next event comes, and stops listening then.
+        function live(fn) {
+          return function (ev) {
+            if (!self.world()) { (self._stops || []).forEach(function (stop) { try { stop(); } catch (e) {} }); self._stops = []; return; }
+            fn(ev);
+          };
+        }
         this._stops = [
-          li.onFriendEvent(function () { self.refresh(); }),
-          li.onLanEvent(function () { self.refresh(); }),
-          li.onPeerEvent(function (ev) { if (ev.type === "state" || ev.type === "friendship") self.refresh(); }),
+          li.onFriendEvent(live(function () { self.refresh(); })),
+          li.onLanEvent(live(function () { self.refresh(); })),
+          li.onPeerEvent(live(function (ev) { if (ev.type === "state" || ev.type === "friendship") self.refresh(); })),
         ];
         this.render();
         this.refresh();
-      },
-
-      remove: function remove() {
-        (this._stops || []).forEach(function (stop) { try { stop(); } catch (e) {} });
-        this._stops = [];
-        $super();
       },
 
       // The title bar text is white on the accent colour (the same rule PeerDialog adds; whichever opens first adds it).

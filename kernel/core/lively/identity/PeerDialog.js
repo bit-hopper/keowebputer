@@ -94,11 +94,18 @@ module("lively.identity.PeerDialog")
       },
 
       // Closing the window ends the connection: without a window nobody could see it or stop it.
+      // remove() also runs when the window is only brought forward (taken out and put back at once, e.g. by a click on it while another
+      // window is in front), and that must not end anything. So the teardown waits one tick and is skipped if the window is back in the
+      // world by then (the same way WarpDrop does it). $super() still runs at once.
       remove: function remove() {
-        if (this._stopListening) { this._stopListening(); this._stopListening = null; }
-        if (this._p && this._p.id && this._p.phase !== "closed") lively.identity.localIdentity.peerClose(this._p.id);
-        if (this._p) this._p.id = null;
+        var self = this;
         $super();
+        setTimeout(function () {
+          if (self.world()) return;
+          if (self._stopListening) { self._stopListening(); self._stopListening = null; }
+          if (self._p && self._p.id && self._p.phase !== "closed") lively.identity.localIdentity.peerClose(self._p.id);
+          if (self._p) self._p.id = null;
+        }, 0);
       },
 
       _ensureAccentChromeCss: function () {
