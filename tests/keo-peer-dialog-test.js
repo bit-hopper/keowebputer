@@ -163,6 +163,28 @@ const adopt = (frame) => frame.evaluate(() => new Promise((res) => { let n = 0; 
     check('"Copy DID" copies the other side\'s full DID', (await A.frame.evaluate(() => window.__copied)).includes(B.did), await A.frame.evaluate(() => window.__copied));
     await shot(A.page, 'dlg-4-connected');
 
+    // ---- a LIVE connection must survive its dialog being brought forward (the dialog is taken out of the world and put back by a click on
+    // ---- it; its remove() used to close the connection it held). Another window is put on top of the connected dialog and the dialog's
+    // ---- title bar is clicked for real; both sides must still be connected and the shell must still hold the connection.
+    const liveBefore = await A.page.evaluate(() => window.keoP2p.list().length);
+    await A.frame.evaluate(() => new Promise((res) => lively.require('lively.identity.FriendsDialog').toRun(() => { const f = lively.BuildSpec('lively.identity.FriendsDialog').createMorph(); f.openInWorldCenter(); window.__liveCover = f; res(); })));
+    await sleep(1500);
+    await A.frame.evaluate(() => { const d = window.__dlg, f = window.__liveCover; d.setPosition(lively.pt(20, 80)); f.setPosition(lively.pt(d.getExtent().x + 60, 80)); });
+    await sleep(500);
+    const liveState = () => A.frame.evaluate(() => { const d = window.__dlg, f = window.__liveCover, ix = (m) => $world.submorphs.indexOf(m); return { dialogActive: !!d.isActive(), dialogAboveCover: ix(d) > ix(f), phase: d._p.phase, hasId: !!d._p.id, listening: typeof d._stopListening === 'function' }; });
+    const live0 = await liveState();
+    check('live connection: with another window on top, the connected dialog is behind it', live0.dialogAboveCover === false && live0.phase === 'connected' && liveBefore === 1, { live0, liveBefore });
+    const liveRect = await A.frame.evaluate(() => { const b = window.__dlg.titleBar.renderContext().shapeNode.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
+    const liveOff = await (await A.frame.frameElement()).boundingBox();
+    await A.page.bringToFront();
+    await A.page.mouse.click(liveOff.x + liveRect.x + liveRect.w / 2, liveOff.y + liveRect.y + liveRect.h / 2);
+    await sleep(2500);
+    const live1 = await liveState();
+    const liveAfter = await A.page.evaluate(() => window.keoP2p.list().length);
+    check('live connection: a click on the connected dialog brings it to the front', live1.dialogActive && live1.dialogAboveCover, live1);
+    check('live connection: and it stays connected on both sides, the shell still holds the connection, and the dialog still has its id and listener', live1.phase === 'connected' && (await phase(B.frame)) === 'connected' && liveAfter === liveBefore && live1.hasId && live1.listening, { live1, liveAfter, liveBefore, B: await phase(B.frame) });
+    await A.frame.evaluate(() => { window.__liveCover.remove(); window.__liveCover = null; });
+
     // ---- files and messages are for friends. Connected is not enough: the dialog says so and offers the way forward, which is the
     // shell's own dialog (typed words, a real click), and each side sees the other's half arrive.
     const words = async (P) => P.page.evaluate(() => window.keoFriend.myWords());
