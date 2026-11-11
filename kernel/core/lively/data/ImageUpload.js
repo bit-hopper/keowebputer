@@ -51,14 +51,9 @@ module("lively.data.ImageUpload")
         var self = this;
 
         function _openAndFit(ref, type) {
-          var img = self.openImage(ref, type, self.pos, file.name, function (err, loadedImg) {
-            var m = loadedImg || img;
-            if (!m) return;
-            var tryExtent = function () {
-              try { m.setNativeExtent(); } catch (e) { setTimeout(tryExtent, 100); }
-            };
-            setTimeout(tryExtent, 100);
-          });
+          // openImage already sizes the picture: its own size, but no larger than the world (the size options it passes). Forcing the
+          // full pixel size afterwards, as this once did, put a picture larger than the screen when the file was.
+          var img = self.openImage(ref, type, self.pos, file.name);
           // Attach synchronously from the return value — don't wait for the load callback,
           // which may receive (img) instead of (null, img) depending on the Image class.
           if (img && ref && typeof ref === "object") {

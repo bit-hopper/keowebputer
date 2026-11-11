@@ -98,7 +98,9 @@ module('lively.data.EncryptedMedia')
         this._extentOptions = extentOptions;
       },
 
-      _resolveAndDisplay: function (thenDo) {
+      // keepExtent: a world that is opened again shows the picture at the size it was saved with (the size options below fit a picture
+      // to the world once, when it is first dropped, and must not undo a size the person has since chosen).
+      _resolveAndDisplay: function (thenDo, keepExtent) {
         var self = this;
         _urlFor(
           this.shape.fileHandle, this.shape.fileObjId, null,
@@ -108,7 +110,7 @@ module('lively.data.EncryptedMedia')
               thenDo && thenDo(err);
               return;
             }
-            self.setImageURL(url, self._extentOptions, thenDo);
+            self.setImageURL(url, keepExtent ? null : self._extentOptions, thenDo);
           },
         );
       },
@@ -116,7 +118,7 @@ module('lively.data.EncryptedMedia')
       onrestore: function () {
         if (!this.shape || !this.shape.fileHandle || !this.shape.fileObjId) return;
         var self = this;
-        this.whenOpenedInWorld(function () { self._resolveAndDisplay(); });
+        this.whenOpenedInWorld(function () { self._resolveAndDisplay(null, true); });
       },
     });
 
@@ -126,7 +128,7 @@ module('lively.data.EncryptedMedia')
       var el = document.createElement('div');
       el.style.cssText =
         'display:flex;align-items:center;justify-content:center;' +
-        'width:100%;height:100%;box-sizing:border-box;' +
+        'width:100%;height:100%;box-sizing:border-box;overflow:hidden;' +
         'background:#f0f0f0;color:#888;font:13px Arial,sans-serif';
       el.textContent = 'Loading…';
       return el;
@@ -149,6 +151,15 @@ module('lively.data.EncryptedMedia')
       onrestore: function () {
         this.shapeNode = _loadingPlaceholder();
       },
+
+      // The size is the one that was set (the shape keeps it as _Extent, which is saved with the world and applied again when the shape
+      // is drawn), not a reading of the page. External.getExtent reads the page and adds the width of a scrollbar whenever it thinks it
+      // sees one; so every read was larger than what had been set, the resize halo (read, add the drag, set) made the box grow about
+      // 14 pixels more than the pointer moved on every step and run away from it, and a box came back from a save at the size of its
+      // placeholder (a sound player 2 x 2, a PDF about half its size) because the saved size was never put back.
+      getExtent: function () {
+        return lively.morphic.Shapes.Shape.prototype.getExtent.call(this);
+      },
     });
 
     // ─── Video ─────────────────────────────────────────────────────────────
@@ -164,7 +175,8 @@ module('lively.data.EncryptedMedia')
         this.applyStyle({ borderWidth: 1, borderColor: Color.black, extent: pt(400, 300) });
       },
 
-      _rebuildContent: function () {
+      // restoring: the world is being opened again, so the box keeps the size it was saved with.
+      _rebuildContent: function (restoring) {
         var self = this;
         _urlFor(
           this.shape.fileHandle, this.shape.fileObjId, this.shape.mime,
@@ -174,7 +186,11 @@ module('lively.data.EncryptedMedia')
             var node = self.shape.shapeNode;
             while (node.firstChild) node.removeChild(node.firstChild);
             node.appendChild(videoNode);
-            self.setExtent(pt(videoNode.width || 400, videoNode.height || 300));
+            if (!restoring) self.setExtent(pt(videoNode.width || 400, videoNode.height || 300));
+            else self.setExtent(self.getExtent());     // put the saved size on the page element again
+            // the picture follows the box when it is resized
+            videoNode.style.width = '100%';
+            videoNode.style.height = '100%';
           },
         );
       },
@@ -182,7 +198,7 @@ module('lively.data.EncryptedMedia')
       onrestore: function () {
         if (!this.shape || !this.shape.fileHandle) return;
         var self = this;
-        this.whenOpenedInWorld(function () { self._rebuildContent(); });
+        this.whenOpenedInWorld(function () { self._rebuildContent(true); });
       },
     });
 
@@ -199,7 +215,7 @@ module('lively.data.EncryptedMedia')
         this.applyStyle({ borderWidth: 1, borderColor: Color.black, extent: pt(320, 54) });
       },
 
-      _rebuildContent: function () {
+      _rebuildContent: function (restoring) {
         var self = this;
         _urlFor(
           this.shape.fileHandle, this.shape.fileObjId, this.shape.mime,
@@ -208,6 +224,7 @@ module('lively.data.EncryptedMedia')
             var node = self.shape.shapeNode;
             while (node.firstChild) node.removeChild(node.firstChild);
             node.appendChild(lively.data.FileUpload.buildAudioNode(blobUrl));
+            if (restoring) self.setExtent(self.getExtent());     // put the saved size on the page element again
           },
         );
       },
@@ -215,7 +232,7 @@ module('lively.data.EncryptedMedia')
       onrestore: function () {
         if (!this.shape || !this.shape.fileHandle) return;
         var self = this;
-        this.whenOpenedInWorld(function () { self._rebuildContent(); });
+        this.whenOpenedInWorld(function () { self._rebuildContent(true); });
       },
     });
 
@@ -237,7 +254,7 @@ module('lively.data.EncryptedMedia')
       // comment for the isolated repro); {data: bytes} is what actually
       // works, so PDF is the one case here that needs raw bytes rather
       // than a resolved display URL.
-      _rebuildContent: function () {
+      _rebuildContent: function (restoring) {
         var self = this;
         _bytesFor(
           this.shape.fileHandle, this.shape.fileObjId,
@@ -247,6 +264,7 @@ module('lively.data.EncryptedMedia')
             var node = self.shape.shapeNode;
             while (node.firstChild) node.removeChild(node.firstChild);
             node.appendChild(container);
+            if (restoring) self.setExtent(self.getExtent());     // put the saved size on the page element again
           },
         );
       },
@@ -254,7 +272,7 @@ module('lively.data.EncryptedMedia')
       onrestore: function () {
         if (!this.shape || !this.shape.fileHandle) return;
         var self = this;
-        this.whenOpenedInWorld(function () { self._rebuildContent(); });
+        this.whenOpenedInWorld(function () { self._rebuildContent(true); });
       },
     });
 

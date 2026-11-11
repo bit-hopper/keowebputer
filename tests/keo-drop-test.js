@@ -290,16 +290,46 @@ const DROP = ([key, x, y]) => {
 
     check('no request left the package ', outside.length === 0, outside);
 
-    // ---- a saved world holds references, not the bytes; and shows the files again when it is opened
+    // ---- a saved world holds references, not the bytes; and shows the files again, at the size they had, when it is opened
     await frame.evaluate(() => window.keo.call('world.go', { kind: 'blank' }, 120000)).catch(() => {});
     frame = await waitForWorld(page, 'blank');
     made = await frame.evaluate(MAKE);
-    await frame.evaluate(DROP, ['big', 200, 200]);
-    await sleep(6000);
-    await frame.evaluate(DROP, ['wav', 200, 700]);
-    await sleep(3000);
+    const worldExt = await frame.evaluate(() => [Math.round($world.getExtent().x), Math.round($world.getExtent().y)]);
+    for (const [k, x, y, wait] of [['big', 60, 60, 6000], ['small', 1000, 60, 3000], ['wav', 60, 700, 3000], ['video', 700, 500, 4000], ['pdf', 1000, 200, 4000]]) {
+      await frame.evaluate(DROP, [k, x, y]);
+      await sleep(wait);
+    }
+    await sleep(2000);
+    // every morph that holds a reference: id -> [width, height, x, y]
+    const SIZES = () => { const o = {}; $world.withAllSubmorphsDo((m) => { if (m.shape && m.shape.fileObjId) o[m.shape.fileObjId] = [Math.round(m.getExtent().x), Math.round(m.getExtent().y), Math.round(m.getPosition().x), Math.round(m.getPosition().y)]; }); return o; };
     sv = await frame.evaluate(SURVEY);
-    check('a blank world: the picture and the sound are in it', sv.refs.length === 2, sv);
+    check('a blank world: the picture, the small picture, the sound, the video and the PDF are in it', sv.refs.length === 5, sv);
+    let sz = await frame.evaluate(SIZES);
+    const bigSide = sz[made.big.id];
+    check('a picture larger than the world is fitted to it, keeping its shape (1500 x 1500 into ' + worldExt.join(' x ') + ')', bigSide && bigSide[0] <= worldExt[0] - 20 && bigSide[1] <= worldExt[1] - 20 && bigSide[0] === bigSide[1] && bigSide[0] > 400, [bigSide, worldExt]);
+    check('a picture smaller than the world keeps its own size (40 x 30)', sz[made.small.id] && sz[made.small.id][0] === 40 && sz[made.small.id][1] === 30, sz[made.small.id]);
+
+    // resizing with the resize halo's own drag actions (a real mouse drag does not start a drag in this harness, even for a plain picture):
+    // four steps of +30 x +20 must make the box exactly 120 x 80 larger, and must not move it
+    const resize = (id) => frame.evaluate(async (id) => {
+      const m = (() => { let f = null; $world.withAllSubmorphsDo((x) => { if (x.shape && x.shape.fileObjId === id) f = x; }); return f; })();
+      const fake = { isShiftDown: () => false, isAltDown: () => false, getPosition: () => pt(0, 0), isLeftMouseButtonDown: () => true };
+      m.removeHalos(); m.showHalos();
+      const h = (m.halos || []).find((x) => /ResizeHalo/.test(String(x.constructor.type)));
+      const e0 = m.getExtent(), p0 = m.getPosition();
+      h.dragStartAction(fake);
+      for (let i = 0; i < 4; i++) { h.dragAction(fake, pt(30, 20)); await new Promise((r) => setTimeout(r, 60)); }
+      h.dragEndAction(fake);
+      await new Promise((r) => setTimeout(r, 300));
+      const e1 = m.getExtent(), p1 = m.getPosition(); m.removeHalos();
+      return { grew: [Math.round(e1.x - e0.x), Math.round(e1.y - e0.y)], moved: [Math.round(p1.x - p0.x), Math.round(p1.y - p0.y)] };
+    }, id);
+    for (const [k, what] of [['small', 'picture'], ['video', 'video'], ['wav', 'sound player'], ['pdf', 'PDF']]) {
+      const r = await resize(made[k].id);
+      check('resizing the ' + what + ': it grows by what was dragged (120 x 80) and does not move', r.grew[0] === 120 && r.grew[1] === 80 && r.moved[0] === 0 && r.moved[1] === 0, r);
+    }
+    sz = await frame.evaluate(SIZES);                                      // the sizes to be found again after a save
+
     const saved = await frame.evaluate(() => new Promise((res) => $world.saveWorldAs(URL.root.withFilename('dropworld.html'), false, undefined, (e) => res(e ? { err: e.message } : { ok: true }))));
     check('the world saves', saved.ok === true, saved);
     const list = await frame.evaluate(() => window.keo.call('world.list', {}, 30000));
@@ -308,10 +338,18 @@ const DROP = ([key, x, y]) => {
     await page.reload();
     frame = await waitForWorld(page, 'world');
     sv = await frame.evaluate(SURVEY);
-    check('opened again: both references are back', sv.refs.length === 2 && sv.refs.some((r) => r.objId === made.big.id) && sv.refs.some((r) => r.objId === made.wav.id), sv);
-    await sleep(2500);
-    const rb = await shown(made.big.id, 'img'), ra = await shown(made.wav.id, 'audio');
-    check('opened again: the picture is decoded and the sound loaded again from the library', rb.length >= 1 && rb[0].w === 1500 && ra.length >= 1 && ra[0].ready >= 1, [rb, ra]);
+    check('opened again: all five references are back', sv.refs.length === 5 && ['big', 'small', 'wav', 'video', 'pdf'].every((k) => sv.refs.some((r) => r.objId === made[k].id)), sv);
+    await sleep(3500);
+    const sz2 = await frame.evaluate(SIZES);
+    for (const [k, what] of [['big', 'large picture'], ['small', 'resized picture'], ['wav', 'sound player'], ['video', 'resized video'], ['pdf', 'resized PDF']]) {
+      const a1 = sz[made[k].id], a2 = sz2[made[k].id];
+      check('opened again: the ' + what + ' has the size and place it was saved with', a1 && a2 && a2.every((v, i) => Math.abs(v - a1[i]) <= 1), [a1, a2]);
+    }
+    const rb = await shown(made.big.id, 'img'), ra = await shown(made.wav.id, 'audio'), rv = await shown(made.video.id, 'video');
+    check('opened again: the picture is decoded, the sound loaded and the video loaded again from the library', rb.length >= 1 && rb[0].w === 1500 && ra.length >= 1 && ra[0].ready >= 1 && rv.length >= 1 && rv[0].ready >= 1, [rb, ra, rv]);
+    // what is drawn, not only what the morph reports: the page element of each box has the size the morph says
+    const drawn = await frame.evaluate((ids) => ids.map((id) => { let f = null; $world.withAllSubmorphsDo((x) => { if (x.shape && x.shape.fileObjId === id) f = x; }); const r = f.renderContext().morphNode.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height), Math.round(f.getExtent().x), Math.round(f.getExtent().y)]; }), [made.wav.id, made.video.id, made.pdf.id]);
+    check('opened again: the sound player, the video and the PDF are DRAWN at the size they report (not 0 x 0 or 2 x 2)', drawn.every((d) => d[0] > 100 && d[1] > 30 && Math.abs(d[0] - d[2]) <= 2 && Math.abs(d[1] - d[3]) <= 2), drawn);
 
     check('no request left the package at any point', outside.length === 0, outside);
     console.log('INFO page errors ' + JSON.stringify(errors) + '; console errors ' + JSON.stringify(logs.filter((l) => !/iframe_api|Geolocation|ERR_FILE_NOT_FOUND/.test(l)).slice(0, 6)));
