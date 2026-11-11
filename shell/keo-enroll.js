@@ -49,8 +49,8 @@
     img.width = img.height = 40; img.alt = '';
     who.appendChild(wname); who.appendChild(wdid); head.appendChild(img); head.appendChild(who);
 
-    var nameIn = el('input', 'name'); nameIn.type = 'text'; nameIn.maxLength = 64; nameIn.autocomplete = 'off'; nameIn.setAttribute('aria-label', 'Name for this identity on this webputer');
-    var gName = group('A name for this identity on this webputer', nameIn);
+    var nameIn = el('input', 'name'); nameIn.type = 'text'; nameIn.maxLength = 64; nameIn.autocomplete = 'off'; nameIn.setAttribute('aria-label', 'webName for this identity on this webputer');
+    var gName = group('webName for this identity on this webputer', nameIn);
 
     var words = el('div', 'words'), gWords = group('Words', words);
 

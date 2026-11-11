@@ -206,7 +206,7 @@ module("lively.identity.MenuBarEntry")
               ["Identity", [
                 [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
                 ["Copy DID",           function () { self.copyDid(); }],
-                ["Rename this identity ...", function () { self.renameLocal(); }],
+                ["Change webName ...", function () { self.renameLocal(); }],
                 ["Link a new webputer ...", function () { self.linkNewWebputer(); }],
                 ["Move my data ...",   function () { self.moveMyData(); }],
               ]],
@@ -306,10 +306,10 @@ module("lively.identity.MenuBarEntry")
 
         renameLocal: function renameLocal() {
           var u = lively.identity.did.currentUser();
-          $world.prompt("Your name for this identity on this device:", function (name) {
+          $world.prompt("Your webName on this device:", function (name) {
             if (!name || !name.trim()) return;
             lively.identity.localIdentity.rename(u.did, name, function (err, id) {
-              if (err) return $world.inform("Could not rename: " + (err.message || err));
+              if (err) return $world.inform("Could not change the webName: " + (err.message || err));
               u.displayLabel = u.displayName = id.label;
               lively.bindings.signal(lively.identity.did, "identityChanged", u);
             });

@@ -88,6 +88,7 @@ const IN = '#keo-enroll textarea:not([readonly])', TYPED = '#keo-enroll input.ty
     check('B: the dialog opens on its first step: a name, one button, nothing else', !!d && !d.hidden && d.title === 'Link this webputer to an identity' && d.hasName && !d.hasIn && !d.hasTyped && d.out === null && d.yesText === 'Make a code' && !d.yesDisabled, d);
     const again = await op(B.frame, 'enroll.open', { mode: 'new' });
     check('B: asked again while it is up, the world is refused', !again.ok && /already waiting/.test(again.e), again);
+    check('B: the name field is asked for as a webName', (await B.page.evaluate(() => { const i = document.querySelector('#keo-enroll input.name'); return { aria: i.getAttribute('aria-label'), text: i.closest('#keo-enroll').textContent }; })).aria === 'webName for this identity on this webputer' && /webName for this identity on this webputer/.test((await B.page.evaluate(() => document.querySelector('#keo-enroll').textContent))));
     await B.page.fill('#keo-enroll input.name', 'Alice desktop');
     await B.page.click(YES);
     check('B: a real click makes the code', !!(await poll(async () => (await dlg(B)).out, 15000)));

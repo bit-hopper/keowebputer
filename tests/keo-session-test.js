@@ -83,7 +83,7 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
       return { loggedIn: did.isLoggedIn(), label: did.handleLabel(), entryText: entry && entry.textString, items, subItems, avatar: !!(entry && entry._avatarHandle), avatarSeed: entry && entry._avatarHandle, ambient: !!(panel && panel.world && panel.world()), local: did.currentUser() && did.currentUser().local };
     });
     check('menu bar: the world knows it is signed in, and shows the label (not a handle, not the DID)', menu.loggedIn && menu.local && menu.label === 'Maya' && menu.entryText === 'Maya', menu);
-    check('menu bar: the top level is short (My homestar, My worlds, Messages, Connect a device, Friends, Identity, Sign out); the DID line, Copy DID and Rename are under Identity', JSON.stringify(menu.items) === JSON.stringify(['My homestar', 'My worlds', 'Messages', 'Connect a device ...', 'Friends ...', 'Identity', 'Sign out']) && menu.subItems && /^keo:.{4}….{4}/.test(menu.subItems[0]) && menu.subItems.includes('Copy DID') && menu.subItems.some((l) => /^Rename/.test(l)), menu);
+    check('menu bar: the top level is short (My homestar, My worlds, Messages, Connect a device, Friends, Identity, Sign out); the DID line, Copy DID and Change webName are under Identity', JSON.stringify(menu.items) === JSON.stringify(['My homestar', 'My worlds', 'Messages', 'Connect a device ...', 'Friends ...', 'Identity', 'Sign out']) && menu.subItems && /^keo:.{4}….{4}/.test(menu.subItems[0]) && menu.subItems.includes('Copy DID') && menu.subItems.includes('Change webName ...') && !menu.subItems.some((l) => /^Rename/.test(l)), menu);
     check('menu bar: the avatar is seeded by the DID (so a rename keeps it)', menu.avatarSeed === did, menu.avatarSeed);
     check('ambient panel: it is open for the signed-in identity', menu.ambient === true, menu);
     // The clipboard is not read back: reading it from an extension page raises a permission prompt that only a person can answer
@@ -104,6 +104,11 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
     check('new identity: the home page does not put an "@" before the label (there is no handle); the line under it is the short DID', !/@Maya/.test(text) && /keo:.{4}….{4}/.test(text), text.slice(0, 300));
     await sleep(1500);
     check('new identity: the home page does not ask for /@<did>/... pages (nothing serves them)', homeFetches.length === 0, homeFetches);
+    // (after the check above on purpose: with nobody serving /@<did>/..., the Settings dialog itself asks for two such pages)
+    // Settings, Account tab: the row that says what the identity is called reads webName and holds the label (it used to read Handle and hold the DID)
+    const settings = await frame.evaluate(() => new Promise((res) => lively.require('lively.identity.SettingsDialog').toRun(() => { const w = lively.identity.SettingsDialog.open(); setTimeout(() => { const out = []; (function walk(m) { if (typeof m.textString === 'string' && m.textString.trim()) out.push(m.textString.trim()); (m.submorphs || []).forEach(walk); })(w); w.remove(); res(out); }, 2500); })));
+    const wi = settings.indexOf('webName');
+    check('settings: the Account tab has a webName row holding the label, and no Handle row', wi >= 0 && settings[wi + 1] === 'Maya' && !settings.includes('Handle') && !settings.some((t) => /^@did:/.test(t)), settings.slice(0, 80));
     await page.screenshot({ path: path.join(WORK, 'session-homestar.png') });
 
     // ---- 3. the session

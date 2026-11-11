@@ -359,7 +359,10 @@ module("lively.identity.SettingsDialog")
 
           // ── Account tab ───────────────────────────────────────────────────
           sectionLabel("Identity");
-          infoRow("Handle", "@" + user.handle);
+          // A local identity (made on this device, no host) has no handle: what it is called is the webName its person gave it, and
+          // user.handle holds its DID there, which the DID row shows.
+          if (user.local) infoRow("webName", user.displayLabel || user.displayName || "");
+          else infoRow("Handle", "@" + user.handle);
           if (user.domainHandle) infoRow("Domain handle", user.domainHandle);
           infoRow("DID", truncateMiddle(user.did, 22, 10),
             { label: "Copy DID", action: "_copyDid", arg: user.did });

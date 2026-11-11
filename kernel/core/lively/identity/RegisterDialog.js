@@ -255,7 +255,7 @@ module("lively.identity.RegisterDialog")
         var y = pad;
         var w = content.getExtent().x - pad * 2;
 
-        var lbl = new lively.morphic.Text(lively.rect(pad, y, w, 16), "Name for this identity (only you see it):");
+        var lbl = new lively.morphic.Text(lively.rect(pad, y, w, 16), "webName for this identity (only you see it):");
         lbl.applyStyle({
           allowInput: false,
           fontFamily: "Arial, sans-serif",
