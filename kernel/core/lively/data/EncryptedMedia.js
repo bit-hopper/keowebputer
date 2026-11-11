@@ -54,6 +54,17 @@ module('lively.data.EncryptedMedia')
       return !!(lively.identity.localFiles && lively.identity.localFiles.isRef(handle));
     }
 
+    // A morph that shows a library file kept where it lies tells the person when that file is gone, changed or locked: checked when it
+    // starts to show, and again by the sentence of any read that fails.
+    function _watch(morph, handle, objId) {
+      if (_isLocal(handle)) lively.identity.localFiles.checkMorph(morph, objId);
+    }
+    function _problem(morph, handle, err) {
+      if (!_isLocal(handle)) return;
+      var sentence = String(err && err.message || err), lf = lively.identity.localFiles;
+      lf.markProblem(morph, lf.problemKind(sentence), sentence);
+    }
+
     // thenDo(err, objectUrl)
     function _urlFor(handle, objId, mime, thenDo) {
       if (_isLocal(handle)) return lively.identity.localFiles.urlFor(objId, mime, thenDo);
@@ -102,11 +113,13 @@ module('lively.data.EncryptedMedia')
       // to the world once, when it is first dropped, and must not undo a size the person has since chosen).
       _resolveAndDisplay: function (thenDo, keepExtent) {
         var self = this;
+        _watch(this, this.shape.fileHandle, this.shape.fileObjId);
         _urlFor(
           this.shape.fileHandle, this.shape.fileObjId, null,
           function (err, url) {
             if (err) {
               console.error('[EncryptedImage] resolve failed', err);
+              _problem(self, self.shape.fileHandle, err);
               thenDo && thenDo(err);
               return;
             }
@@ -178,10 +191,11 @@ module('lively.data.EncryptedMedia')
       // restoring: the world is being opened again, so the box keeps the size it was saved with.
       _rebuildContent: function (restoring) {
         var self = this;
+        _watch(this, this.shape.fileHandle, this.shape.fileObjId);
         _urlFor(
           this.shape.fileHandle, this.shape.fileObjId, this.shape.mime,
           function (err, blobUrl) {
-            if (err) { console.error('[EncryptedVideo] resolve failed', err); return; }
+            if (err) { console.error('[EncryptedVideo] resolve failed', err); _problem(self, self.shape.fileHandle, err); return; }
             var videoNode = lively.data.FileUpload.buildVideoNode(blobUrl, self.shape.mime);
             var node = self.shape.shapeNode;
             while (node.firstChild) node.removeChild(node.firstChild);
@@ -217,10 +231,11 @@ module('lively.data.EncryptedMedia')
 
       _rebuildContent: function (restoring) {
         var self = this;
+        _watch(this, this.shape.fileHandle, this.shape.fileObjId);
         _urlFor(
           this.shape.fileHandle, this.shape.fileObjId, this.shape.mime,
           function (err, blobUrl) {
-            if (err) { console.error('[EncryptedAudio] resolve failed', err); return; }
+            if (err) { console.error('[EncryptedAudio] resolve failed', err); _problem(self, self.shape.fileHandle, err); return; }
             var node = self.shape.shapeNode;
             while (node.firstChild) node.removeChild(node.firstChild);
             node.appendChild(lively.data.FileUpload.buildAudioNode(blobUrl));
@@ -256,10 +271,11 @@ module('lively.data.EncryptedMedia')
       // than a resolved display URL.
       _rebuildContent: function (restoring) {
         var self = this;
+        _watch(this, this.shape.fileHandle, this.shape.fileObjId);
         _bytesFor(
           this.shape.fileHandle, this.shape.fileObjId,
           function (err, result) {
-            if (err) { console.error('[EncryptedPDF] resolve failed', err); return; }
+            if (err) { console.error('[EncryptedPDF] resolve failed', err); _problem(self, self.shape.fileHandle, err); return; }
             var container = lively.data.FileUpload.buildPDFContainer(result.bytes);
             var node = self.shape.shapeNode;
             while (node.firstChild) node.removeChild(node.firstChild);

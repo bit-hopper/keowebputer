@@ -37,8 +37,8 @@ module("lively.identity.LocalFiles")
 
       isRef: function isRef(handle) { return handle === HANDLE; },
 
-      _call: function _call(op, args, thenDo) {
-        window.keo.call(op, args, STEP_TIMEOUT).then(
+      _call: function _call(op, args, thenDo, timeoutMs) {
+        window.keo.call(op, args, timeoutMs || STEP_TIMEOUT).then(
           function (result) { thenDo(null, result); },
           function (err) { thenDo(err instanceof Error ? err : new Error(String(err && err.message || err))); }
         );
@@ -102,6 +102,88 @@ module("lively.identity.LocalFiles")
         });
       },
 
+      // ---- files kept where they lie (the desktop app only; shell/keo-point.js) --------------------------------------------------
+      // The world can only ASK. The shell puts the question to the person, opens the system's file chooser on their click and reads the
+      // file; no path comes in or goes out. What comes back is a library file like any other (a reference by the file's hash), marked
+      // pointed. Whether the question can be asked here is learned once (checkPointAvailable) and kept in pointAvailable, so a menu can
+      // be drawn without waiting.
+      pointAvailable: false,
+
+      checkPointAvailable: function checkPointAvailable(thenDo) {
+        var self = this;
+        if (!this.isAvailable()) return thenDo && thenDo(null, false);
+        this._call("library.pointAvailable", {}, function (err, yes) {
+          self.pointAvailable = !err && yes === true;
+          thenDo && thenDo(null, self.pointAvailable);
+        });
+      },
+
+      // thenDo(err, null) when the person cancelled; thenDo(null, { id, name, type, size, existed, pointed, ref }) otherwise (existed and
+      // not pointed: the library already holds a copy of those bytes, which is kept). Reading a big file takes minutes, hence the wait.
+      point: function point(thenDo) {
+        this._call("library.point", {}, function (err, r) {
+          if (err) return thenDo(err);
+          if (!r) return thenDo(null, null);
+          r.ref = { handle: HANDLE, objId: r.id, blobCid: r.id };
+          thenDo(null, r);
+        }, 60 * 60 * 1000);
+      },
+
+      // The sign on a picture, video, sound or PDF whose file cannot be shown: a small red label in its corner with two or three words
+      // ("file missing", "file changed"), and the whole sentence as its tooltip. The sign is drawn only: it is not part of what a world
+      // is rebuilt from (isEpiMorph keeps it out of the saved data). Not for anything but media morphs that show a library file.
+      PROBLEM_WORDS: { missing: "file missing", changed: "file changed", denied: "cannot open file", elsewhere: "not on this computer", other: "cannot be shown" },
+
+      // Which kind of problem a sentence from the shell describes (shell/keo-library.js words them).
+      problemKind: function problemKind(sentence) {
+        var t = String(sentence || "");
+        if (/has changed/.test(t)) return "changed";
+        if (/not where it was|no longer there|not a file any more/.test(t)) return "missing";
+        if (/will not let keo read|cannot be opened/.test(t)) return "denied";
+        if (/another computer or app/.test(t)) return "elsewhere";
+        return "other";
+      },
+
+      markProblem: function markProblem(morph, kind, sentence) {
+        if (!morph || !morph.addMorph) return;
+        this.clearProblem(morph);
+        var words = this.PROBLEM_WORDS[kind] || this.PROBLEM_WORDS.other, text = "\u26A0 " + words;
+        var label = lively.morphic.Text.makeLabel(text, {
+          fontSize: 9, textColor: Color.white, fill: Color.rgb(192, 57, 43), borderWidth: 0, align: "left",
+        });
+        label.name = "KeoFileProblem";
+        label.isEpiMorph = true;
+        label.setExtent(pt(Math.round(text.length * 6.4 + 14), 20));
+        label.setPosition(pt(4, 4));
+        var tip = String(sentence || "");
+        if (label.setToolTip) label.setToolTip(tip); else label.toolTip = tip;
+        morph.addMorph(label);
+        morph._keoProblem = label;
+      },
+
+      clearProblem: function clearProblem(morph) {
+        var old = morph && morph._keoProblem;
+        if (old) { try { old.remove(); } catch (e) {} }
+        if (morph) morph._keoProblem = null;
+      },
+
+      // Called when a morph starts showing the library file `id`: a file kept where it lies that is gone, changed or locked gets the
+      // sign at once (the shell compares its size and time; only reading the file can say whether bytes changed, and that fails with a
+      // sentence, which also becomes the sign). Anything else clears the sign.
+      checkMorph: function checkMorph(morph, id) {
+        var self = this;
+        this.info(id, function (err, info) {
+          if (err || !info || !info.pointed) return;
+          var sentences = {
+            missing: "This file is kept where it was added on this computer, and it is no longer there.",
+            changed: "This file is kept where it was added on this computer, and it has changed since, so keo will not show it.",
+            denied: "This file is kept on this computer, which will not let keo open it now.",
+          };
+          if (sentences[info.state]) self.markProblem(morph, info.state, info.name ? '"' + info.name + '": ' + sentences[info.state] : sentences[info.state]);
+          else self.clearProblem(morph);
+        });
+      },
+
       // The file's description: { id, name, type, size, chunks, ... } or null when this identity has no such file.
       info: function info(id, thenDo) { this._call("library.fileInfo", { id: id }, thenDo); },
 
@@ -148,5 +230,8 @@ module("lively.identity.LocalFiles")
     });
 
     lively.identity.localFiles = new lively.identity.LocalFiles();
+    // Learn once whether this app can keep a file where it lies, so the identity menu can offer it without waiting (it is offered
+    // only where the answer is yes: the desktop app).
+    try { lively.identity.localFiles.checkPointAvailable(); } catch (e) { /* not inside keo */ }
 
   }); // end module('lively.identity.LocalFiles')

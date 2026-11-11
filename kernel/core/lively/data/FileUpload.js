@@ -213,6 +213,10 @@ module("lively.data.FileUpload")
         // lively.data.EncryptedMedia (loaded below before thenDo fires),
         // not by handing callers a plaintext-fetchable URL.
         identityUpload: function (file, thenDo) {
+          // A file the library already holds (kept where it lies, see openPointed): there is nothing to send, only a reference to give.
+          if (file && file.keoLibraryRef) {
+            return lively.require('lively.data.EncryptedMedia').toRun(function () { thenDo(null, file.keoLibraryRef); });
+          }
           if (this.isLocalUploadAvailable()) return this.localUpload(file, thenDo);
           var handle = lively.identity.did.currentUser().handle;
           lively.identity.fileCrypto.encryptAndUpload(file, {
@@ -286,6 +290,24 @@ module("lively.data.FileUpload")
     );
 
     Object.extend(lively.data.FileUpload, {
+      // Puts a file the library already holds in the world at `pos`, as the drop of a file of that kind would: a picture, a video, a
+      // sound or a PDF. `info` is what lively.identity.localFiles.point gave ({ name, type, size, ref }). The handlers are the ones
+      // dropped files use; they get a plain stand-in for the file whose reference identityUpload hands straight back. Calls
+      // thenDo(err) when no handler knows the kind.
+      openPointed: function (info, pos, thenDo) {
+        var handlerClasses = lively.data.classes(true).concat(lively.Clipboard.classes(true))
+          .filter(function (ea) { return ea.isSubclassOf(lively.data.FileUpload.Handler); });
+        var file = { name: info.name, type: info.type, size: info.size, keoLibraryRef: info.ref };
+        var handlerClass = handlerClasses.detect(function (c) { try { return c.prototype.handles(file, null); } catch (e) { return false; } });
+        if (!handlerClass) return thenDo && thenDo(new Error("keo cannot show a file of this kind in a world yet (" + (info.type || "unknown") + ")."));
+        var evt = { getPosition: function () { return pos; }, isAltDown: function () { return false; } };
+        var handler = new handlerClass(evt, file);
+        Object.extend(handler, { i: 0, showProgressbar: false, pos: pos });
+        handler.file = file;
+        handler.startReading("manual", file);
+        thenDo && thenDo(null);
+      },
+
       handleImportEvent: function (evt) {
         // see https://developer.mozilla.org/en/Using_files_from_web_applications
         var files = evt.dataTransfer.files;

@@ -1,4 +1,4 @@
-// This file was generated on Tue, 10 Nov 2026 23:42:21 GMT
+// This file was generated on Wed, 11 Nov 2026 07:20:03 GMT
 
 JSLoader.expectToLoadModules(["core/lib/lively-libs-debug.js","node_modules/lively.lang/dist/lively.lang.dev.js","node_modules/lively.ast/dist/lively.ast_no-deps.js","core/lively/Migration.js","core/lively/JSON.js","core/lively/lang/LocalStorage.js","core/lively/Base.js","core/lively/ModuleSystem.js","core/lively/net/Wiki.js","core/lively/store/Interface.js","core/lively/net/SessionTracker.js","core/lively/Network.js","core/lively/IPad.js","core/lively/ide.js","core/lively/ide/tools/Differ.js","core/lively/ide/CommandLineInterface.js","core/lively/ide/FileSystem.js","core/lively/morphic/Graphics.js","apps/ColorParser.js","core/lively/persistence/BuildSpec.js","core/lively/persistence/BuildSpecMorphExtensions.js","core/lively/morphic/Core.js","core/lively/Traits.js","core/lively/morphic/Shapes.js","core/lively/morphic/Serialization.js","core/lively/users/Core.js","core/lively/DOMAbstraction.js","core/lively/morphic/TextCore.js","core/cop/Layers.js","core/lively/persistence/Serializer.js","core/lively/ide/ErrorViewer.js","core/lively/ide/SystemCodeBrowser.js","core/lively/ide/SyntaxHighlighting.js","core/lively/ide/BrowserFramework.js","core/lively/morphic/Widgets.js","core/lively/morphic/MobileInterface.js","core/lively/morphic/Styles.js","core/lively/CrayonColors.js","core/lively/morphic/Events.js","core/lively/ide/commands/default.js","core/lively/morphic/Clipboard.js","core/lively/data/FileUpload.js","core/lively/ide/CodeEditor.js","core/lively/lang/VM.js","core/lively/ast/acorn.js","core/lively/ide/codeeditor/Modes.js","core/lively/ide/codeeditor/ace.js","core/lively/ide/codeeditor/Snippets.js","core/lively/ide/codeeditor/EvalMarker.js","core/lively/ide/codeeditor/Keyboard.js","core/lively/ide/codeeditor/JumpChar.js","core/lively/ide/codeeditor/TextOverlay.js","core/lively/ide/codeeditor/Commands.js","core/lively/ide/codeeditor/DocumentChange.js","core/lively/morphic.js","core/lively/morphic/Complete.js","core/lively/morphic/TextFormattingSupport.js","core/lively/morphic/TextFormattingToolbar.js","core/lively/morphic/constraints/Core.js","core/lively/morphic/ObjectMigration.js","core/lively/morphic/Layout.js","core/lively/morphic/Halos.js","core/lively/morphic/ScriptingSupport.js","core/lively/morphic/Connectors.js","core/lively/bindings/GeometryBindings.js","core/lively/bindings/Core.js","core/lively/morphic/AdditionalMorphs.js","core/lively/morphic/TabMorphs.js","core/lively/morphic/Grid.js","core/lively/persistence/MassMorphCreation.js","core/lively/PartsBin.js","core/lively/morphic/MorphAddons.js","core/lively/morphic/Lists.js","core/lively/morphic/StyleSheets.js","core/lively/morphic/StyleSheetsHTML.js","core/lively/morphic/HTML.js","core/lively/morphic/PathShapes.js","core/lively/morphic/Rendering.js","core/lively/morphic/StyleSheetRepresentation.js","apps/cssParser.js","core/lively/ide/SourceDatabase.js","core/lively/ide/FileParsing.js","core/lively/LKFileParser.js","core/ometa/lively.js","core/lively/Ometa.js","core/lively/ide/BrowserCommands.js","core/lively/ide/SystemBrowserNodes.js","core/lively/Helper.js","core/lively/LogHelper.js","core/lively/Main.js","core/lively/bindings.js"]);
 
@@ -50829,6 +50829,12 @@ module("lively.data.FileUpload").requires("lively.persistence.Serializer", "live
     // lively.data.EncryptedMedia (loaded below before thenDo fires),
     // not by handing callers a plaintext-fetchable URL.
     identityUpload: function identityUpload(file, thenDo) {
+      // A file the library already holds (kept where it lies, see openPointed): there is nothing to send, only a reference to give.
+      if (file && file.keoLibraryRef) {
+        return lively.require('lively.data.EncryptedMedia').toRun(function () {
+          thenDo(null, file.keoLibraryRef);
+        });
+      }
       if (this.isLocalUploadAvailable()) return this.localUpload(file, thenDo);
       var handle = lively.identity.did.currentUser().handle;
       lively.identity.fileCrypto.encryptAndUpload(file, {
@@ -50899,6 +50905,35 @@ module("lively.data.FileUpload").requires("lively.persistence.Serializer", "live
   });
 
   Object.extend(lively.data.FileUpload, {
+    // Puts a file the library already holds in the world at `pos`, as the drop of a file of that kind would: a picture, a video, a
+    // sound or a PDF. `info` is what lively.identity.localFiles.point gave ({ name, type, size, ref }). The handlers are the ones
+    // dropped files use; they get a plain stand-in for the file whose reference identityUpload hands straight back. Calls
+    // thenDo(err) when no handler knows the kind.
+    openPointed: function openPointed(info, pos, thenDo) {
+      var handlerClasses = lively.data.classes(true).concat(lively.Clipboard.classes(true)).filter(function (ea) {
+        return ea.isSubclassOf(lively.data.FileUpload.Handler);
+      });
+      var file = { name: info.name, type: info.type, size: info.size, keoLibraryRef: info.ref };
+      var handlerClass = handlerClasses.detect(function (c) {
+        try {
+          return c.prototype.handles(file, null);
+        } catch (e) {
+          return false;
+        }
+      });
+      if (!handlerClass) return thenDo && thenDo(new Error("keo cannot show a file of this kind in a world yet (" + (info.type || "unknown") + ")."));
+      var evt = { getPosition: function getPosition() {
+          return pos;
+        }, isAltDown: function isAltDown() {
+          return false;
+        } };
+      var handler = new handlerClass(evt, file);
+      Object.extend(handler, { i: 0, showProgressbar: false, pos: pos });
+      handler.file = file;
+      handler.startReading("manual", file);
+      thenDo && thenDo(null);
+    },
+
     handleImportEvent: function handleImportEvent(evt) {
       // see https://developer.mozilla.org/en/Using_files_from_web_applications
       var files = evt.dataTransfer.files;

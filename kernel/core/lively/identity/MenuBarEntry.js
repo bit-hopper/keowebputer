@@ -153,6 +153,9 @@ module("lively.identity.MenuBarEntry")
     // machinery reachable everywhere login can happen" require).
     lively.require("lively.identity.UploadMigration").toRun(function () {});
 
+    // Whether the desktop app can keep a file where it lies is learned when this loads, so the menu below can offer it at once.
+    lively.require("lively.identity.LocalFiles").toRun(function () {});
+
     // Auto-launches a ?template= preset (e.g. Shop) into a freshly created
     // world -- see WorldTemplateLauncher.js's own header for the full flow.
     lively.require("lively.identity.WorldTemplateLauncher").toRun(function () {
@@ -203,6 +206,8 @@ module("lively.identity.MenuBarEntry")
               ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
               ["Friends ...",        function () { self.openFriendsDialog(); }],
+            ].concat(lively.identity.localFiles && lively.identity.localFiles.pointAvailable
+              ? [["Point to a local file ...", function () { self.pointToLocalFile(); }]] : []).concat([
               ["Identity", [
                 [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
                 ["Copy DID",           function () { self.copyDid(); }],
@@ -211,7 +216,7 @@ module("lively.identity.MenuBarEntry")
                 ["Move my data ...",   function () { self.moveMyData(); }],
               ]],
               ["Sign out",           function () { self.signOut(); }],
-            ];
+            ]);
           }
           return [
             ["My homestar",        function () { self.openMyHomestar(); }],
@@ -231,6 +236,23 @@ module("lively.identity.MenuBarEntry")
             ["Add device",         function () { self.openRegisterDialog(); }],
             ["Sign out",    function () { self.signOut(); }],
           ];
+        },
+
+        // The desktop app only: the shell asks the person which file, and keeps it where it lies. The world then shows it as a dropped
+        // file of that kind would be shown, in the middle of the screen. A cancelled question does nothing; a refusal is told in words.
+        pointToLocalFile: function pointToLocalFile() {
+          lively.require("lively.identity.LocalFiles").toRun(function () {
+            lively.identity.localFiles.point(function (err, info) {
+              if (err) return $world.inform("This file could not be added:\n" + (err.message || err));
+              if (!info) return;
+              // Each file lands a little lower and to the right of the one before, so several added in a row do not hide each other.
+              self._pointedCount = ((self._pointedCount || 0) + 1) % 8;
+              var at = $world.visibleBounds().center().subPt(pt(150, 100)).addXY(30 * self._pointedCount, 30 * self._pointedCount);
+              lively.data.FileUpload.openPointed(info, at, function (e) {
+                if (e) $world.inform(e.message || String(e));
+              });
+            });
+          });
         },
 
         openLoginDialog: function openLoginDialog() {
