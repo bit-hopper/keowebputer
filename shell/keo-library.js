@@ -298,8 +298,13 @@
     var m;
     try { m = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(rec.iv), additionalData: enc.encode(fileAad(s.did, cid)) }, s.key, rec.ct))); }
     catch (e) { throw new Error('A library file could not be decrypted (wrong identity, or the record was changed).'); }
-    if (!m || m.v !== 1 || m.cid !== cid || typeof m.fid !== 'string' || !(m.chunks >= 0) || !(m.size >= 0) || m.chunkBytes !== CHUNK_BYTES
+    if (!m || m.v !== 1 || m.cid !== cid || !(m.chunks >= 0) || !(m.size >= 0) || m.chunkBytes !== CHUNK_BYTES
       || m.chunks !== Math.ceil(m.size / m.chunkBytes)) throw new Error('A library file is damaged.');
+    if (m.kind === 'path') {
+      // A file kept where it lies: no chunks of its own, a grant for the desktop app, and the hash of every chunk as it was when added.
+      if (!m.point || typeof m.point.path !== 'string' || typeof m.point.mac !== 'string' || !Array.isArray(m.hashes) || m.hashes.length !== m.chunks
+        || !m.hashes.every(function (h) { return typeof h === 'string' && h.length === 43; })) throw new Error('A library file is damaged.');
+    } else if (typeof m.fid !== 'string') throw new Error('A library file is damaged.');
     return m;
   }
   // Opens the manifest of the file with that name, or null when this identity has no such file of this kind.
@@ -362,6 +367,8 @@
       var cid = kd.b64u(u.hasher.digest()), key = idOf(s.did, cid), fk = s.did + '|' + u.fid;
       var have = await tx(['files', 'blobs'], 'readonly', function (t) { var a = get(t, 'files', key), b = get(t, 'blobs', key); return function () { return a() || b(); }; });
       var existed = !!(have && have.did === s.did), used = await readTotal(s.did);
+      // A copy of bytes that were only kept where they lie replaces that record: the copy cannot be moved away or changed under it.
+      if (existed && have.iv && have.ct) { try { if ((await openRecord(s, have, cid)).kind === 'path') existed = false; } catch (e) { /* kept as it is */ } }
       // No room check here: the room was checked when the file was announced (with the other uploads' unsent bytes counted), and the
       // chunks are already stored, so a browser that ran out of room refused one of them with the sentence from friendly().
       var rec = null;
@@ -395,6 +402,7 @@
   function fileInfo(args) {
     return serial(async function () {
       var s = session(), cid = cidOf(args.id), m = await openManifest(s, cid);
+      if (m && m.kind === 'path') return { id: cid, name: m.name, type: m.type, size: m.size, chunks: m.chunks, chunkBytes: m.chunkBytes, created: m.created, legacy: false, pointed: true, state: await pointState(m) };
       if (m) return { id: cid, name: m.name, type: m.type, size: m.size, chunks: m.chunks, chunkBytes: m.chunkBytes, created: m.created, legacy: false };
       var rec = await tx(['blobs'], 'readonly', function (t) { return get(t, 'blobs', idOf(s.did, cid)); });
       if (!rec || rec.did !== s.did) return null;
@@ -416,6 +424,7 @@
         catch (e) { throw new Error('A library file could not be decrypted (wrong identity, or the record was changed).'); }
       }
       if (n >= m.chunks) throw new Error('That file has no chunk ' + n + '.');
+      if (m.kind === 'path') return readPointed(m, n);
       var rec = await tx(['chunks'], 'readonly', function (t) { return get(t, 'chunks', s.did + '|' + m.fid + '|' + n); });
       if (!rec || rec.did !== s.did) throw new Error('A library file is damaged: a chunk is missing.');
       var plain;
@@ -451,7 +460,7 @@
         var name = fold(m.name);
         if (type && String(m.type).indexOf(type) !== 0) continue;
         if (terms.some(function (w) { return name.indexOf(w) < 0; })) continue;
-        found.push({ id: cid, name: m.name, type: m.type, size: m.size, created: m.created });
+        found.push(m.kind === 'path' ? { id: cid, name: m.name, type: m.type, size: m.size, created: m.created, pointed: true } : { id: cid, name: m.name, type: m.type, size: m.size, created: m.created });
       }
       found.sort(function (a, b) { return a.created < b.created ? 1 : a.created > b.created ? -1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
       return { items: found.slice(offset, offset + limit), total: found.length, unreadable: unreadable };
@@ -463,6 +472,8 @@
     return serial(async function () {
       var s = session(), cid = cidOf(args.id), m = await openManifest(s, cid);
       if (!m) return removeLegacy(s, cid);
+      // A file kept where it lies has nothing of its own to take back: only the record goes, never the file on the computer.
+      if (m.kind === 'path') { await tx(['files'], 'readwrite', function (t) { t.objectStore('files').delete(idOf(s.did, cid)); }); return true; }
       var used = await readTotal(s.did), fk = s.did + '|' + m.fid;
       await tx(['files', 'chunks', 'blobtotal'], 'readwrite', function (t) {
         t.objectStore('files').delete(idOf(s.did, cid));
@@ -472,6 +483,69 @@
       return true;
     });
   }
+  // ---- files kept where they lie (desktop app only; keo-point.js makes them) ----------------------------------------------------
+  // The record is sealed like any manifest (name, type, size, the file's SHA-256 name) and adds a grant for the app (keo-host.js, the
+  // app's lib/point.js) and the SHA-256 of every chunk as it was when the file was added. A read asks the app for that range and checks
+  // it against the sealed hash, so a file that was edited, cut short or swapped is never shown as if it were the one that was added:
+  // the person is told instead. Nothing is copied, so nothing counts toward the room the library may take.
+  var HOST_WORDS = {
+    missing: ' is not where it was when it was added. Put it back there, or add it again from where it is now.',
+    denied: ' cannot be opened now: this computer will not let keo read it.',
+    notfile: ' is not a file any more. Add it again from where it is now.',
+    refused: ' was added on another computer or app and cannot be read here.',
+    unreadable: ' could not be read.'
+  };
+  function pointedSentence(m, code) { return '"' + m.name + '"' + (HOST_WORDS[code] || HOST_WORDS.unreadable); }
+  function changedSentence(m) { return '"' + m.name + '" has changed since it was added, so keo will not show it. Put the original back, or add the changed file as a new one.'; }
+  // What the file on the computer looks like now: 'ok', 'missing', 'changed' (another size), 'touched' (same size, another time: only
+  // reading it can say), 'denied', or 'away' (this page has no app to ask). Advice for a screen; a read is what decides.
+  async function pointState(m) {
+    if (!(window.keoHost && window.keoHost.available())) return 'away';
+    var r;
+    try { r = await window.keoHost.post('file', { op: 'stat', path: m.point.path, mac: m.point.mac }); } catch (e) { return 'away'; }
+    if (r.error) return r.error === 'missing' || r.error === 'notfile' ? 'missing' : r.error === 'denied' ? 'denied' : 'away';
+    if (r.size !== m.size) return 'changed';
+    return Math.abs(r.mtimeMs - m.mtimeMs) < 1 ? 'ok' : 'touched';     // under a millisecond is a clock's rounding, not an edit
+  }
+  async function readPointed(m, n) {
+    if (!(window.keoHost && window.keoHost.available())) throw new Error('"' + m.name + '" is kept on another computer or app and cannot be reached here.');
+    var len = chunkLength(m, n), r;
+    try { r = await window.keoHost.post('file', { op: 'read', path: m.point.path, mac: m.point.mac, offset: n * m.chunkBytes, length: len }); }
+    catch (e) { throw new Error('"' + m.name + '" is kept on this computer, and the app could not be reached to read it.'); }
+    if (r.error) throw new Error(pointedSentence(m, r.error));
+    var bytes = r.bytes;
+    if (!bytes || bytes.length !== len) throw new Error(changedSentence(m));
+    var h = kd.b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+    if (h !== m.hashes[n]) throw new Error(changedSentence(m));
+    return bytes.buffer;
+  }
+  // args: { cid, name, type, size, mtimeMs, point: { path, mac }, hashes: [SHA-256 of each chunk, base64url] }: all made by keo-point.js,
+  // which read the whole file through the app. For code in this page only; NOT a bridge op, the world never supplies any of it. Keeps a
+  // copy if the library already has these bytes as one (resolves { existed: true, pointed: false }); a pointed record for the same bytes is
+  // replaced by this one (the person pointed at the file again, e.g. after moving it). Resolves { id, existed, pointed }.
+  function pointStore(args) {
+    return serial(async function () {
+      var s = session(), cid = cidOf(args.cid), size = args.size;
+      if (!(typeof size === 'number' && isFinite(size) && size >= 0 && Math.floor(size) === size)) throw new Error('A file needs its size.');
+      var count = Math.ceil(size / CHUNK_BYTES);
+      if (!args.point || typeof args.point.path !== 'string' || typeof args.point.mac !== 'string' || !Array.isArray(args.hashes) || args.hashes.length !== count) throw new Error('That file could not be recorded.');
+      var key = idOf(s.did, cid);
+      var have = await tx(['files', 'blobs'], 'readonly', function (t) { var a = get(t, 'files', key), b = get(t, 'blobs', key); return function () { return { f: a(), b: b() }; }; });
+      if (have.b && have.b.did === s.did) return { id: cid, existed: true, pointed: false };
+      if (have.f && have.f.did === s.did) {
+        var old = null; try { old = await openRecord(s, have.f, cid); } catch (e) { /* damaged: replaced below */ }
+        if (old && old.kind !== 'path') return { id: cid, existed: true, pointed: false };
+      }
+      var manifest = { v: 1, kind: 'path', cid: cid, name: cleanName(args.name), type: cleanType(args.type), size: size, chunks: count, chunkBytes: CHUNK_BYTES,
+        created: new Date().toISOString(), mtimeMs: Number(args.mtimeMs) || 0, point: { path: String(args.point.path), mac: String(args.point.mac) }, hashes: args.hashes.map(String) };
+      var iv = crypto.getRandomValues(new Uint8Array(12));
+      var ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: enc.encode(fileAad(s.did, cid)) }, s.key, enc.encode(JSON.stringify(manifest))));
+      await openRecord(s, { iv: kd.b64u(iv), ct: ct }, cid);        // what is about to be kept must open again, or it is not kept
+      await tx(['files'], 'readwrite', function (t) { t.objectStore('files').put({ id: key, did: s.did, iv: kd.b64u(iv), ct: ct }); });
+      return { id: cid, existed: !!(have.f && have.f.did === s.did), pointed: true };
+    });
+  }
+
   // ---- moving files in chunks between origins (keo-transfer.js) ----------------------------------------------------------
   // The sealed manifests and chunks AS THEY ARE ON DISK, like exportSealed, one chunk at a time so a large file is never held whole.
   // Not for anything but keo-transfer.js: nothing here is a bridge op.
@@ -481,13 +555,14 @@
     return serial(async function () {
       var s = session(), prefix = s.did + '|';
       var recs = await tx(['files'], 'readonly', function (t) { var r = t.objectStore('files').index('did').getAll(IDBKeyRange.only(s.did)); return function () { return r.result; }; });
-      var files = [], unreadable = 0;
+      var files = [], unreadable = 0, pointed = 0;
       for (var i = 0; i < recs.length; i++) {
         var cid = String(recs[i].id).slice(prefix.length), m;
         try { m = await openRecord(s, recs[i], cid); } catch (e) { unreadable++; continue; }
+        if (m.kind === 'path') { pointed++; continue; }       // a place on THIS computer: it means nothing anywhere else
         files.push({ id: cid, fid: m.fid, chunks: m.chunks, size: m.size, manifest: { iv: recs[i].iv, ct: recs[i].ct } });
       }
-      return { files: files, unreadable: unreadable };
+      return { files: files, unreadable: unreadable, pointed: pointed };
     });
   }
   // args: { fid, n }. { iv, ct } of that chunk as stored (nothing is opened).
@@ -511,6 +586,7 @@
       var s = session(), cid = cidOf(args.id), man = args.manifest;
       if (!man || typeof man.iv !== 'string' || !(man.ct instanceof Uint8Array)) throw new Error('This file is damaged.');
       var m = await openRecord(s, man, cid);
+      if (m.kind === 'path') throw new Error('This file is damaged.');       // a place on another computer is never carried in
       var have = await tx(['files', 'blobs'], 'readonly', function (t) { var a = get(t, 'files', idOf(s.did, cid)), b = get(t, 'blobs', idOf(s.did, cid)); return function () { return a() || b(); }; });
       if (have && have.did === s.did) return { skip: true };
       await checkRoom(m.size, remainingOfUploads(s.did), await readTotal(s.did), true);
@@ -655,6 +731,6 @@
 
   window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob,
     fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSearch: fileSearch, fileRemove: fileRemove,
-    exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile, space: space,
+    exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile, space: space, pointStore: pointStore,
     reset: reset, purge: purge, CHUNK_BYTES: CHUNK_BYTES };
 })();

@@ -61,7 +61,7 @@
       library: { docs: l.docs.map(encRec), blobs: l.blobs.map(encRec) } });
     if (body.length > MAX_FILE) throw new Error('Your data is too big for one file here.');
     var big = await window.keoLibrary.exportFileList();
-    var counts = { worlds: w.bodies.length, docs: l.docs.length, blobs: l.blobs.length, files: big.files.length, skippedFiles: big.unreadable };
+    var counts = { worlds: w.bodies.length, docs: l.docs.length, blobs: l.blobs.length, files: big.files.length, skippedFiles: big.unreadable, pointedFiles: big.pointed || 0 };
     if (!big.files.length) return Object.assign({ blob: new Blob([body], { type: 'application/json' }), name: FILE_NAME }, counts);
     // the second form: one chunk is read, wrapped in its own blob and let go, so the browser can keep the file off the page's memory
     if (big.files.reduce(function (a, f) { return a + f.size; }, 0) + body.length > MAX_EXPORT) throw new Error('Your data is too big for one file here.');
@@ -195,7 +195,8 @@
       var what = [plural(f.worlds, 'saved world', 'saved worlds'), plural(f.docs, 'library item', 'library items'), plural(f.blobs, 'file', 'files')];
       if (f.files) what.push(plural(f.files, 'large file', 'large files'));
       ui.result.textContent = 'Saved ' + f.name + ': ' + what.slice(0, -1).join(', ') + ' and ' + what[what.length - 1] + '. Only this identity can open it.'
-        + (f.skippedFiles ? ' ' + plural(f.skippedFiles, 'large file', 'large files') + ' could not be read and ' + (f.skippedFiles === 1 ? 'is' : 'are') + ' not in it.' : '');
+        + (f.skippedFiles ? ' ' + plural(f.skippedFiles, 'large file', 'large files') + ' could not be read and ' + (f.skippedFiles === 1 ? 'is' : 'are') + ' not in it.' : '')
+        + (f.pointedFiles ? ' ' + plural(f.pointedFiles, 'file', 'files') + ' you left where ' + (f.pointedFiles === 1 ? 'it is' : 'they are') + ' on this computer ' + (f.pointedFiles === 1 ? 'is' : 'are') + ' not in it: add ' + (f.pointedFiles === 1 ? 'it' : 'them') + ' again on the other computer.' : '');
       say('');
     } catch (e) { if (open === q) { ui.result.textContent = ''; say((e && e.message) || String(e), 'bad'); } }
     finally { if (open === q) busy(false); }

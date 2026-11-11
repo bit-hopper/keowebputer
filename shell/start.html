@@ -49,6 +49,22 @@
   #keo-confirm button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
   #keo-confirm button:hover { background: #444a5e; }
   #keo-confirm button.yes { background: #c0392b; color: #fff; }
+  /* The "point to a local file" dialog (keo-point.js): drawn and placed by this page only, BELOW the vault's unlock frame like the others. */
+  #keo-point { position: fixed; inset: 0; z-index: 2147483003; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  #keo-point[hidden] { display: none; }
+  #keo-point .box { width: 380px; max-width: calc(100% - 32px); box-sizing: border-box; padding: 16px; background: #1d1f27; color: #f2f3f7;
+                    border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.45); }
+  #keo-point .title { font-weight: 600; font-size: 15px; margin-bottom: 12px; overflow-wrap: anywhere; }
+  #keo-point .text { color: #d6d9e4; line-height: 1.4; }
+  #keo-point .note { color: #a9adbd; line-height: 1.4; margin-top: 10px; font-size: 13px; }
+  #keo-point .note[hidden], #keo-point .bar[hidden], #keo-point button[hidden] { display: none; }
+  #keo-point .bar { height: 6px; border-radius: 3px; background: #343847; margin-top: 14px; overflow: hidden; }
+  #keo-point .fill { height: 100%; width: 0; background: #2f9e5b; }
+  #keo-point .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #keo-point button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
+  #keo-point button:hover { background: #444a5e; }
+  #keo-point button:disabled { opacity: .5; cursor: default; }
+  #keo-point button.go { background: #2f9e5b; color: #fff; }
   /* The friend dialog (keo-friend.js): drawn and placed by this page only. Like the others it stays BELOW the vault's unlock frame. */
   #keo-friend { position: fixed; inset: 0; z-index: 2147483002; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
   #keo-friend[hidden] { display: none; }
@@ -196,6 +212,8 @@
 <script src="keo-sha256.js"></script>
 <script src="keo-library.js"></script>
 <script src="keo-catalog.js"></script>
+<script src="keo-host.js"></script>
 <script src="keo-lan.js"></script>
+<script src="keo-point.js"></script>
 <script src="shell.js"></script>
 <script src="keo-gate.js"></script>

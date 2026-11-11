@@ -40,26 +40,9 @@
   var lastNote = null;              // the last thing that went wrong with the network, as a sentence, for the person
 
   function emit(ev) { if (listener) { try { listener(ev); } catch (e) {} } }
-  // The app's secret (see keo-desktop main.js): pushed into this page when its document is ready, read once, taken off `window` and kept
-  // in this closure. Without it the app answers 403. The world page cannot read it, and no bridge op returns it.
-  var tokenWanted = null;
-  function getToken() {
-    if (tokenWanted) return tokenWanted;
-    tokenWanted = new Promise(function (resolve) {
-      var t0 = Date.now();
-      (function look() {
-        if (typeof window.__keoHostToken === 'string') { var t = window.__keoHostToken; try { delete window.__keoHostToken; } catch (e) { window.__keoHostToken = undefined; } return resolve(t); }
-        if (Date.now() - t0 > 15000) return resolve(null);
-        setTimeout(look, 100);
-      })();
-    });
-    return tokenWanted;
-  }
+  // The app's secret is kept by keo-host.js, which every module that talks to the app shares (it is read from the page once).
   function hostCall(op, args) {
-    return getToken().then(function (token) {
-      if (!token) throw new Error('The app gave this page no way onto the network.');
-      return fetch('/.keo-host/lan', { method: 'POST', headers: { 'x-keo-host': token, 'content-type': 'application/json' }, body: JSON.stringify(Object.assign({ op: op }, args || {})) });
-    }).then(function (r) { if (!r.ok) throw new Error('The app answered ' + r.status + '.'); return r.json(); });
+    return window.keoHost.post('lan', Object.assign({ op: op }, args || {}));
   }
   function tagFor(did, period) { return kd.sha256(enc.encode('keo-lan-1|' + did + '|' + period)).then(function (h) { return kd.b64u(h.slice(0, 16)); }); }
   function periodOf(t) { return Math.floor(t / EPOCH_MS); }
