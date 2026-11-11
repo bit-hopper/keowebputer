@@ -241,6 +241,34 @@ const adopt = (frame) => frame.evaluate(() => new Promise((res) => { let n = 0; 
     await click(A.page, A.frame, 'makeInvitationBtn');
     await waitFor(async () => (await phase(A.frame)) === 'invited');
     const openBefore = await A.page.evaluate(() => window.keoP2p.list().length);
+
+    // ---- a window brought forward by a click on it is taken out of the world and put back; that must end nothing. The dialog and the
+    // Friends window are put side by side with Friends on top, and each in turn is clicked on its title bar while it is behind the other.
+    await A.frame.evaluate(() => new Promise((res) => lively.require('lively.identity.FriendsDialog').toRun(() => { const f = lively.BuildSpec('lively.identity.FriendsDialog').createMorph(); f.openInWorldCenter(); window.__friends = f; res(); })));
+    await sleep(1500);
+    await A.frame.evaluate(() => { const d = window.__dlg, f = window.__friends; d.setPosition(lively.pt(20, 80)); f.setPosition(lively.pt(d.getExtent().x + 60, 80)); });
+    await sleep(500);
+    const titleClick = async (which) => {
+      const r = await A.frame.evaluate((w) => { const b = window[w].titleBar.renderContext().shapeNode.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; }, which);
+      const off = await (await A.frame.frameElement()).boundingBox();
+      await A.page.bringToFront();
+      await A.page.mouse.click(off.x + r.x + r.w / 2, off.y + r.y + r.h / 2);
+      await sleep(700);
+    };
+    const winState = () => A.frame.evaluate(() => { const d = window.__dlg, f = window.__friends, ix = (m) => $world.submorphs.indexOf(m); return { dialogActive: !!d.isActive(), dialogAboveFriends: ix(d) > ix(f), friendsActive: !!f.isActive(), phase: d._p.phase, id: !!d._p.id, dialogListening: typeof d._stopListening === 'function', friendsSubscriptions: (f._stops || []).length }; });
+    const s0 = await winState();
+    check('forward: the Friends window is on top of the dialog', s0.dialogAboveFriends === false && !s0.dialogActive, s0);
+    await titleClick('__dlg');
+    const s1 = await winState();
+    check('forward: a click on the dialog brings it to the front, and it is still waiting for the other side', s1.dialogActive && s1.dialogAboveFriends && s1.phase === 'invited' && s1.id, s1);
+    check('forward: and the connection it held in the shell is still open, and the dialog still listens to it', (await A.page.evaluate(() => window.keoP2p.list().length)) === openBefore && s1.dialogListening, [openBefore, s1]);
+    await titleClick('__friends');
+    const s2 = await winState();
+    check('forward: a click on the Friends window brings it to the front, and it still follows what happens to friends', s2.friendsActive && !s2.dialogAboveFriends && s2.friendsSubscriptions === 3, s2);
+    check('forward: and the dialog behind it is still waiting', s2.phase === 'invited' && (await A.page.evaluate(() => window.keoP2p.list().length)) === openBefore, s2);
+    await A.frame.evaluate(() => { window.__friends.remove(); window.__friends = null; });
+    await A.frame.evaluate(() => window.__dlg.comeForward());
+    await sleep(300);
     await click(A.page, A.frame, 'closeBtn');
     await sleep(800);
     check('Close removes the window', (await dlg(A.frame, (d) => 1)) === null);

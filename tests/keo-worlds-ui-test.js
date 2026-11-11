@@ -147,6 +147,28 @@ const promptDiag = (frame) => frame.evaluate(() => { const out = []; (function w
     const wins = await frame.evaluate(() => $world.submorphs.filter((m) => m.name === 'WorldsBrowser').length);
     check('identity menu: "My worlds" is offered after My homestar, and asking again leaves one window', menu.asked && menu.labels[1] === 'My worlds' && wins === 1, { menu, wins });
 
+    // ---- brought forward from behind another window (taken out of the world and put back): it must go on following the library.
+    // A window's remove() also runs then, and a listener dropped there (for "a world was saved or changed") stayed dropped.
+    // Twice, so a listener that survives only the first time would show; each round puts My files on top of it first, because a window
+    // that is already in front is not moved at all.
+    const viaWorld = (fn, args) => frame.evaluate(([f, a]) => new Promise((res) => lively.require('lively.identity.LocalIdentity').toRun(() => lively.identity.localIdentity[f].apply(lively.identity.localIdentity, a.concat([(err) => res(String(err || 'ok'))])))), [fn, args]);
+    const worldsState = () => frame.evaluate(() => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); const f = $world.submorphs.find((m) => m.name === 'MyFilesBrowser'); return w ? { active: !!w.isActive(), aboveMyFiles: f ? $world.submorphs.indexOf(w) > $world.submorphs.indexOf(f) : null, listening: typeof w._onChanged === 'function' } : null; });
+    for (const round of [1, 2]) {
+      await frame.evaluate(() => new Promise((res) => lively.require('lively.identity.MyFilesBrowser').toRun(() => { lively.BuildSpec('lively.identity.MyFilesBrowser').createMorph().openInWorldCenter(); res(); })));
+      await sleep(800);
+      const behind = await worldsState();
+      check('forward ' + round + ': with My files opened on top, My worlds is behind it (so asking for it takes it out and puts it back)', behind && !behind.active && behind.aboveMyFiles === false, behind);
+      await frame.evaluate(() => $world.submorphs.find((m) => m.name === 'WorldsBrowser').comeForward());
+      await sleep(500);
+      const fwd = await worldsState();
+      check('forward ' + round + ': My worlds comes to the front and still has its listener', fwd && fwd.active && fwd.aboveMyFiles === true && fwd.listening, fwd);
+      const copy = 'Forward copy ' + round;
+      check('forward ' + round + ': a world copied now (through the world, as its own menus do) appears in the open list', (await viaWorld('worldDuplicate', ['Alpha notes', copy])) === 'ok' && !!(await until(async () => { const s = await readWin(frame); return s && names(s.rows).includes(copy) ? s : null; }, 8000)), await readWin(frame));
+      check('forward ' + round + ': and taken away again, it leaves the open list', (await viaWorld('worldRemove', [copy])) === 'ok' && !!(await until(async () => { const s = await readWin(frame); return s && s.rows.length === 3 && !names(s.rows).includes(copy) ? s : null; }, 8000)), await readWin(frame));
+      await frame.evaluate(() => $world.submorphs.filter((m) => m.name === 'MyFilesBrowser').forEach((m) => m.remove()));
+    }
+
+
     // ---- search by real typing
     let r = await byName(page, frame, 'searchInput'); await click(page, r);
     await page.keyboard.type('pineapple', { delay: 25 });
