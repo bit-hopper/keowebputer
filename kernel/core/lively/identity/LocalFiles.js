@@ -85,6 +85,7 @@ module("lively.identity.LocalFiles")
               return self._call("library.fileEnd", { upload: upload }, function (err, end) {
                 if (err) return fail(err);
                 opts.onProgress && opts.onProgress(1);
+                self.changed();
                 thenDo(null, { id: end.id, name: name, type: type, size: end.size, existed: end.existed,
                   ref: { handle: HANDLE, objId: end.id, blobCid: end.id } });
               });
@@ -125,6 +126,7 @@ module("lively.identity.LocalFiles")
           if (err) return thenDo(err);
           if (!r) return thenDo(null, null);
           r.ref = { handle: HANDLE, objId: r.id, blobCid: r.id };
+          lively.identity.localFiles.changed();
           thenDo(null, r);
         }, 60 * 60 * 1000);
       },
@@ -147,18 +149,25 @@ module("lively.identity.LocalFiles")
       markProblem: function markProblem(morph, kind, sentence) {
         if (!morph || !morph.addMorph) return;
         this.clearProblem(morph);
-        var words = this.PROBLEM_WORDS[kind] || this.PROBLEM_WORDS.other, text = "\u26A0 " + words;
-        var label = lively.morphic.Text.makeLabel(text, {
-          fontSize: 9, textColor: Color.white, fill: Color.rgb(192, 57, 43), borderWidth: 0, align: "left",
-        });
-        label.name = "KeoFileProblem";
-        label.isEpiMorph = true;
-        label.setExtent(pt(Math.round(text.length * 6.4 + 14), 20));
-        label.setPosition(pt(4, 4));
+        var words = this.PROBLEM_WORDS[kind] || this.PROBLEM_WORDS.other;
+        // a small red box holding the warning icon (Material Symbols Rounded) and the words, each its own Text morph
+        var box = new lively.morphic.Box(lively.rect(4, 4, Math.round(words.length * 6.2 + 30), 20));
+        box.applyStyle({ fill: Color.rgb(192, 57, 43), borderWidth: 0, borderRadius: 3 });
+        box.name = "KeoFileProblem";
+        box.isEpiMorph = true;
+        box.draggingEnabled = false; box.droppingEnabled = false; box.grabbingEnabled = false;
+        var icon = new lively.morphic.Text(lively.rect(3, 2, 16, 16), "warning");
+        icon.applyStyle({ allowInput: false, fontFamily: "'Material Symbols Rounded'", fontSize: 11, textColor: Color.white, fill: null, borderWidth: 0, borderColor: null });
+        icon.eventsAreIgnored = true;
+        box.addMorph(icon);
+        var label = new lively.morphic.Text(lively.rect(20, 2, Math.round(words.length * 6.2 + 8), 16), words);
+        label.applyStyle({ allowInput: false, fontSize: 9, textColor: Color.white, fill: null, borderWidth: 0, borderColor: null });
+        label.eventsAreIgnored = true;
+        box.addMorph(label);
         var tip = String(sentence || "");
-        if (label.setToolTip) label.setToolTip(tip); else label.toolTip = tip;
-        morph.addMorph(label);
-        morph._keoProblem = label;
+        if (box.setToolTip) box.setToolTip(tip); else box.toolTip = tip;
+        morph.addMorph(box);
+        morph._keoProblem = box;
       },
 
       clearProblem: function clearProblem(morph) {
@@ -182,6 +191,49 @@ module("lively.identity.LocalFiles")
           if (sentences[info.state]) self.markProblem(morph, info.state, info.name ? '"' + info.name + '": ' + sentences[info.state] : sentences[info.state]);
           else self.clearProblem(morph);
         });
+      },
+
+      // ---- the library's files, for a screen that lists them (MyFilesBrowser) ------------------------------------------------------
+      // Tells every window of this world that the library's files changed (one was added, pointed at or removed), so a list showing them
+      // can read again. A page event, not a bridge message: all of it happens in this one world.
+      changed: function changed() {
+        try { window.dispatchEvent(new CustomEvent("keo-files-changed")); } catch (e) { /* no page events here */ }
+      },
+
+      // opts: { query, type, limit, offset }. thenDo(err, { items: [{ id, name, type, size, created, pointed? }], total, unreadable }).
+      // Words in the name, in any order and case; type is a kind or the start of one ("image/", "application/pdf"); newest first.
+      search: function search(opts, thenDo) {
+        opts = opts || {};
+        this._call("library.fileSearch", { query: opts.query || "", type: opts.type || "", limit: opts.limit || 50, offset: opts.offset || 0 }, thenDo);
+      },
+
+      // Takes the file out of the library (for one kept where it lies: only the record, never the file on the computer). thenDo(err, removed).
+      // Worlds that show it will not be able to: nothing yet counts which worlds do.
+      remove: function remove(id, thenDo) {
+        var self = this;
+        this._call("library.fileRemove", { id: id }, function (err, removed) {
+          if (!err) self.changed();
+          thenDo(err, removed);
+        });
+      },
+
+      // What kind of thing a media type is, in a word a person reads: "Picture", "Video", "Sound", "PDF", "File".
+      kindWord: function kindWord(type) {
+        var t = String(type || "");
+        if (/^image\//.test(t)) return "Picture";
+        if (/^video\//.test(t)) return "Video";
+        if (/^audio\//.test(t)) return "Sound";
+        if (t === "application/pdf") return "PDF";
+        return "File";
+      },
+
+      // "820 MB", "1.2 GB": 1024-based like the shell's sentences. Room is rounded down so a line never promises more than there is.
+      sizeText: function sizeText(n, down) {
+        var u = ["bytes", "KB", "MB", "GB", "TB"], i = 0, v = n;
+        while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+        if (i === 0) return Math.round(v) + (Math.round(v) === 1 ? " byte" : " bytes");
+        var r = (down ? Math.floor(v * 10) : Math.round(v * 10)) / 10;
+        return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)) + " " + u[i];
       },
 
       // The file's description: { id, name, type, size, chunks, ... } or null when this identity has no such file.

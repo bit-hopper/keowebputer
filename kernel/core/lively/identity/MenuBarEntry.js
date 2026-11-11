@@ -203,6 +203,7 @@ module("lively.identity.MenuBarEntry")
             return [
               ["My homestar",        function () { self.openMyHomestar(); }],
               ["My worlds",          function () { self.openMyWorlds(); }],
+              ["My files",           function () { self.openMyFiles(); }],
               ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
               ["Friends ...",        function () { self.openFriendsDialog(); }],
@@ -245,10 +246,7 @@ module("lively.identity.MenuBarEntry")
             lively.identity.localFiles.point(function (err, info) {
               if (err) return $world.inform("This file could not be added:\n" + (err.message || err));
               if (!info) return;
-              // Each file lands a little lower and to the right of the one before, so several added in a row do not hide each other.
-              self._pointedCount = ((self._pointedCount || 0) + 1) % 8;
-              var at = $world.visibleBounds().center().subPt(pt(150, 100)).addXY(30 * self._pointedCount, 30 * self._pointedCount);
-              lively.data.FileUpload.openPointed(info, at, function (e) {
+              lively.data.FileUpload.placeLibraryFile(info, function (e) {
                 if (e) $world.inform(e.message || String(e));
               });
             });
@@ -345,6 +343,15 @@ module("lively.identity.MenuBarEntry")
             var open = $world.submorphs.filter(function (m) { return m.name === "WorldsBrowser"; })[0];
             if (open) return open.comeForward();
             lively.BuildSpec("lively.identity.WorldsBrowser").createMorph().openInWorldCenter();
+          });
+        },
+
+        // The files kept on this device (a local identity): one window at a time, found by name, like My worlds.
+        openMyFiles: function openMyFiles() {
+          lively.require("lively.identity.MyFilesBrowser").toRun(function () {
+            var open = $world.submorphs.filter(function (m) { return m.name === "MyFilesBrowser"; })[0];
+            if (open) return open.comeForward();
+            lively.BuildSpec("lively.identity.MyFilesBrowser").createMorph().openInWorldCenter();
           });
         },
 

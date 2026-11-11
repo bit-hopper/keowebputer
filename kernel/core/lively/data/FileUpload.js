@@ -308,6 +308,14 @@ module("lively.data.FileUpload")
         thenDo && thenDo(null);
       },
 
+      // Puts a file of the library in the world as a dropped one would be, in the middle of the screen. Each file placed lands a little
+      // lower and to the right of the one before, so several placed in a row do not hide each other. `info`: as for openPointed.
+      placeLibraryFile: function (info, thenDo) {
+        this._placed = ((this._placed || 0) + 1) % 8;
+        var at = $world.visibleBounds().center().subPt(pt(150, 100)).addXY(30 * this._placed, 30 * this._placed);
+        this.openPointed(info, at, thenDo);
+      },
+
       handleImportEvent: function (evt) {
         // see https://developer.mozilla.org/en/Using_files_from_web_applications
         var files = evt.dataTransfer.files;
