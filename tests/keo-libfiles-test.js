@@ -131,7 +131,7 @@ const SETUP = () => {
     r = await begin(-1); check('a negative size is refused', !r.ok && /size/.test(r.e), r);
     r = await begin(1.5); check('a size that is not a whole number is refused', !r.ok && /size/.test(r.e), r);
     r = await begin('10'); check('a size that is text is refused', !r.ok && /size/.test(r.e), r);
-    r = await begin(2 * 1024 * 1024 * 1024); check('a file bigger than the library may hold is refused when announced', !r.ok && /library is full/.test(r.e), r);
+    r = await begin(Math.pow(2, 45)); check('a file bigger than the browser has room for (32 TiB) is refused when announced', !r.ok && /library is full: this browser has room for [\d.]+ [GT]B more and this file needs 32 TB\./.test(r.e), r);
     let up = (await begin(C + 10)).r.upload;
     r = await chunk(up, 1, C); check('a chunk out of order is refused', !r.ok && /in order/.test(r.e), r);
     r = await chunk(up, 0, 100); check('a short chunk that is not the last is refused', !r.ok && /last chunk/.test(r.e), r);
@@ -156,6 +156,45 @@ const SETUP = () => {
     r = await T((id) => window.__t.tryp(window.keoLibrary.fileRead({ id, n: 3 })), id1); check('a chunk number past the end is refused', !r.ok && /no chunk/.test(r.e), r);
     r = await T((id) => window.__t.tryp(window.keoLibrary.fileRead({ id, n: -1 })), id1); check('a negative chunk number is refused', !r.ok, r);
     r = await T((id) => window.__t.tryp(window.keoLibrary.fileRead({ id, n: 0.5 })), id1); check('a chunk number that is not whole is refused', !r.ok, r);
+
+    // ---- the room follows what the browser reports (navigator.storage.estimate, replaced in the page for these checks)
+    {
+      const MiB = 1024 * 1024;
+      const stub = (src) => T((s) => { if (s === null) delete navigator.storage.estimate; else navigator.storage.estimate = new Function('return ' + s)(); }, src);
+      const roomWith = (usageMiB) => stub('async () => ({ quota: ' + (1000 * MiB) + ', usage: ' + (usageMiB * MiB) + ' })');   // a tenth of the quota is held back: 100 MiB
+      const abort = (u) => T((x) => window.keoLibrary.fileAbort({ upload: x }), u);
+      const space = () => T(() => window.__t.tryp(window.keoLibrary.space()));
+      const filesNow = await T(() => window.__t.total());
+      await roomWith(500);
+      let sp = await space();
+      check('space: the files, and the room left after the reserve (1000 - 500 - 100 MiB)', sp.ok && sp.r.files === filesNow && sp.r.free === 400 * MiB && sp.r.quota === 1000 * MiB && sp.r.usage === 500 * MiB, sp);
+      r = await begin(401 * MiB); check('a file one MiB over the room is refused, with both sizes in the sentence', !r.ok && /^The library is full: this browser has room for 400 MB more and this file needs 401 MB\.$/.test(r.e), r);
+      const a = await begin(400 * MiB); check('a file that just fits is accepted', a.ok, a);
+      sp = await space(); check('space: what that upload has yet to send is spoken for', sp.ok && sp.r.free === 0, sp);
+      r = await begin(10); check('another file is refused while the room is spoken for', !r.ok && /^The library is full: this browser has no room left and this file needs 10 bytes\.$/.test(r.e), r);
+      await abort(a.r.upload);
+      sp = await space(); check('giving the upload up gives the room back', sp.ok && sp.r.free === 400 * MiB, sp);
+      const b = await begin(300 * MiB); check('(setup) 300 MiB announced', b.ok, b);
+      r = await begin(101 * MiB); check('a second file is checked against what is left after the first (100 MiB)', !r.ok && /room for 100 MB more and this file needs 101 MB\./.test(r.e), r);
+      const c = await begin(100 * MiB); check('and one of exactly that size is accepted', c.ok, c);
+      await abort(b.r.upload); await abort(c.r.upload);
+      await roomWith(950);
+      r = await begin(1); check('with the usage past quota less the reserve there is no room left, not a negative one', !r.ok && /no room left and this file needs 1 byte\./.test(r.e), r);
+      await stub('async () => { throw new Error("not available here"); }');
+      r = await begin(1024 * MiB); check('when the browser gives no answer the old 1 GB total stands in (files are stored already, so 1 GB more does not fit)', !r.ok && /^The library is full: its files can take at most 1 GB together\.$/.test(r.e), r);
+      r = await begin(10); check('...and a small file is accepted', r.ok, r); if (r.ok) await abort(r.r.upload);
+      await stub('async () => ({ quota: 0, usage: 0 })');
+      r = await begin(10); check('an answer that makes no sense (quota 0) is taken as no answer', r.ok, r); if (r.ok) await abort(r.r.upload);
+      await stub(null);
+      // a write the browser refuses for lack of room reads as the library being full, whichever write it was
+      const q = (await begin(10)).r.upload;
+      await T(() => { const orig = IDBObjectStore.prototype.put; window.__putOrig = orig; IDBObjectStore.prototype.put = function () { throw new DOMException('no room', 'QuotaExceededError'); }; });
+      r = await T((u) => window.__t.tryp(window.keoLibrary.fileChunk({ upload: u, n: 0, bytes: new Uint8Array(10) })), q);
+      await T(() => { IDBObjectStore.prototype.put = window.__putOrig; });
+      check('a write the browser refuses (quota exceeded) says the library is full', !r.ok && /^The library is full: this browser has no room left to keep more\.$/.test(r.e), r);
+      await abort(q);
+      sp = await space(); check('space with the real browser: the room is a positive number below the quota', sp.ok && sp.r.quota > 0 && sp.r.free > 0 && sp.r.free < sp.r.quota && sp.r.usage > 0, sp);
+    }
 
     // an empty file, and a file of exactly one chunk
     await T(() => window.__t.make('e0', 0, 1));

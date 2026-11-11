@@ -114,6 +114,28 @@ const promptDiag = (frame) => frame.evaluate(() => { const out = []; (function w
     check('window: each row shows its type, when it was saved and its size', win && win.rows.every((x) => x.shown === x.name && /^World {2}· /.test(x.meta) && /saved (just now|\d+ min ago)/.test(x.meta) && /\d+ (KB|B|MB)/.test(x.meta)), win && win.rows);
     check('window: the world saved last is marked; tags show, and a note stands where a snippet would', win && /last saved/.test(win.rows[0].meta) && /#travel/.test(win.rows[0].meta) && win.rows[0].snippet === 'in the spring' && !/last saved/.test(win.rows[1].meta), win && win.rows);
     check('window: every row has "open" and the "⋯" menu, and there is no history link (a save keeps no versions here)', win && win.rows.every((x) => x.hasOpen && x.hasMore) && !win.all.includes('history'), win && win.all);
+    // ---- the line under the list says how much the library's files take and how much room is left
+    check('space: with no message to show, the line under the list says there are no files yet and how much room there is (the real browser)',
+      !!(await until(async () => { const s = await readWin(frame); return s && /^No files yet · room for about [\d.]+ [GT]B more$/.test(s.status); })), await readWin(frame));
+    const stubEstimate = (src) => page.evaluate((s) => { if (s === null) delete navigator.storage.estimate; else navigator.storage.estimate = new Function('return ' + s)(); }, src);
+    const refreshSpace = () => frame.evaluate(() => $world.submorphs.find((m) => m.name === 'WorldsBrowser').refreshSpace());
+    const statusIs = (re) => until(async () => { const s = await readWin(frame); return s && re.test(s.status) ? s.status : null; }, 6000);
+    await stubEstimate('async () => ({ quota: 1000 * 1048576, usage: 500 * 1048576 })');
+    await refreshSpace();
+    check('space: the room is the quota less what is in use less the reserve, rounded down (400 MB)', !!(await statusIs(/^No files yet · room for about 400 MB more$/)), await readWin(frame));
+    const threeId = await page.evaluate(async () => { const L = window.keoLibrary, b = await L.fileBegin({ name: 'three.bin', type: 'application/octet-stream', size: 3 * 1048576 }); await L.fileChunk({ upload: b.upload, n: 0, bytes: new Uint8Array(3 * 1048576).fill(9) }); return (await L.fileEnd({ upload: b.upload })).id; });
+    await refreshSpace();
+    check('space: once a file is kept the line says what the files take', !!(await statusIs(/^Files 3 MB · room for about 400 MB more$/)), await readWin(frame));
+    await stubEstimate('async () => ({ quota: 1000 * 1048576, usage: 950 * 1048576 })');
+    await refreshSpace();
+    check('space: with no room beyond the reserve it says so', !!(await statusIs(/^Files 3 MB · no room left for more$/)), await readWin(frame));
+    await stubEstimate('async () => { throw new Error("not available"); }');
+    await refreshSpace();
+    check('space: when the browser says nothing about its room, the line gives only what the files take', !!(await statusIs(/^Files 3 MB$/)), await readWin(frame));
+    await stubEstimate(null);
+    await page.evaluate((id) => window.keoLibrary.fileRemove({ id }), threeId);
+    await refreshSpace();
+    check('space: and with the file taken away again it is back to none', !!(await statusIs(/^No files yet · room for about [\d.]+ [GT]B more$/)), await readWin(frame));
     await page.screenshot({ path: path.join(WORK, 'my-worlds-list.png') });
     const menu = await frame.evaluate(() => {
       const bar = $world.get(/MenuBar/), entry = $world.get('IdentityMenuBarEntry') || (bar && bar.submorphs.filter((m) => m.name === 'IdentityMenuBarEntry')[0]);
@@ -166,6 +188,8 @@ const promptDiag = (frame) => frame.evaluate(() => { const out = []; (function w
     await answerPrompt(page, frame, 'Trip');
     win = await until(async () => { const s = await readWin(frame); return s && /already exists/.test(s.status) ? s : null; });
     check('rename: onto a taken name says so in the line under the list, and both worlds are still there', !!win && win.rows.length === 3 && names(win.rows).includes('Trip') && names(win.rows).includes('Budget 2026'), win);
+    await refreshSpace(); await sleep(800);
+    check('space: a message in that line is not replaced by the room figure when the figure arrives', /already exists/.test((await readWin(frame)).status), await readWin(frame));
 
     r = await rowPart(page, frame, 'Budget 2026', 'worldMore'); await click(page, r);
     await until(() => textRect(page, frame, 'Tags & note…'), 5000);

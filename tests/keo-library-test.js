@@ -176,11 +176,27 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     check('files: removing one says true, then it is gone, and removing it again says false', (await blob('removeBlob', { cid: cidA })).r === true && (await blob('getBlob', { cid: cidA })).r === null && (await blob('removeBlob', { cid: cidA })).r === false);
     br = await blobRaw();
     check('files: and the running total is back to nothing', br.blobs.length === 0 && br.totals[0].total === 0, br.totals);
-    // the total limit: set the running total just under it, then put a file that does not fit
+    // the room: the browser's own report decides (a stand-in for navigator.storage.estimate in the page, taken away again after)
+    const stub = (src) => page.evaluate((s) => { if (s === null) delete navigator.storage.estimate; else navigator.storage.estimate = new Function('return ' + s)(); }, src);
+    await stub('async () => ({ quota: 1000 * 1024 * 1024, usage: 900 * 1024 * 1024 })');            // 100 MB left, a reserve of 100 MB (a tenth) comes off: no room
+    r = await putB(cidA, secret);
+    check('files: when the browser reports no room beyond the reserve the put is refused, saying so', !r.ok && /library is full: this browser has no room left and this file needs \d+ bytes\./.test(r.e), r);
+    await stub('async () => ({ quota: 1000 * 1024 * 1024, usage: 600 * 1024 * 1024 })');            // 400 MB left less the 100 MB reserve
+    r = await putB(cidA, secret);
+    check('files: with room left the same put is accepted', r.ok, r);
+    await blob('removeBlob', { cid: cidA });
+    await stub('async () => { throw new Error("no estimate"); }');                                   // the browser gives no answer: the fixed 1 GB stands in
     await page.evaluate(([did]) => new Promise((res) => { const q = indexedDB.open('keo-library'); q.onsuccess = () => { const db = q.result, t = db.transaction('blobtotal', 'readwrite'); t.objectStore('blobtotal').put({ did: did, total: 1024 * 1024 * 1024 - 10 }); t.oncomplete = () => { db.close(); res(); }; }; }), [DID]);
     r = await putB(cidA, secret);
-    check('files: when the identity\'s files would pass 1 GB together the put is refused', !r.ok && /library is full/.test(r.e), r);
+    check('files: when the browser says nothing, the files of an identity may not pass 1 GB together', !r.ok && /library is full: its files can take at most 1 GB together/.test(r.e), r);
     await page.evaluate(([did]) => new Promise((res) => { const q = indexedDB.open('keo-library'); q.onsuccess = () => { const db = q.result, t = db.transaction('blobtotal', 'readwrite'); t.objectStore('blobtotal').put({ did: did, total: 0 }); t.oncomplete = () => { db.close(); res(); }; }; }), [DID]);
+    r = await putB(cidA, secret);
+    check('files: and under that limit the put is accepted', r.ok, r);
+    await blob('removeBlob', { cid: cidA });
+    await stub(null);
+    r = await page.evaluate(() => window.keoLibrary.space().then((x) => ({ ok: true, x }), (e) => ({ ok: false, e: e.message })));
+    check('files: space tells what the files take and the room the real browser reports', r.ok && r.x.files === 0 && r.x.quota > 0 && r.x.usage >= 0 && r.x.free > 0 && r.x.free < r.x.quota, r);
+
     // through the bridge, as the apps do (an ArrayBuffer made in the world)
     const viaBridgeB = await frame.evaluate(async () => { const b = new Uint8Array([5, 6, 7, 8]); const cid = lively.identity.crypto.base64urlEncode(new Uint8Array(await crypto.subtle.digest('SHA-256', b))); const put = await window.keo.call('library.blobPut', { cid: cid, bytes: b.buffer }, 30000).then((r) => r, (e) => e.message); const got = await window.keo.call('library.blobGet', { cid: cid }, 30000).then((r) => Array.from(new Uint8Array(r)), (e) => e.message); const rm = await window.keo.call('library.blobRemove', { cid: cid }, 30000).then((r) => r, (e) => e.message); return { put, got, rm }; });
     check('bridge: the world puts, gets and removes a file, and the hash the runtime makes is the one the shell checks', viaBridgeB.put === true && JSON.stringify(viaBridgeB.got) === '[5,6,7,8]' && viaBridgeB.rm === true, viaBridgeB);

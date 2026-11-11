@@ -131,6 +131,10 @@ module("lively.identity.LocalIdentity")
       libBlobPut: function libBlobPut(cid, bytes, thenDo) { this._run("library.blobPut", { cid: cid, bytes: bytes }, 120000, thenDo); },
       libBlobGet: function libBlobGet(cid, thenDo) { this._run("library.blobGet", { cid: cid }, 120000, thenDo); },
       libBlobRemove: function libBlobRemove(cid, thenDo) { this._run("library.blobRemove", { cid: cid }, 30000, thenDo); },
+      // How much the library's files take and the room the browser says is left for more, in bytes: { files, free, quota, usage }.
+      // free, quota and usage are null when the browser does not say. Only the shell can ask the browser (its storage estimate is not
+      // available in the world), which is why this is a call and not a read here. For a line on a screen, not for deciding anything.
+      libSpace: function libSpace(thenDo) { this._run("library.space", {}, 30000, thenDo); },
 
       // A read of the music catalogue's search or lookup address, made by the shell (the world's origin is refused by that site; the
       // shell has permission for it and accepts only those two paths). thenDo(err, the parsed JSON).

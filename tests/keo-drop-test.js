@@ -180,6 +180,17 @@ const DROP = ([key, x, y]) => {
     check('the same picture dropped twice is kept once in the library', after.total === before.total, [before.total, after.total]);
     check('...and shown twice', sv.refs.filter((r) => r.objId === made.small.id).length === 2, sv);
 
+    // no room: the browser says there is none (its estimate is replaced in the shell page for this drop), so the person is told in the
+    // shell's own words and nothing is kept or shown. A file already in the library is refused too: its name is known only at the end.
+    await page.evaluate(() => { navigator.storage.estimate = async () => ({ quota: 1000 * 1048576, usage: 990 * 1048576 }); });
+    const refs0 = sv.refs.length, filesTotal0 = (await frame.evaluate(() => window.keo.call('library.fileSearch', { query: '', limit: 1 }, 30000))).total;
+    await frame.evaluate(DROP, ['small', 800, 400]);
+    await sleep(3000);
+    sv = await frame.evaluate(SURVEY);
+    check('a drop the browser has no room for: the person is told the library is full and why', sv.notes.some((t) => /The library is full: this browser has no room left and this file needs/.test(t)), sv.notes);
+    check('...no morph is made and nothing is added to the library', sv.refs.length === refs0 && (await frame.evaluate(() => window.keo.call('library.fileSearch', { query: '', limit: 1 }, 30000))).total === filesTotal0, [sv.refs.length, refs0]);
+    await page.evaluate(() => { delete navigator.storage.estimate; });
+
     // video
     await frame.evaluate(DROP, ['video', 300, 300]);
     await sleep(4000);

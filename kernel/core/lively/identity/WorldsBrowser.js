@@ -267,6 +267,7 @@ module("lively.identity.WorldsBrowser")
           if (err) return self.showMessage("Could not load worlds: " + (err.message || err));
           self._worlds = items || [];
           self.renderLocalWorlds(self._worlds);
+          self.refreshSpace();
           if (skipped) self.setLocalStatus(skipped + (skipped === 1 ? " world" : " worlds") + " could not be read for the search.", true);
         }
         if (q) li.worldSearch(q, function (err, r) { done(err, r && r.hits, r && r.skipped); });
@@ -287,11 +288,43 @@ module("lively.identity.WorldsBrowser")
         if (this.get("worldsList")) this.loadLocal();
       },
 
+      // The line under the list: what a change did, or, when there is nothing to say, how much the library's files take and how much
+      // room is left for more (the last answer from the shell, see refreshSpace).
       setLocalStatus: function setLocalStatus(msg, isError) {
         var t = this.get("worldsStatus");
         if (!t) return;
-        t.setTextString(msg || "");
+        this._statusMsg = msg || "";
+        t.setTextString(this._statusMsg || this._spaceText || "");
         t.setTextColor(isError ? Color.rgb(200, 50, 50) : Color.rgb(140, 140, 140));
+      },
+
+      // "820 MB", "1.2 GB": 1024-based like the shell's sentences. Room is rounded down so the line never promises more than there is.
+      _sizeText: function _sizeText(n, down) {
+        var u = ["bytes", "KB", "MB", "GB", "TB"], i = 0, v = n;
+        while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+        if (i === 0) return Math.round(v) + (Math.round(v) === 1 ? " byte" : " bytes");
+        var r = (down ? Math.floor(v * 10) : Math.round(v * 10)) / 10;
+        return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)) + " " + u[i];
+      },
+
+      // The sentence for the line: "Files 1.2 GB · room for about 8.9 GB more", "No files yet · room for about ...", or only the first
+      // part when the browser does not say how much room there is. Empty when there is nothing to say.
+      _spaceSentence: function _spaceSentence(sp) {
+        if (!sp) return "";
+        var files = sp.files > 0 ? "Files " + this._sizeText(sp.files, false) : "No files yet";
+        if (typeof sp.free !== "number") return sp.files > 0 ? files : "";
+        return files + " · " + (sp.free > 0 ? "room for about " + this._sizeText(sp.free, true) + " more" : "no room left for more");
+      },
+
+      // Asks the shell for the numbers and shows them when the line has nothing else to say. A failed question leaves the line as it was.
+      refreshSpace: function refreshSpace() {
+        var self = this, li = lively.identity.localIdentity;
+        if (!li || typeof li.libSpace !== "function") return;
+        li.libSpace(function (err, sp) {
+          if (err || !self.world() || !self.get("worldsStatus")) return;
+          self._spaceText = self._spaceSentence(sp);
+          if (!self._statusMsg) self.setLocalStatus("");
+        });
       },
 
       filterWorlds: function filterWorlds(query) {

@@ -14,7 +14,9 @@
 // A blob is named by the SHA-256 of its bytes (base64url, as the runtime names them on a host) and the shell checks that, so a name
 // cannot be given to other bytes; the same bytes put twice are kept once. Sealed with the identity and the name as additional data.
 // Limits: one document is at most MAX_DOC bytes of JSON; an identity keeps at most MAX_DOCS documents; one blob is at most MAX_BLOB
-// bytes and an identity's blobs at most MAX_BLOBS_TOTAL together (a guard against a runaway app, not a quota the browser enforces).
+// bytes. How much ALL the files of an identity may take together is what the browser says it has room for (navigator.storage.estimate:
+// the quota less what is in use, less a reserve kept for worlds and chats), asked each time a file is announced; only when the browser
+// gives no answer does the old fixed figure (FALLBACK_TOTAL) stand in. Measured on one machine: about 10 GiB, counted exactly.
 // FILES (the second kind of file, for anything too big to be one record): a file is announced (fileBegin), sent in order in chunks of
 // CHUNK_BYTES (fileChunk), and finished (fileEnd); the shell holds ONE chunk at a time, seals it as it arrives and hashes it as it
 // arrives (keo-sha256.js), so the file's name, the SHA-256 of all its bytes, is known only at the end and is checked there, not
@@ -23,8 +25,9 @@
 // (manifests), `chunks`, `pending` (an upload that has not finished: whatever is left of it is swept at the next upload, at purge).
 // A file of the first kind (one record in `blobs`) is still read the same way: as one chunk. Files count toward the same running total
 // as blobs. A search by name opens the manifests as it goes (fileSearch). They move with "Move my data" one chunk at a time
-// (exportFileList, exportFileChunk, importFile: for keo-transfer.js only). Not here yet: a limit that follows the browser's quota,
-// reclaiming a file nothing refers to any more.
+// (exportFileList, exportFileChunk, importFile: for keo-transfer.js only). `space` says how much the files take and how much room is
+// left (the sandboxed world cannot ask the browser itself: its storage estimate is not available there). Not here yet: reclaiming a
+// file nothing refers to any more.
 // Not here: sync to a host, signatures (a host checks them; a local object is unsigned), a version history (a put replaces the
 // previous document), listing or searching the library, reclaiming a blob that nothing refers to any more (removing an item
 // leaves its blob, as the host's store does).
@@ -36,7 +39,9 @@
   var MAX_DOC = 2 * 1024 * 1024;
   var MAX_DOCS = 20000;
   var MAX_BLOB = 25 * 1024 * 1024;
-  var MAX_BLOBS_TOTAL = 1024 * 1024 * 1024;
+  var FALLBACK_TOTAL = 1024 * 1024 * 1024;         // the files' total limit ONLY when the browser does not report its room
+  var RESERVE_MAX = 256 * 1024 * 1024;              // room kept back from files for saved worlds, chats and the database's own overhead,
+  var RESERVE_FRACTION = 0.1;                       // or this part of the quota when that is less (a small quota keeps a small reserve)
   var CHUNK_BYTES = 4 * 1024 * 1024;               // every chunk of a file but the last is exactly this long
   var MAX_UPLOADS = 2;                              // files being added at once
   var UPLOAD_IDLE_MS = 5 * 60 * 1000;               // an upload that sends nothing for this long is given up
@@ -66,15 +71,55 @@
       q.onerror = function () { rej(q.error); };
     });
   }
+  // A write the browser refused for lack of room says so in one sentence the person can read, whichever write it was.
+  function friendly(e) {
+    if (e && e.name === 'QuotaExceededError') return new Error('The library is full: this browser has no room left to keep more.');
+    return e;
+  }
   function tx(stores, mode, fn) {
     return openDb().then(function (db) {
       return new Promise(function (res, rej) {
         var t = db.transaction(stores, mode), out;
-        try { out = fn(t); } catch (e) { db.close(); return rej(e); }
+        try { out = fn(t); } catch (e) { db.close(); return rej(friendly(e)); }
         t.oncomplete = function () { db.close(); res(typeof out === 'function' ? out() : out); };
-        t.onabort = t.onerror = function () { db.close(); rej(t.error || new Error('library transaction failed')); };
+        t.onabort = t.onerror = function () { db.close(); rej(friendly(t.error) || new Error('library transaction failed')); };
       });
     });
+  }
+  // ---- room ---------------------------------------------------------------------------------------------------------------
+  // What the browser says this origin may still keep: { quota, usage, reserve, free } in bytes (free = quota - usage - reserve, never
+  // below 0), or null when it does not say (no estimate in this context, a failed or nonsensical answer). The estimate counts every
+  // store of the origin, not only the library, which is why the reserve is held back.
+  async function browserRoom() {
+    try {
+      if (!navigator.storage || typeof navigator.storage.estimate !== 'function') return null;
+      var e = await navigator.storage.estimate();
+      if (!e || !(e.quota > 0) || !(e.usage >= 0) || !isFinite(e.quota) || !isFinite(e.usage)) return null;
+      var reserve = Math.min(RESERVE_MAX, Math.floor(e.quota * RESERVE_FRACTION));
+      return { quota: e.quota, usage: e.usage, reserve: reserve, free: Math.max(0, e.quota - e.usage - reserve) };
+    } catch (x) { return null; }
+  }
+  // Sizes for sentences the person reads: 1024-based, rounded DOWN to one decimal for room (so the sentence never promises more than
+  // there is) and UP for a size asked for.
+  function sizeText(n, up) {
+    var u = ['bytes', 'KB', 'MB', 'GB', 'TB'], i = 0, v = n;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    if (i === 0) return Math.round(v) + (Math.round(v) === 1 ? ' byte' : ' bytes');
+    var r = (up ? Math.ceil(v * 10) : Math.floor(v * 10)) / 10;
+    return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)) + ' ' + u[i];
+  }
+  // Throws a sentence when `size` more bytes of files would not fit. `spokenFor` is room already promised to uploads that are still
+  // going (their unsent bytes: the browser's estimate does not count those yet). `used` is what the identity's files already take: only
+  // needed for the old fixed limit that stands in when the browser gives no answer. `would` picks the wording ("The library would be
+  // full" is for data being added from a file, "is full" for a file being added now).
+  async function checkRoom(size, spokenFor, used, would) {
+    var room = await browserRoom(), lead = would ? 'The library would be full' : 'The library is full';
+    if (room) {
+      var left = Math.max(0, room.free - spokenFor);
+      if (size <= left) return;
+      throw new Error(lead + ': ' + (left > 0 ? 'this browser has room for ' + sizeText(left) + ' more and ' : 'this browser has no room left and ') + (would ? 'the data needs ' : 'this file needs ') + sizeText(size, true) + '.');
+    }
+    if (used + spokenFor + size > FALLBACK_TOTAL) throw new Error(lead + ': its files can take at most ' + sizeText(FALLBACK_TOTAL) + ' together.');
   }
   function get(t, store, key) { var r = t.objectStore(store).get(key); return function () { return r.result; }; }
 
@@ -164,7 +209,7 @@
       if (have && have.did === s.did) return true;                // the same bytes are kept once
       var total = await tx(['blobtotal'], 'readonly', function (t) { return get(t, 'blobtotal', s.did); });
       var used = total ? total.total : 0;
-      if (used + bytes.length > MAX_BLOBS_TOTAL) throw new Error('The library is full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.');
+      await checkRoom(bytes.length, remainingOfUploads(s.did), used);
       var iv = crypto.getRandomValues(new Uint8Array(12));
       var ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: enc.encode(blobAad(s.did, cid)) }, s.key, bytes));
       await tx(['blobs', 'blobtotal'], 'readwrite', function (t) {   // the file and the running total change together or not at all
@@ -228,6 +273,11 @@
     Object.keys(uploads).forEach(function (k) { var u = uploads[k]; if (now - u.last > UPLOAD_IDLE_MS) delete uploads[k]; else if (u.did === did) out.push(u); });
     return out;
   }
+  // What the uploads still going have announced but not yet stored: room that is already spoken for, though the browser's estimate
+  // does not count it yet.
+  function remainingOfUploads(did) {
+    return liveUploads(did).reduce(function (a, u) { return a + (u.size - u.got); }, 0);
+  }
   function getUpload(id, s) {
     var u = uploads[String(id)];
     if (!u || u.did !== s.did) throw new Error('That upload is not open (it may have timed out).');
@@ -267,8 +317,9 @@
       if (!(typeof size === 'number' && isFinite(size) && size >= 0 && Math.floor(size) === size)) throw new Error('A file needs its size.');
       var live = liveUploads(s.did);
       if (live.length >= MAX_UPLOADS) throw new Error('Too many files are being added at once.');
-      var reserved = live.reduce(function (a, u) { return a + u.size; }, 0);
-      if (await readTotal(s.did) + reserved + size > MAX_BLOBS_TOTAL) throw new Error('The library is full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.');
+      // What the live uploads have yet to send is spoken for (what they have sent is already in the browser's estimate); the old fixed
+      // limit counts the running total, so it is given what they have sent as well.
+      await checkRoom(size, remainingOfUploads(s.did), await readTotal(s.did) + live.reduce(function (a, u) { return a + u.got; }, 0));
       await sweepPending(s.did);
       var fid = randomId(), up = randomId(), fk = s.did + '|' + fid;
       await tx(['pending'], 'readwrite', function (t) { t.objectStore('pending').put({ id: fk, did: s.did, at: Date.now() }); });
@@ -311,7 +362,8 @@
       var cid = kd.b64u(u.hasher.digest()), key = idOf(s.did, cid), fk = s.did + '|' + u.fid;
       var have = await tx(['files', 'blobs'], 'readonly', function (t) { var a = get(t, 'files', key), b = get(t, 'blobs', key); return function () { return a() || b(); }; });
       var existed = !!(have && have.did === s.did), used = await readTotal(s.did);
-      if (!existed && used + u.size > MAX_BLOBS_TOTAL) { await discard(s, id, u); throw new Error('The library is full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.'); }
+      // No room check here: the room was checked when the file was announced (with the other uploads' unsent bytes counted), and the
+      // chunks are already stored, so a browser that ran out of room refused one of them with the sentence from friendly().
       var rec = null;
       if (!existed) {
         var manifest = { v: 1, cid: cid, fid: u.fid, name: u.name, type: u.type, size: u.size, chunks: u.next, chunkBytes: CHUNK_BYTES, created: new Date().toISOString() };
@@ -461,7 +513,7 @@
       var m = await openRecord(s, man, cid);
       var have = await tx(['files', 'blobs'], 'readonly', function (t) { var a = get(t, 'files', idOf(s.did, cid)), b = get(t, 'blobs', idOf(s.did, cid)); return function () { return a() || b(); }; });
       if (have && have.did === s.did) return { skip: true };
-      if (await readTotal(s.did) + m.size > MAX_BLOBS_TOTAL) throw new Error('The library would be full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.');
+      await checkRoom(m.size, remainingOfUploads(s.did), await readTotal(s.did), true);
       await sweepPending(s.did);
       var fk = s.did + '|' + m.fid;
       var clash = await tx(['chunks'], 'readonly', function (t) { var r = t.objectStore('chunks').index('fk').count(IDBKeyRange.only(fk)); return function () { return r.result; }; });
@@ -494,7 +546,6 @@
         if (cur.did !== begun.did) throw new Error('The signed-in identity changed.');
         if (kd.b64u(hasher.digest()) !== begun.cid) throw new Error('A file in this data does not match its name.');
         var used = await readTotal(cur.did);
-        if (used + m.size > MAX_BLOBS_TOTAL) throw new Error('The library would be full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.');
         await tx(['files', 'pending', 'blobtotal'], 'readwrite', function (t) {
           t.objectStore('files').put({ id: idOf(cur.did, begun.cid), did: cur.did, iv: begun.man.iv, ct: begun.man.ct });
           t.objectStore('pending').delete(begun.fk);
@@ -506,6 +557,17 @@
       await serial(function () { return tx(['chunks', 'pending'], 'readwrite', function (t) { dropChunks(t, begun.fk); t.objectStore('pending').delete(begun.fk); }); }).catch(function () {});
       throw e;
     }
+  }
+
+  // What the signed-in identity's files take (plain sizes, as counted for the old limit) and the room the browser says is left for
+  // more: { files, free, quota, usage }, with free/quota/usage null when the browser gives no answer. `free` is the same number the
+  // checks use (reserve already held back, other uploads' unsent bytes taken off). Read-only; for the library screens.
+  function space() {
+    return serial(async function () {
+      var s = session(), files = await readTotal(s.did), room = await browserRoom();
+      if (!room) return { files: files, free: null, quota: null, usage: null };
+      return { files: files, free: Math.max(0, room.free - remainingOfUploads(s.did)), quota: room.quota, usage: room.usage };
+    });
   }
 
   // The session ended: uploads that were open are gone (their chunks are swept by the next upload).
@@ -578,7 +640,7 @@
       var total = await tx(['blobtotal'], 'readonly', function (t) { return get(t, 'blobtotal', s.did); });
       var used = total ? total.total : 0;
       if (haveDocs.length + putDocs.length > MAX_DOCS) throw new Error('The library would be full: it holds at most ' + MAX_DOCS + ' items.');
-      if (used + addBytes > MAX_BLOBS_TOTAL) throw new Error('The library would be full: its files can take at most ' + (MAX_BLOBS_TOTAL / 1024 / 1024 / 1024) + ' GB together.');
+      await checkRoom(addBytes, remainingOfUploads(s.did), used, true);
       if (putDocs.length || putBlobs.length) {
         await tx(['docs', 'blobs', 'blobtotal'], 'readwrite', function (t) {
           putDocs.forEach(function (p) { t.objectStore('docs').put(p); });
@@ -593,6 +655,6 @@
 
   window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob,
     fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSearch: fileSearch, fileRemove: fileRemove,
-    exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile,
+    exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile, space: space,
     reset: reset, purge: purge, CHUNK_BYTES: CHUNK_BYTES };
 })();
