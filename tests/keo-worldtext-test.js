@@ -75,4 +75,22 @@ ok('search: ties are in name order', JSON.stringify(wt.search([{ name: 'b', note
 ok('search: entries with missing fields do not throw', wt.search([{ name: 'a' }, { name: 'b', tags: null, note: null, text: null }], 'a').length === 1);
 ok('search: no entries, no hits', wt.search([], 'a').length === 0 && wt.search(null, 'a').length === 0);
 
+
+// ---- fileIds: the library files a saved world shows
+const A = 'N6OfBcD1cGFvzvRsI8jQkG0pGcT1cm6frj5YMXDYJLk', B = '_-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abc', C = 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz';
+const withFiles = (registry, before) => page(registry, before);
+const pic = (id, handle) => ({ __LivelyClassName__: 'lively.morphic.Shapes.EncryptedImage', fileHandle: handle || 'keo:local', fileObjId: id, isLoaded: true });
+const R1 = { '60': pic(A), '61': pic(B), '62': pic(A) };
+ok('fileIds: the ids of the file morphs of a world, each once, sorted', JSON.stringify(wt.fileIds(withFiles(R1))) === JSON.stringify([A, B].sort()), wt.fileIds(withFiles(R1)));
+const windowMarkup = '<div class="mf-row" data-id="' + C + '"></div>';
+const windowState = { '70': { _sig: JSON.stringify([{ items: [{ id: C, name: 'x.png' }] }]), __LivelyClassName__: 'lively.morphic.Box' } };
+ok('fileIds: the id in the markup or the state of an open My files window is not a use', wt.fileIds(withFiles(Object.assign({}, R1, windowState), windowMarkup)).indexOf(C) < 0 && wt.fileIds(withFiles(Object.assign({}, R1, windowState), windowMarkup)).length === 2);
+ok('fileIds: a handle that is not the library, an id that is not 43 characters, a number, and a missing id are not uses',
+  wt.fileIds(withFiles({ '1': pic(A, 'some-host'), '2': pic('short'), '3': pic(A + 'x'), '4': { fileHandle: 'keo:local', fileObjId: 12345 }, '5': { fileHandle: 'keo:local' }, '6': { fileObjId: A }, '7': pic('has space ' + 'a'.repeat(33)) })).length === 0);
+ok('fileIds: a page with no world data, data that is not JSON, and nothing at all give []', wt.fileIds('<html></html>').length === 0 && wt.fileIds('<script type="text/x-lively-world">{not json</script>').length === 0 && wt.fileIds('').length === 0 && wt.fileIds(null).length === 0 && wt.fileIds(undefined).length === 0);
+ok('fileIds: a registry that is not an object gives []', wt.fileIds('<script type="text/x-lively-world">{"registry":5}</script>').length === 0 && wt.fileIds('<script type="text/x-lively-world">{"registry":null}</script>').length === 0);
+const many = {}; for (let i = 0; i < 6000; i++) many[String(i)] = pic(('q' + i).padEnd(43, 'a'));
+ok('fileIds: at most 5000 files are listed for one world', wt.fileIds(withFiles(many)).length === 5000);
+ok('fileIds: an id made to look like a property name does not break it', wt.fileIds(withFiles({ '__proto__x': pic(A), 'constructor': pic(B) })).length === 2);
+
 console.log(passed + ' checks passed' + (process.exitCode ? ', some FAILED' : ''));

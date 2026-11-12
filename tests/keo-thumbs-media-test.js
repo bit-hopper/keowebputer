@@ -264,6 +264,45 @@ const near = (px, rgb, tol) => rgb.every((v, i) => Math.abs(px[i] - v) <= (tol |
     });
     check('a clip whose small picture never arrives is given up after the time limit (not tried again), and the next file still gets its own', blocked.after && !blocked.stuck && blocked.failed, blocked);
 
+    // ---- an older video is read back only as far as it needs (its first part), not whole
+    const head = await frame.evaluate(async () => {
+      const lf = lively.identity.localFiles, MiB = 1024 * 1024;
+      // a noisy clip (hard to compress, so it is several chunks long): recorded from a canvas
+      const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d');
+      const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm', videoBitsPerSecond: 40000000 }); const parts = [];
+      rec.ondataavailable = (e) => parts.push(e.data); const done = new Promise((r) => (rec.onstop = r));
+      rec.start();
+      for (let i = 0; i < 75; i++) { const im = g.createImageData(640, 480); crypto.getRandomValues(im.data.subarray(0, 65536)); for (let k = 65536; k < im.data.length; k += 65536) im.data.copyWithin(k, 0, Math.min(65536, im.data.length - k)); for (let k = 3; k < im.data.length; k += 4) im.data[k] = 255; g.putImageData(im, 0, 0); await new Promise((r) => setTimeout(r, 70)); }
+      rec.stop(); await done;
+      const file = new File([new Blob(parts, { type: 'video/webm' })], 'long.webm', { type: 'video/webm' });
+      const out = { size: file.size };
+      const id = await new Promise((res) => lf.put(file, {}, (e, r) => res(e ? null : r.id)));
+      out.id = id;
+      // the reader itself: the first 5 MB are rounded up to whole 4 MiB chunks; no limit is the whole file
+      const piece = await new Promise((res) => lf.headBlobFor(id, 5 * MiB, (e, b, info) => res(e ? { err: e.message } : { size: b.size, info: info.size })));
+      const whole = await new Promise((res) => lf.headBlobFor(id, 0, (e, b) => res(e ? { err: e.message } : { size: b.size })));
+      const viaBlobFor = await new Promise((res) => lf.blobFor(id, (e, b) => res(e ? { err: e.message } : { size: b.size })));
+      out.piece = piece; out.whole = whole.size; out.viaBlobFor = viaBlobFor.size;
+      // the maker: with the head set to one chunk, remaking the picture reads ONE chunk from the shell
+      await new Promise((r) => setTimeout(r, 1500));
+      delete lf._thumbUrls[id]; delete lf._thumbFail[id];
+      const saved = { head: lf.THUMB_VIDEO_HEAD, call: lf._call }; let reads = 0;
+      lf.THUMB_VIDEO_HEAD = 4 * MiB;
+      lf._call = function (op) { if (op === 'library.fileRead') reads++; return saved.call.apply(this, arguments); };
+      out.remade = await new Promise((res) => {
+        const h = (e) => { if (e.detail.id === id) { window.removeEventListener('keo-thumb', h); res(true); } };
+        window.addEventListener('keo-thumb', h);
+        lf._thumbPending[id] = true; lf._thumbQ.push({ id, source: null, kind: 'video' }); lf._pumpThumbs();
+        setTimeout(() => res(false), 20000);
+      });
+      lf.THUMB_VIDEO_HEAD = saved.head; lf._call = saved.call;
+      out.reads = reads;
+      return out;
+    });
+    check('setup: a clip longer than two chunks (over 8 MiB) is in the library', typeof head.id === 'string' && head.size > 8.5 * 1024 * 1024, [head.size]);
+    check('reading the first 5 MB gives two whole 4 MiB chunks (8 MiB) of a larger file; no limit gives the whole file, as blobFor does', !!head.piece && head.piece.size === 8 * 1024 * 1024 && head.piece.info === head.size && head.whole === head.size && head.viaBlobFor === head.size, head);
+    check('an older video\'s small picture is made again from ONE chunk read (not the whole file) when the head is set to one chunk', head.remade === true && head.reads === 1, [head.remade, head.reads]);
+
     // ---- removing a file removes its small picture
     const before = Object.keys((await keoCall(frame, 'library.thumbGet', { ids: Object.keys(names) })).r).length;
     await frame.evaluate((id) => new Promise((res) => lively.identity.localFiles.remove(id, res)), made.video);

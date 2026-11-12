@@ -106,6 +106,8 @@
     'world.last': function () { return window.keoWorlds.last(); },
     'world.setLast': function (a) { return window.keoWorlds.setLast({ name: a.name }); },
     'world.remove': function (a) { return window.keoWorlds.remove({ name: a.name }); },
+    // Which saved worlds show which library files: { <file id>: [world name, ...] } for the ids asked. Names of the identity's own worlds only.
+    'world.usedIn': function (a) { return window.keoWorlds.usedIn({ ids: a.ids }); },
     // The library: whether a name is taken, a new name for a world, its tags and note, a copy, and a search over names, tags, notes
     // and the text inside the worlds. All of it is the signed-in identity's own and returns plain data (names, tags, short snippets).
     'world.has': function (a) { return window.keoWorlds.has({ name: a.name }); },
@@ -132,6 +134,8 @@
     'library.fileSearch': function (a) { return window.keoLibrary.fileSearch({ query: a.query, type: a.type, folder: a.folder, sort: a.sort, limit: a.limit, offset: a.offset }); },
     // A copy of a file saved to the computer as a download made by this page (the world's frame cannot download).
     'library.fileSave': function (a) { return window.keoLibrary.fileSave({ id: a.id }); },
+    // Show a file kept where it lies in its folder (desktop app only). Answers { ok: true }: never a path.
+    'library.fileShow': function (a) { return window.keoLibrary.fileShow({ id: a.id }); },
     // The small picture shown for a picture file: the world makes it, the shell keeps it sealed (a cache: see keo-library.js).
     'library.thumbPut': function (a) { return window.keoLibrary.thumbPut({ id: a.id, bytes: a.bytes }); },
     'library.thumbGet': function (a) { return window.keoLibrary.thumbGet({ ids: a.ids }); },

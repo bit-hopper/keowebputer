@@ -20,8 +20,7 @@
  * which show it will not be able to; for a file kept where it lies only the record goes, never the file on the computer. Deleting a
  * folder never deletes a file: its files and folders go up a level.
  *
- * Not here yet: a grid of thumbnails, "Duplicate", "Save a copy to this computer", "Show on this computer", the WarpDrop button, the
- * "Used in" line, documents other than PDF.
+ * Not here yet: "Duplicate" (not planned: one copy of the same bytes is kept), the WarpDrop button, the "Used in" line.
  */
 
 module("lively.identity.MyFilesBrowser")
@@ -389,6 +388,7 @@ module("lively.identity.MyFilesBrowser")
             case "mplace": ids = this._menu.ids; this._menu = null; this._renderPop(); this.place(ids); break;
             case "mrename": ids = this._menu.ids; this._menu = null; this._renderPop(); this.startRename(ids[0]); break;
             case "msave": ids = this._menu.ids; this._menu = null; this._renderPop(); this.saveCopy(ids[0]); break;
+            case "mshow": ids = this._menu.ids; this._menu = null; this._renderPop(); this.showOnComputer(ids[0]); break;
             case "mmove": ids = this._menu.ids; this._menu = null; this._renderPop(); this._openMenu("move", e, ids); break;
             case "mremove": ids = this._menu.ids; this._menu = null; this._renderPop(); this.removeFiles(ids); break;
             case "move-to": ids = this._menu.ids; this._menu = null; this._renderPop(); this.moveFiles(ids, a.getAttribute("data-target")); break;
@@ -701,7 +701,8 @@ module("lively.identity.MyFilesBrowser")
             '<div class="mf-pn"><div class="mf-t">' + nameHtml(it) + '</div><button class="mf-act" data-act="prename" title="Rename" aria-label="Rename"><span class="mf-ms">edit</span></button></div>' +
             "<dl><dt>Type</dt><dd>" + esc(typeWord(it)) + "</dd><dt>Size</dt><dd>" + esc(lf().sizeText(it.size, false)) + "</dd><dt>Added</dt><dd>" + esc(ago(it.created)) + "</dd>" +
             '<dt>Folder</dt><dd><button class="mf-lnk" data-act="pmove">' + esc(this._folderPath(it.folder)) + " ▾</button></dd>" +
-            "<dt>Stored</dt><dd>" + (it.pointed ? "On this computer, not copied" + (bad ? ' <span class="mf-bad" style="color:#c0392b">(' + bad.replace("file ", "") + ")</span>" : "") : "Inside keo") + "</dd></dl>" +
+            "<dt>Stored</dt><dd>" + (it.pointed ? "On this computer, not copied" + (bad ? ' <span class="mf-bad" style="color:#c0392b">(' + bad.replace("file ", "") + ")</span>" : "") : "Inside keo") + "</dd>" +
+            '<dt>Used in</dt><dd data-el="usedin">checking …</dd></dl>' +
             '<div class="mf-pbtns"><button class="mf-primary" data-act="place"' + (st === "missing" ? " disabled" : "") + '><span class="mf-ms">add_photo_alternate</span>Place in world</button>' +
             (it.pointed && (st === "missing" || st === "changed" || st === "denied") && lf().pointAvailable ? '<button class="mf-line" data-act="repoint">Point to it again …</button>' : "") +
             '<button class="mf-line" data-act="remove">' + (it.pointed ? "Stop using this file …" : "Remove from library …") + "</button></div>";
@@ -720,6 +721,41 @@ module("lively.identity.MyFilesBrowser")
             var tu = lf().thumbUrl(it.id), th2 = this._els.prev.querySelector('[data-el="thumb"]');
             if (th2) th2.innerHTML = '<img alt="" src="' + tu + '">';
           }
+          this._fillUsedIn(it.id);
+        },
+
+        // "Used in": the saved worlds that show the file, found by the shell (it reads each world saved since it last looked, once), and the
+        // world that is open now if it shows the file and is not saved yet.
+        _fillUsedIn: function (id) {
+          var self = this;
+          lf().usedIn([id], function (err, res) {
+            if (!self.world() || self._sel.length !== 1 || self._sel[0] !== id) return;
+            var dd = self._els.prev.querySelector('[data-el="usedin"]');
+            if (dd) dd.innerHTML = err ? "not known" : self._usedLine(id, res);
+          });
+        },
+        _openWorldName: function () { return window.keo && window.keo.init && window.keo.init.startup ? window.keo.init.startup.name || null : null; },
+        _usedLine: function (id, res) {
+          var names = (res && res[id]) || [], shown = names.slice(0, 4), list = shown.map(esc);
+          if (names.length > shown.length) list.push("and " + (names.length - shown.length) + " more");
+          if (lf().worldHolds(id) && names.indexOf(this._openWorldName()) < 0) list.push("this world (not saved yet)");
+          var out = list.length ? list.join(", ") : "No saved world";
+          if (res && res._unreadable) out += " (" + plural(res._unreadable, "saved world") + " could not be read)";
+          return out;
+        },
+        // A sentence for the question before a removal: which worlds show these files. "" when none does (the question is then as it was).
+        _usedSentence: function (its, res) {
+          var worlds = [], self = this, open = false;
+          its.forEach(function (i) {
+            ((res && res[i.id]) || []).forEach(function (n) { if (worlds.indexOf(n) < 0) worlds.push(n); });
+            if (lf().worldHolds(i.id) && ((res && res[i.id]) || []).indexOf(self._openWorldName()) < 0) open = true;
+          });
+          var parts = worlds.slice(0, 4);
+          if (worlds.length > parts.length) parts.push("and " + (worlds.length - parts.length) + " more");
+          if (open) parts.push("this world (not saved yet)");
+          if (!parts.length) return "";
+          var what = its.length === 1 ? "“" + its[0].name + "” is" : "These " + its.length + " files are";
+          return what + " shown in " + (worlds.length ? plural(worlds.length, "saved world") + ": " : "") + parts.join(", ") + ".";
         },
 
         _renderStatus: function () {
@@ -753,6 +789,7 @@ module("lively.identity.MyFilesBrowser")
             h += it(one ? "Place in world" : "Place " + n + " files in world", "mplace");
             if (one) h += it("Rename …", "mrename");
             if (one) h += it("Save a copy to this computer", "msave");
+            if (one && f && f.pointed && lf().pointAvailable) h += it("Show on this computer", "mshow");      // only a file kept where it lies has a place to show
             h += it(one ? "Move to …" : "Move " + n + " files to …", "mmove");
             h += it(one ? (f && f.pointed ? "Stop using this file …" : "Remove from library …") : "Remove " + n + " files …", "mremove");
           } else if (m.type === "folder") {
@@ -786,6 +823,16 @@ module("lively.identity.MyFilesBrowser")
           lf().save(id, function (err) {
             if (err) return self._say("Could not save a copy: " + String(err.message || err), true);
             self._say("A copy of " + it.name + " was sent to your browser's downloads.");
+          });
+        },
+
+        // A file kept where it lies, shown in its folder by the computer's own file manager (the app does it; this window is never told where).
+        showOnComputer: function (id) {
+          var self = this, it = this._item(id);
+          if (!it) return;
+          lf().show(id, function (err) {
+            if (err) return self._say("Could not show it: " + String(err.message || err), true);
+            self._say("Showing " + it.name + " on this computer.");
           });
         },
 
@@ -895,6 +942,7 @@ module("lively.identity.MyFilesBrowser")
           (function next() {
             if (!its.length || failed) {
               if (!self.world()) return;
+              if (self._sel.length === 1) self._fillUsedIn(self._sel[0]);        // the chosen file may now be shown in the open world
               return failed ? self._say(failed.message || String(failed), true)
                 : self._say(done === 1 ? "Placed “" + ids.map(function (id) { return (self._item(id) || {}).name; })[0] + "” in the world." : "Placed " + plural(done, "file") + " in the world.");
             }
@@ -918,17 +966,23 @@ module("lively.identity.MyFilesBrowser")
             : (allPointed
               ? "Stop using these " + its.length + " files? The files on your computer are not deleted. Worlds that show them will not be able to show them any more."
               : "Remove these " + its.length + " files (" + lf().sizeText(size, false) + ") from your library? Worlds that show them will not be able to show them any more. This cannot be undone.");
-          $world.confirm(text, function (yes) {
-            if (!yes) return;
-            var left = its.slice(), removed = 0, fail = null;
-            (function next() {
-              if (!left.length || fail) {
-                if (!self.world()) return;
-                return fail ? self._say(fail.message || String(fail), true) : self._say(one ? "Removed “" + it.name + "”." : "Removed " + plural(removed, "file") + ".");
-              }
-              lf().remove(left.shift().id, function (err) { if (err) fail = err; else removed++; next(); });
-            })();
-          });
+          function ask(used) {
+            if (self.world()) { self._status = null; self._renderStatus(); }
+            $world.confirm((used ? used + " " : "") + text, function (yes) {
+              if (!yes) return;
+              var left = its.slice(), removed = 0, fail = null;
+              (function next() {
+                if (!left.length || fail) {
+                  if (!self.world()) return;
+                  return fail ? self._say(fail.message || String(fail), true) : self._say(one ? "Removed “" + it.name + "”." : "Removed " + plural(removed, "file") + ".");
+                }
+                lf().remove(left.shift().id, function (err) { if (err) fail = err; else removed++; next(); });
+              })();
+            });
+          }
+          // Which worlds show them is asked first, so the question can name them (if that cannot be found out, it is asked as it always was).
+          this._say("Checking which worlds show " + (one ? "it" : "them") + " …");
+          lf().usedIn(its.map(function (i) { return i.id; }), function (err, res) { ask(err ? "" : self._usedSentence(its, res)); });
         },
 
         // The desktop app only: the shell asks which file, and keeps it where it lies. The file is added to the list; "place" puts it in the world.

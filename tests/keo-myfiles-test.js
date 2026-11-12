@@ -345,6 +345,8 @@ const addFile = (page, name, type, size, seed) => page.evaluate(async ([n, t, s,
     win = await until(async () => { const s = await readWin(frame); return s && /was sent to your browser/.test(s.status) ? s : null; });
     check('save a copy: the line says a copy was sent to the browser\'s downloads', !!win && /^A copy of tone\.wav was sent to your browser's downloads\.$/.test(win.status), win && win.status);
     check('save a copy: a file that is not in the library gets a sentence, and no download', (await keoCall(frame, 'library.fileSave', { id: 'A'.repeat(43) })).e === 'That file is not in this device\'s library.' && downloads.length === 1);
+    const showCopy = await keoCall(frame, 'library.fileShow', { id: ids.tone }), showNone = await keoCall(frame, 'library.fileShow', { id: 'A'.repeat(43) });
+    check('show on this computer: a copy kept inside keo has no place to show and says so, and so does a file that is not in the library (only a file kept where it lies, in the desktop app, can be shown)', showCopy.ok === false && /^"tone\.wav" is kept inside keo, so it has no place on this computer to show\.$/.test(showCopy.e) && showNone.ok === false && showNone.e === 'That file is not in this device\'s library.', [showCopy, showNone]);
     await click(frame, row(ids.tone) + ' [data-act=more]');
     await until(async () => { const s = await readWin(frame); return s && s.popItems.length ? s : null; });
     await click(frame, R('.mf-pop .mf-it:has-text("Remove from library")'));

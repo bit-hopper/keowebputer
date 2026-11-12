@@ -9,7 +9,9 @@
 //     text of the world (keo-worldtext.js `extract`), kept so a search does not have to open every body. A world saved by an earlier
 //     version has none until the first search, which makes it (`ensureText`). A body and its text are always written together.
 //   - `index`: one record per identity, { did, iv, ct }. Its plaintext is { worlds: { <name>: { id, savedAt, bytes, createdAt, tags,
-//     note, template?, t } }, last: <name or null>, prefs: { <key>: <value> } }. `t` says a text record exists for the world. `prefs` is the
+//     note, template?, t, fl? } }, last: <name or null>, prefs: { <key>: <value> } }. `t` says a text record exists for the world. `fl`
+//     ({ at, ids }) is the list of library files the world shows, read from its body the first time `usedIn` is asked after the world
+//     was saved, and read again only when `at` no longer equals the world's savedAt. `prefs` is the
 //     identity's own small settings (see PREF_KEYS): they are kept here because this record is already encrypted under the
 //     signed-in identity's key. The NAMES of worlds, their tags and notes are inside the encryption too, and so is which one was
 //     saved last, so what is readable without the key is only the identity's DID, record ids, ciphertext sizes and the order of writes.
@@ -284,6 +286,42 @@
     }
     return { made: made.length, skipped: skipped };
   }
+  // Which saved worlds show which library files. args: { ids: [file id, ...] } (at most 500). Resolves { <id>: [world name, ...] }, every
+  // asked id present (an empty list when no saved world shows it), names in order. Each world's list of files is kept in the sealed
+  // index as `fl: { at, ids }`, where `at` is the world's savedAt when the list was read from its body: a world saved again has a newer
+  // savedAt, so its list is read again and nothing else is (a world the person never saved since this existed is opened once, the first
+  // time it is asked). A body that cannot be read is skipped and counted in `unreadable`, never guessed at. Only a SAVED world counts: the
+  // world that is open and not saved yet is known to the world itself. The result also holds `_unreadable`, how many saved worlds could not
+  // be read (a key that cannot be mistaken for an id: ids are exactly 43 characters).
+  function usedIn(args) {
+    return serial(async function () {
+      var s = session(), wanted = Array.isArray(args && args.ids) ? args.ids.slice(0, 500).map(String) : [];
+      var index = await readIndex(s), out = Object.create(null), changed = false, unreadable = 0;
+      wanted.forEach(function (id) { out[id] = []; });
+      var names = Object.keys(index.worlds).sort();
+      for (var i = 0; i < names.length; i++) {
+        var w = index.worlds[names[i]];
+        if (!w.fl || w.fl.at !== w.savedAt || !Array.isArray(w.fl.ids)) {
+          try {
+            var b = await readBody(s, index, names[i]);
+            if (!b) { unreadable++; continue; }
+            w.fl = { at: w.savedAt, ids: needText().fileIds(b.doc) };
+            changed = true;
+          } catch (e) { unreadable++; continue; }
+        }
+        w.fl.ids.forEach(function (id) { if (out[id]) out[id].push(names[i]); });
+      }
+      if (changed) {
+        var rec = await sealIndex(s, index);
+        await tx(['index'], 'readwrite', function (t) { t.objectStore('index').put(rec); });
+      }
+      var res = {};
+      Object.keys(out).forEach(function (id) { res[id] = out[id]; });
+      res._unreadable = unreadable;
+      return res;
+    });
+  }
+
   // Finds worlds by name, tags, note and the text inside them (all of the words, any order; "quoted phrases"). Opens the text
   // records only, never a body, except to make the text of a world saved before texts existed. Nothing leaves this page but the
   // names, the tags and short snippets of the signed-in identity's own worlds.
@@ -429,7 +467,7 @@
   window.keoWorlds = {
     exportSealed: exportSealed, importSealed: importSealed,
     save: save, list: list, has: has, load: load, last: last, setLast: setLast, remove: remove, purge: purge,
-    rename: rename, setMeta: setMeta, duplicate: duplicate, search: search, prefsGet: prefsGet, prefsSet: prefsSet,
+    rename: rename, setMeta: setMeta, duplicate: duplicate, search: search, usedIn: usedIn, prefsGet: prefsGet, prefsSet: prefsSet,
     cleanTemplate: cleanTemplate
   };
 })();

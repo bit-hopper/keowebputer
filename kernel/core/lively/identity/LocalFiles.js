@@ -250,7 +250,8 @@ module("lively.identity.LocalFiles")
       THUMB_MAX_PDF: 50 * 1024 * 1024,
       THUMB_MAX_VIDEO: 500 * 1024 * 1024,
       THUMB_MAX_EPUB: 50 * 1024 * 1024,
-      THUMB_TIMEOUT: 30000,                      // longer than this for one small picture: give up (a video that never answers must not block the rest)
+      THUMB_VIDEO_HEAD: 64 * 1024 * 1024,        // for a video added before small pictures existed, only this much of its beginning is read back (a frame needs no more)
+      THUMB_TIMEOUT: 30000,                     // longer than this for one small picture: give up (a video that never answers must not block the rest)
 
       isPicture: function isPicture(type, size) { return /^image\//.test(String(type || "")) && size <= this.THUMB_MAX_SOURCE; },
 
@@ -337,6 +338,7 @@ module("lively.identity.LocalFiles")
         }
         timer = setTimeout(function () { done(new Error("That took too long.")); }, this.THUMB_TIMEOUT);
         if (job.source) draw(job.source);
+        else if (job.kind === "video") this.headBlobFor(job.id, this.THUMB_VIDEO_HEAD, function (err, blob) { if (err) return done(err); draw(blob); });
         else this.blobFor(job.id, function (err, blob) { if (err) return done(err); draw(blob); });
       },
 
@@ -455,6 +457,25 @@ module("lively.identity.LocalFiles")
       // goes. thenDo(err, { name, size }).
       save: function save(id, thenDo) { this._call("library.fileSave", { id: id }, thenDo, 10 * 60 * 1000); },
 
+      // Shows a file kept where it lies (see point) in its folder, in the computer's own file manager. The app does it; the answer is
+      // { ok: true } and never a place: the world is not told where a file is. A file kept inside keo gets an error sentence.
+      show: function show(id, thenDo) { this._call("library.fileShow", { id: id }, thenDo); },
+
+      // Which SAVED worlds show which files. ids: up to 500 file ids. thenDo(err, { <id>: [world name, ...], _unreadable: n }): an empty list
+      // for a file no saved world shows, and `_unreadable` the number of saved worlds that could not be read (never guessed at). The first
+      // call after worlds were saved may take a moment (the shell reads each world saved since the last call, once). The world that is open
+      // and not saved yet is not counted here: see worldHolds.
+      usedIn: function usedIn(ids, thenDo) { this._call("world.usedIn", { ids: ids }, thenDo, 5 * 60 * 1000); },
+
+      // Whether the world that is open right now shows the file (a picture, video, sound, PDF or document placed from the library), saved or not.
+      worldHolds: function worldHolds(id) {
+        var held = false;
+        try {
+          $world.withAllSubmorphsDo(function (m) { if (!held && m.shape && m.shape.fileHandle === HANDLE && m.shape.fileObjId === id) held = true; });
+        } catch (e) { /* no world to look at */ }
+        return held;
+      },
+
       // Takes the file out of the library (for one kept where it lies: only the record, never the file on the computer). thenDo(err, removed).
       // Worlds that show it will not be able to: nothing yet counts which worlds do.
       remove: function remove(id, thenDo) {
@@ -512,14 +533,23 @@ module("lively.identity.LocalFiles")
       info: function info(id, thenDo) { this._call("library.fileInfo", { id: id }, thenDo); },
 
       // A Blob of the whole file, made here from the slices (never one array of the whole file). thenDo(null, blob, info).
-      blobFor: function blobFor(id, thenDo) {
+      blobFor: function blobFor(id, thenDo) { this._readBlob(id, 0, thenDo); },
+
+      // Only the first maxBytes of the file (rounded up to whole chunks), as a Blob, so a very large file is not held whole in memory just
+      // to look at its beginning. thenDo(err, blob, info) like blobFor; blob.size < info.size when the file was cut. For a small picture
+      // of a video: a video whose index is at its start (the usual kind) plays from its beginning in such a piece; one that keeps its
+      // index at the end does not, and that is reported as an error like any video that cannot be played. Not a way to read a file.
+      headBlobFor: function headBlobFor(id, maxBytes, thenDo) { this._readBlob(id, maxBytes, thenDo); },
+
+      _readBlob: function _readBlob(id, maxBytes, thenDo) {
         var self = this;
         this.info(id, function (err, info) {
           if (err) return thenDo(err);
           if (!info) return thenDo(new Error("That file is not in this device's library."));
-          var parts = [], n = 0;
+          var parts = [], n = 0, last = info.chunks;
+          if (maxBytes > 0 && info.chunkBytes > 0) last = Math.min(info.chunks, Math.max(1, Math.ceil(maxBytes / info.chunkBytes)));
           (function next() {
-            if (n >= info.chunks) return thenDo(null, new Blob(parts, { type: info.type || "application/octet-stream" }), info);
+            if (n >= last) return thenDo(null, new Blob(parts, { type: info.type || "application/octet-stream" }), info);
             self._call("library.fileRead", { id: id, n: n }, function (err, bytes) {
               if (err) return thenDo(err);
               if (!bytes) return thenDo(new Error("A library file is damaged: a chunk is missing."));

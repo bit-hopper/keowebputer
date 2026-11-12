@@ -139,7 +139,7 @@ var KEEP = {};
 var DROP = {};
 ('script style iframe frame frameset object embed link meta noscript template head title svg math canvas audio video source track applet ' +
  'form input button select textarea option base param').split(' ').forEach(function(t) { DROP[t] = true; });
-var CLASSES = { center: 1, right: 1, justify: 1, title: 1, subtitle: 1, quote: 1 };
+var CLASSES = { center: 1, right: 1, justify: 1, title: 1, subtitle: 1, quote: 1, box: 1, note: 1, notes: 1, hf: 1 };
 
 function sanitizeInto(src, dst, out, ctx, depth) {
     for (var node = src.firstChild; node; node = node.nextSibling) {
@@ -281,12 +281,37 @@ function openEpub(zip) {
     });
 }
 
+// The links of a chapter that lead to another part of the book (or to a place in this one written with the file's name): the page
+// itself cannot follow them (it is shown with nothing allowed to run or to leave), so the viewer lists them and does the going.
+// Returns [{ text, to: chapter number, frag: place in that chapter, '' for its top }], one entry for each place (the first text wins).
+// Links to anywhere else are not listed.
+function epubLinks(html, book, from) {
+    var parsed = new DOMParser().parseFromString(String(html), 'text/html'), at = {}, seen = {}, list = [];
+    book.chapters.forEach(function(c, i) { at[c.path] = i; });
+    Array.prototype.forEach.call(parsed.querySelectorAll('a[href]'), function(a) {
+        if (list.length >= 200) return;
+        var href = a.getAttribute('href') || '';
+        if (!href || href.charAt(0) === '#' || /^[a-z][a-z0-9+.-]*:/i.test(href)) return;
+        var hash = href.indexOf('#'), to = at[resolvePath(book.chapters[from].path, href)];
+        if (to === undefined) return;
+        var frag = hash >= 0 ? href.slice(hash + 1) : '';
+        try { frag = decodeURIComponent(frag); } catch (e) { /* keep as it is */ }
+        if (!/^[A-Za-z0-9_:.-]{1,100}$/.test(frag)) frag = '';          // the same rule as the ids the page keeps
+        var text = a.textContent.replace(/\s+/g, ' ').trim().slice(0, 80) || book.chapters[to].label, key = to + '#' + frag;
+        if (seen[key]) return;
+        seen[key] = true;
+        list.push({ text: text, to: to, frag: frag });
+    });
+    return list;
+}
+
+// Promise<{ body: clean page text, links: epubLinks }>
 function epubChapter(zip, book, i) {
     var ch = book.chapters[i];
     return zip.read(ch.path, 16 << 20).then(function(u8) {
         var html = decodeText(u8), paths = {};
         imageSources(html).forEach(function(src) { if (!/^data:/i.test(src)) paths[src] = resolvePath(ch.path, src); });
-        return loadImages(zip, paths).then(function(images) { return sanitize(html, images); });
+        return loadImages(zip, paths).then(function(images) { return { body: sanitize(html, images), links: epubLinks(html, book, i) }; });
     });
 }
 
@@ -321,6 +346,24 @@ function docxToHtml(zip) {
         if (parts['word/_rels/document.xml.rels']) Array.prototype.forEach.call(parts['word/_rels/document.xml.rels'].getElementsByTagName('Relationship'), function(r) {
             rels[r.getAttribute('Id')] = r.getAttribute('Target');
         });
+        // the parts that hold the notes and the page header and footer (the first "default" header and the last "default" footer: the book of
+        // pages is shown as one flow, so each is shown once)
+        var R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+        function refPart(local, last) {
+            var found = null;
+            Array.prototype.forEach.call(doc.getElementsByTagNameNS(W, local), function(e) {
+                if (wattr(e, 'type') !== 'default' || (found && !last)) return;
+                var id = e.getAttribute('r:id') || e.getAttributeNS(R_NS, 'id');
+                if (id && rels[id] && !/^[a-z]+:/i.test(rels[id])) found = resolvePath('word/document.xml', rels[id]);
+            });
+            return found;
+        }
+        var headerPart = refPart('headerReference', false), footerPart = refPart('footerReference', true);
+        function loadExtras() {
+            return ['word/footnotes.xml', 'word/endnotes.xml', headerPart, footerPart].reduce(function(chain, name) {
+                return chain.then(function() { return name && /^word\/[A-Za-z0-9_.\-]+\.xml$/.test(name) ? part(name, 8 << 20) : null; }, function() { /* left out */ });
+            }, Promise.resolve());
+        }
         // the pictures first (reading them is the only part that waits), then the text is made in one go
         var want = {};
         Array.prototype.forEach.call(doc.getElementsByTagName('*'), function(e) {
@@ -328,10 +371,39 @@ function docxToHtml(zip) {
             var id = e.getAttribute('r:embed') || e.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
             if (id && rels[id] && !/^[a-z]+:/i.test(rels[id])) want[id] = resolvePath('word/document.xml', rels[id]);
         });
-        return loadImages(zip, want).then(function(images) {
+        return loadExtras().then(function() { return loadImages(zip, want); }).then(function(images) {
             var html = [], listStack = [], counters = {};
+            var plain = false;                  // true while a note, header or footer is made: their pictures belong to another part, so none is shown
+            var noteNo = {}, noteList = [], pendingBoxes = [];
             function closeLists(toLevel) {
                 while (listStack.length > toLevel) { html.push('</li></' + listStack.pop().tag + '>'); }
+            }
+            // The blocks of `parent` as text, with a list state of their own (a note or a text box inside a list must not close that list).
+            function renderBlock(parent, noPictures) {
+                var saved = { html: html, list: listStack, plain: plain, boxes: pendingBoxes };
+                html = []; listStack = []; pendingBoxes = []; plain = plain || !!noPictures;
+                try { block(parent); closeLists(0); return html.join(''); }
+                finally { html = saved.html; listStack = saved.list; plain = saved.plain; pendingBoxes = saved.boxes; }
+            }
+            // The text boxes inside a run's drawing or picture (the outermost ones; the "alternate content" of a drawing holds the same box
+            // twice, once as a drawing and once as the older kind, so the first choice is used when there is one).
+            function boxesIn(el) {
+                var scope = el;
+                if (el.localName === 'AlternateContent') scope = kids(el, 'Choice')[0] || kids(el, 'Fallback')[0] || el;
+                Array.prototype.forEach.call(scope.getElementsByTagNameNS(W, 'txbxContent'), function(tx) {
+                    for (var up = tx.parentNode; up && up !== scope; up = up.parentNode) if (up.localName === 'txbxContent') return;
+                    if (pendingBoxes.length < 20) pendingBoxes.push(renderBlock(tx, plain));
+                });
+            }
+            function flushBoxes() {
+                while (pendingBoxes.length) { var b = pendingBoxes.shift(); if (b) html.push('<blockquote class="box">' + b + '</blockquote>'); }
+            }
+            function noteRef(kind, id) {
+                var key = kind + id;
+                var first = !noteNo[key];
+                if (first) { if (noteList.length >= 500) return ''; noteList.push({ kind: kind, id: id }); noteNo[key] = noteList.length; }
+                var n = noteNo[key];
+                return '<sup><a ' + (first ? 'id="ref-' + n + '" ' : '') + 'href="#note-' + n + '">[' + n + ']</a></sup>';      // only the first mention carries the id the note links back to
             }
             function isBullet(numId, lvl) {
                 var levels = abstract[nums[numId]], f = levels && levels[lvl];
@@ -345,8 +417,11 @@ function docxToHtml(zip) {
                     else if (c.localName === 'tab') out += '&emsp;';
                     else if (c.localName === 'br' || c.localName === 'cr') out += wattr(c, 'type') === 'page' ? '<hr>' : '<br>';
                     else if (c.localName === 'noBreakHyphen') out += '-';
+                    else if (c.localName === 'footnoteReference' || c.localName === 'endnoteReference') out += noteRef(c.localName === 'endnoteReference' ? 'e' : 'f', wattr(c, 'id'));
+                    else if (c.localName === 'AlternateContent' || c.localName === 'pict') boxesIn(c);
                     else if (c.localName === 'drawing') {
-                        Array.prototype.forEach.call(c.getElementsByTagName('*'), function(b) {
+                        boxesIn(c);
+                        if (!plain) Array.prototype.forEach.call(c.getElementsByTagName('*'), function(b) {
                             if (b.localName !== 'blip') return;
                             var id = b.getAttribute('r:embed') || b.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
                             if (images[id]) out += '<img src="' + images[id] + '" alt="">';
@@ -375,7 +450,8 @@ function docxToHtml(zip) {
                 });
                 return out;
             }
-            function paragraph(p) {
+            function paragraph(p) { paragraphCore(p); flushBoxes(); }
+            function paragraphCore(p) {
                 var pp = kids(p, 'pPr')[0], style = '', numId = null, lvl = '0', align = '';
                 if (pp) {
                     var ps = kids(pp, 'pStyle')[0];
@@ -434,8 +510,27 @@ function docxToHtml(zip) {
             }
             var body = doc.getElementsByTagNameNS(W, 'body')[0];
             if (!body) throw new Error('This is not a valid word-processor file (it has no text in it).');
+            // The header, shown once at the top. A field in it (a page number, a date) shows the text last stored in the field, which is what the
+            // file shows when it is opened without recalculating; nothing is calculated here.
+            function pageEdge(partName, tag) {
+                var root = partName && parts[partName] && parts[partName].documentElement;
+                if (!root || !String(root.textContent || '').trim()) return;
+                var inner = renderBlock(root, true);
+                if (inner) html.push('<' + tag + ' class="hf">' + inner + '</' + tag + '>');
+            }
+            pageEdge(headerPart, 'header');
             block(body);
             closeLists(0);
+            if (noteList.length) {
+                html.push('<section class="notes"><hr>');
+                noteList.forEach(function(n, i) {
+                    var src = parts[n.kind === 'e' ? 'word/endnotes.xml' : 'word/footnotes.xml'], el = null;
+                    if (src) Array.prototype.forEach.call(src.getElementsByTagNameNS(W, n.kind === 'e' ? 'endnote' : 'footnote'), function(x) { if (!el && wattr(x, 'id') === n.id) el = x; });
+                    html.push('<div class="note" id="note-' + (i + 1) + '"><sup><a href="#ref-' + (i + 1) + '">' + (i + 1) + '</a></sup> ' + (el ? renderBlock(el, true) : '') + '</div>');
+                });
+                html.push('</section>');
+            }
+            pageEdge(footerPart, 'footer');
             return sanitize(html.join(''), images);
         });
     });
@@ -452,6 +547,9 @@ var STYLE =
     'pre,code{font-family:Consolas,"Courier New",monospace;font-size:.92em}pre{background:#f5f5f7;padding:10px 12px;overflow:auto;border-radius:6px}code{background:#f5f5f7;padding:0 .25em;border-radius:3px}pre code{background:none;padding:0}' +
     'pre.plain{background:none;padding:0;white-space:pre-wrap;font-size:.95em;line-height:1.55}' +
     'blockquote{margin:.9em 0;padding:.1em 1em;border-left:4px solid #bfdbfe;color:#444}' +
+    'blockquote.box{border:1px solid #d4d4d8;border-left:4px solid #94a3b8;background:#fafafa;color:#1d1d1f}' +
+    '.hf{color:#666;font-size:.88em;margin:0 0 1.2em;padding-bottom:.4em;border-bottom:1px solid #e5e5e5}footer.hf{margin:1.4em 0 0;padding:.4em 0 0;border-bottom:0;border-top:1px solid #e5e5e5}' +
+    '.notes{font-size:.9em;color:#333}.note{margin:.35em 0}.note p{display:inline;margin:0}.note p+p{display:block;margin:.3em 0 0 1.4em}' +
     'table{border-collapse:collapse;margin:1em 0;max-width:100%}td,th{border:1px solid #ccc;padding:4px 8px;vertical-align:top}th{background:#f5f5f7}' +
     'hr{border:0;border-top:1px solid #ddd;margin:1.5em 0}';
 
@@ -488,6 +586,8 @@ function epubCoverOf(u8) {
     });
 }
 lively.data.DocumentUpload.epubCoverOf = epubCoverOf;
+// The word-processor converter, for the tests (the viewer reaches it through buildDocumentContainer). Promise<clean page text>.
+lively.data.DocumentUpload.docxToHtml = function(u8) { return docxToHtml(readZip(u8)); };
 
 var MESSAGES = { loading: 'Loading…' };
 
@@ -511,6 +611,7 @@ Object.extend(lively.data.FileUpload, {
         }
         var prev = button('‹ Prev', 'Previous part'), next = button('Next ›', 'Next part');
         var pick = document.createElement('select'); pick.style.cssText = 'max-width:55%;margin:0 6px';
+        var links = document.createElement('select'); links.style.cssText = 'max-width:30%;margin:0 6px;display:none'; links.title = 'Links in this part of the book';
         var smaller = button('A−', 'Smaller text'), bigger = button('A+', 'Larger text');
         var label = document.createElement('span');
         label.style.cssText = 'font:12px Arial,sans-serif;margin:0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%';
@@ -526,8 +627,20 @@ Object.extend(lively.data.FileUpload, {
         container.style.cssText = 'width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;background:#fff';
         container.appendChild(bar); container.appendChild(frame);
 
-        var bodyHtml = '';
-        function show(body) { bodyHtml = body; frame.srcdoc = pageHtml(body, size); }
+        var bodyHtml = '', blobUrl = null;
+        function dropBlob() { if (blobUrl) { try { URL.revokeObjectURL(blobUrl); } catch (e) { /* gone */ } blobUrl = null; } }
+        // `frag`: the id of a place in the page to start at. A page given as text cannot say where to start; a blob address made here can
+        // (the browser scrolls to the place by itself, nothing runs: the frame stays as closed as before). The same page and the same
+        // limits either way.
+        function show(body, frag) {
+            bodyHtml = body; dropBlob();
+            var page = pageHtml(body, size);
+            if (frag && /^[A-Za-z0-9_:.-]{1,100}$/.test(frag)) {
+                blobUrl = URL.createObjectURL(new Blob([page], { type: 'text/html' }));
+                frame.removeAttribute('srcdoc');
+                frame.src = blobUrl + '#' + frag;
+            } else { frame.removeAttribute('src'); frame.srcdoc = page; }
+        }
         function failed(err) { label.textContent = 'This document could not be opened.'; show('<p>' + esc(String(err && err.message || err)) + '</p>'); }
         function stop(btn, fn) { btn.addEventListener('click', function(e) { e.stopPropagation(); fn(); }); }
         stop(smaller, function() { size = Math.max(60, size - 10); if (bodyHtml) show(bodyHtml); });
@@ -554,13 +667,27 @@ Object.extend(lively.data.FileUpload, {
                         var o = document.createElement('option'); o.value = i; o.textContent = ch.label; pick.appendChild(o);
                     });
                     left.removeChild(label);
-                    left.appendChild(prev); left.appendChild(pick); left.appendChild(next);
-                    function go(i) {
+                    left.appendChild(prev); left.appendChild(pick); left.appendChild(next); left.appendChild(links);
+                    var targets = [];
+                    function listLinks(found) {
+                        targets = found;
+                        links.textContent = '';
+                        links.style.display = found.length ? '' : 'none';
+                        if (!found.length) return;
+                        var head = document.createElement('option'); head.value = ''; head.textContent = 'Links (' + found.length + ')'; links.appendChild(head);
+                        found.forEach(function(l, n) { var o = document.createElement('option'); o.value = String(n); o.textContent = l.text + ' › ' + book.chapters[l.to].label; links.appendChild(o); });
+                        links.value = '';
+                    }
+                    var going = 0;
+                    function go(i, frag) {
                         at = Math.max(0, Math.min(book.chapters.length - 1, i));
                         pick.value = String(at);
                         prev.disabled = at === 0; next.disabled = at === book.chapters.length - 1;
-                        epubChapter(zip, book, at).then(show, failed);
+                        var turn = ++going;
+                        epubChapter(zip, book, at).then(function(r) { if (turn !== going) return; listLinks(r.links); show(r.body, frag); }, failed);
                     }
+                    links.addEventListener('change', function() { var l = targets[parseInt(links.value, 10)]; if (l) go(l.to, l.frag); });
+                    links.addEventListener('mousedown', function(e) { e.stopPropagation(); });
                     stop(prev, function() { go(at - 1); }); stop(next, function() { go(at + 1); });
                     pick.addEventListener('change', function() { go(parseInt(pick.value, 10)); });
                     pick.addEventListener('mousedown', function(e) { e.stopPropagation(); });

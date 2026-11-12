@@ -22,6 +22,30 @@
   var MAX_CHARS = 256 * 1024;         // what is kept per world; a guard against a runaway world, not a quota
   var SCRIPT = /<script\b[^>]*\btype\s*=\s*["']text\/x-lively-world["'][^>]*>([\s\S]*?)<\/script>/i;
 
+  // The library files a saved page shows: the ids of the objects in its registry that hold { fileHandle: 'keo:local', fileObjId: <id> }
+  // (a picture, video, sound, PDF or document morph that was placed from the library). Read from the data, never by searching the page's
+  // text: the same id also appears in the markup and state of an open My files window, which is not a use. Sorted, each id once, at most
+  // MAX_FILES; a page with no world data, or data that is not valid, gives [].
+  var FILE_ID = /^[A-Za-z0-9_-]{43}$/;
+  var MAX_FILES = 5000;
+  function fileIds(doc) {
+    var m = SCRIPT.exec(String(doc == null ? '' : doc));
+    if (!m) return [];
+    var data;
+    try { data = JSON.parse(m[1]); } catch (e) { return []; }
+    var reg = data && data.registry;
+    if (!reg || typeof reg !== 'object') return [];
+    var out = [], seen = Object.create(null);
+    Object.keys(reg).forEach(function (k) {
+      var o = reg[k];
+      if (!o || typeof o !== 'object' || o.fileHandle !== 'keo:local' || typeof o.fileObjId !== 'string') return;
+      if (!FILE_ID.test(o.fileObjId) || seen[o.fileObjId] || out.length >= MAX_FILES) return;
+      seen[o.fileObjId] = 1;
+      out.push(o.fileObjId);
+    });
+    return out.sort();
+  }
+
   function extract(doc, maxChars) {
     var limit = maxChars || MAX_CHARS, m = SCRIPT.exec(String(doc == null ? '' : doc));
     if (!m) return '';
@@ -124,5 +148,5 @@
     return hits.sort(function (a, b) { return b.score - a.score || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); });
   }
 
-  return { extract: extract, search: search, terms: terms, fold: fold, MAX_CHARS: MAX_CHARS };
+  return { extract: extract, search: search, terms: terms, fold: fold, fileIds: fileIds, MAX_CHARS: MAX_CHARS };
 });

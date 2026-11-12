@@ -805,6 +805,22 @@
     if (h !== m.hashes[n]) throw new Error(changedSentence(m));
     return bytes.buffer;
   }
+  // args: { id }. Asks the app to show a file that is kept where it lies, in its folder in the system's file manager. Resolves { ok: true }
+  // and NOTHING ELSE: the grant and the path stay in this page and the app, the world that asked never sees either. A file kept inside
+  // keo has no place on this computer, and says so. The app turns away a grant it did not make and a file that is gone.
+  function fileShow(args) {
+    return serial(async function () {
+      var s = session(), m = await openManifest(s, cidOf(args && args.id));
+      if (!m) throw new Error('That file is not in this device\'s library.');
+      if (m.kind !== 'path') throw new Error('"' + m.name + '" is kept inside keo, so it has no place on this computer to show.');
+      if (!(window.keoHost && window.keoHost.available())) throw new Error('"' + m.name + '" is kept on another computer or app and cannot be reached here.');
+      var r;
+      try { r = await window.keoHost.post('file', { op: 'show', path: m.point.path, mac: m.point.mac }); }
+      catch (e) { throw new Error('"' + m.name + '" is stored on this computer, and the app could not be reached to show it.'); }
+      if (r.error) throw new Error(pointedSentence(m, r.error));
+      return { ok: true };
+    });
+  }
   // args: { cid, name, type, size, mtimeMs, point: { path, mac }, hashes: [SHA-256 of each chunk, base64url] }: all made by keo-point.js,
   // which read the whole file through the app. For code in this page only; NOT a bridge op, the world never supplies any of it. Keeps a
   // copy if the library already has these bytes as one (resolves { existed: true, pointed: false }); a pointed record for the same bytes is
@@ -1016,7 +1032,7 @@
   }
 
   window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob,
-    fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSave: fileSave, thumbPut: thumbPut, thumbGet: thumbGet, fileSearch: fileSearch, fileRemove: fileRemove,
+    fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSave: fileSave, fileShow: fileShow, thumbPut: thumbPut, thumbGet: thumbGet, fileSearch: fileSearch, fileRemove: fileRemove,
     fileRename: fileRename, fileMove: fileMove, folderCreate: folderCreate, folderRename: folderRename, folderDelete: folderDelete, folderList: folderList,
     exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile, space: space, pointStore: pointStore,
     reset: reset, purge: purge, CHUNK_BYTES: CHUNK_BYTES };
