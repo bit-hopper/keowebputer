@@ -129,8 +129,15 @@
     'library.fileAbort': function (a) { return window.keoLibrary.fileAbort({ upload: a.upload }); },
     'library.fileInfo': function (a) { return window.keoLibrary.fileInfo({ id: a.id }); },
     'library.fileRead': function (a) { return window.keoLibrary.fileRead({ id: a.id, n: a.n }); },
-    'library.fileSearch': function (a) { return window.keoLibrary.fileSearch({ query: a.query, type: a.type, limit: a.limit, offset: a.offset }); },
+    'library.fileSearch': function (a) { return window.keoLibrary.fileSearch({ query: a.query, type: a.type, folder: a.folder, sort: a.sort, limit: a.limit, offset: a.offset }); },
     'library.fileRemove': function (a) { return window.keoLibrary.fileRemove({ id: a.id }); },
+    // The names and folders of the files (the My files window): a name and a folder are fields of the sealed record, changed here.
+    'library.fileRename': function (a) { return window.keoLibrary.fileRename({ id: a.id, name: a.name }); },
+    'library.fileMove': function (a) { return window.keoLibrary.fileMove({ ids: a.ids, folder: a.folder }); },
+    'library.folderCreate': function (a) { return window.keoLibrary.folderCreate({ name: a.name, parent: a.parent }); },
+    'library.folderRename': function (a) { return window.keoLibrary.folderRename({ id: a.id, name: a.name }); },
+    'library.folderDelete': function (a) { return window.keoLibrary.folderDelete({ id: a.id }); },
+    'library.folderList': function () { return window.keoLibrary.folderList(); },
     'library.space': function () { return window.keoLibrary.space(); },
     // A file kept where it lies (desktop app only, keo-point.js). The world can only ASK: this page puts the question to the person, opens
     // the system's file chooser on their click and does the reading. No path comes in or goes out; the answer is what a library file is.

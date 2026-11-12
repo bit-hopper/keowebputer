@@ -317,7 +317,7 @@ const SETUP = () => {
     r = await S({ query: 'résumé' }); check('a name with accents is found', r.ok && r.r.total === 1, r);
     r = await S({ query: 'RÉSUMÉ' }); check('and in capitals', r.ok && r.r.total === 1, r);
     r = await S({ query: '' }); check('no words lists every file, the newest first', r.ok && r.r.total === 6 && r.r.items[0].name === 'report final.pdf' && names.every(([n]) => r.r.items.some((i) => i.name === n)), r);
-    check('an item is only the id, name, type, size and date', r.ok && Object.keys(r.r.items[0]).sort().join(',') === 'created,id,name,size,type', r.ok && r.r.items[0]);
+    check('an item is only the id, name, type, size, date and folder', r.ok && Object.keys(r.r.items[0]).sort().join(',') === 'created,folder,id,name,size,type', r.ok && r.r.items[0]);
     r = await S({ type: 'application/pdf' }); check('a kind of file narrows the list (no words at all)', r.ok && r.r.total === 2, r);
     r = await S({ type: 'IMAGE/' }); check('the start of a kind is enough, in any case', r.ok && r.r.total === 1 && r.r.items[0].name === 'Holiday Photos 2024.png', r);
     r = await S({ type: 'video/' }); check('a kind with no files finds none', r.ok && r.r.total === 0, r);

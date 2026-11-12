@@ -52,6 +52,13 @@
   // What kind of object a document may be. The runtime's apps use these; anything else is refused so the store is not a general
   // place for the world to put arbitrary data under another name.
   var TYPES = ['folder', 'book', 'album'];
+  // The folders of the My files window are ONE sealed document under a fixed id (so it is found without opening every document) of
+  // its own kind. The world cannot write it through `put` (the kind is not in TYPES and the id is held back): only folderCreate,
+  // folderRename and folderDelete do, so the two levels and the names stay as checked. A file's folder is a field of its sealed manifest.
+  var FOLDERS_ID = 'keofilefldrs';
+  var FOLDERS_TYPE = 'filefolders';
+  var MAX_FOLDERS = 500, MAX_FOLDER_NAME = 100, MAX_MOVE = 500;
+  var UNSORTED = 'unsorted';                        // in place of a folder id: "in no folder"
 
   function openDb() {
     return new Promise(function (res, rej) {
@@ -158,6 +165,7 @@
       if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new Error('A library item must be an object.');
       if (doc.objId !== objId) throw new Error('A library item must carry the id it is stored under.');
       if (doc.did !== s.did) throw new Error('A library item must belong to the signed-in identity.');
+      if (objId === FOLDERS_ID) throw new Error('That id is kept for the folders of the files.');
       if (TYPES.indexOf(doc.type) < 0) throw new Error('Not a kind of library item: ' + String(doc.type).slice(0, 40));
       var text = JSON.stringify(doc);
       if (text.length > MAX_DOC) throw new Error('A library item can be at most ' + (MAX_DOC / 1024 / 1024) + ' MB.');
@@ -438,9 +446,30 @@
   // so a search opens them as it goes instead of keeping a second, readable index of names that would have to be kept in step and
   // protected. Files of the older single-record kind have no name and are not found.
   function fold(v) { return String(v == null ? '' : v).normalize('NFC').toLowerCase(); }
-  // args: { query, type, limit, offset }. query: words that must ALL appear in the name, in any case ('' matches every file);
-  // type: a media type or the start of one ('image/', 'application/pdf'); newest first. Resolves
-  // { items: [{ id, name, type, size, created }], total (all matches), unreadable (records that could not be opened and were skipped) }.
+  // Every manifest of the identity, opened: [{ cid, m, rec }], and how many could not be opened (counted, not listed). Not serial: the
+  // caller already is.
+  async function allManifests(s) {
+    var recs = await tx(['files'], 'readonly', function (t) { var r = t.objectStore('files').index('did').getAll(IDBKeyRange.only(s.did)); return function () { return r.result; }; });
+    var out = [], unreadable = 0, prefix = s.did + '|';
+    for (var i = 0; i < recs.length; i++) {
+      var cid = String(recs[i].id).slice(prefix.length);
+      try { out.push({ cid: cid, m: await openRecord(s, recs[i], cid), rec: recs[i] }); } catch (e) { unreadable++; }
+    }
+    return { files: out, unreadable: unreadable };
+  }
+  function extOf(name) { var i = String(name).lastIndexOf('.'); return i > 0 ? fold(String(name).slice(i + 1)) : ''; }
+  // Orders for the list: 'added' (newest first, the default), 'name', 'size' (largest first), 'type' (by the name's ending, then newest).
+  var SORTS = {
+    added: function (a, b) { return a.created < b.created ? 1 : a.created > b.created ? -1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0; },
+    name: function (a, b) { var x = fold(a.name), y = fold(b.name); return x < y ? -1 : x > y ? 1 : SORTS.added(a, b); },
+    size: function (a, b) { return b.size - a.size || SORTS.added(a, b); },
+    type: function (a, b) { var x = extOf(a.name), y = extOf(b.name); return x < y ? -1 : x > y ? 1 : SORTS.added(a, b); }
+  };
+  // args: { query, type, folder, sort, limit, offset }. query: words that must ALL appear in the name, in any case ('' matches every
+  // file); type: a media type or the start of one ('image/', 'application/pdf'); folder: left out for every file, 'unsorted' for the
+  // files in no folder, or a folder's id for the files in it AND in the folders inside it; sort: see SORTS. Resolves
+  // { items: [{ id, name, type, size, created, folder (the folder's id or null), pointed? }], total (all matches), unreadable (records
+  // that could not be opened and were skipped) }.
   function fileSearch(args) {
     return serial(async function () {
       var s = session(); args = args || {};
@@ -450,20 +479,208 @@
       if (terms.length > MAX_TERMS) throw new Error('A search can have at most ' + MAX_TERMS + ' words.');
       var type = fold(args.type).trim();
       if (type.length > 100) throw new Error('That is not a kind of file.');
+      var sortBy = args.sort == null ? 'added' : args.sort;
+      if (!Object.prototype.hasOwnProperty.call(SORTS, sortBy)) throw new Error('That is not a way to sort files.');
       var limit = typeof args.limit === 'number' && Math.floor(args.limit) === args.limit && args.limit >= 1 ? Math.min(args.limit, MAX_RESULTS) : DEFAULT_RESULTS;
       var offset = typeof args.offset === 'number' && Math.floor(args.offset) === args.offset && args.offset >= 0 ? args.offset : 0;
-      var recs = await tx(['files'], 'readonly', function (t) { var r = t.objectStore('files').index('did').getAll(IDBKeyRange.only(s.did)); return function () { return r.result; }; });
-      var found = [], unreadable = 0, prefix = s.did + '|';
-      for (var i = 0; i < recs.length; i++) {
-        var rec = recs[i], cid = String(rec.id).slice(prefix.length), m;
-        try { m = await openRecord(s, rec, cid); } catch (e) { unreadable++; continue; }
-        var name = fold(m.name);
-        if (type && String(m.type).indexOf(type) !== 0) continue;
-        if (terms.some(function (w) { return name.indexOf(w) < 0; })) continue;
-        found.push(m.kind === 'path' ? { id: cid, name: m.name, type: m.type, size: m.size, created: m.created, pointed: true } : { id: cid, name: m.name, type: m.type, size: m.size, created: m.created });
+      var live = liveFolders(await loadFolders(s)), want = null;      // want: the set of folder ids that count, null = any
+      if (args.folder != null && args.folder !== '') {
+        if (args.folder === UNSORTED) want = { none: true };
+        else { var f = folderById(live, args.folder); want = {}; live.forEach(function (x) { if (x.id === f.id || x.parent === f.id) want[x.id] = true; }); }
       }
-      found.sort(function (a, b) { return a.created < b.created ? 1 : a.created > b.created ? -1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
-      return { items: found.slice(offset, offset + limit), total: found.length, unreadable: unreadable };
+      var all = await allManifests(s), found = [];
+      all.files.forEach(function (e) {
+        var m = e.m, name = fold(m.name), fid = folderOf(m, live);
+        if (type && String(m.type).indexOf(type) !== 0) return;
+        if (terms.some(function (w) { return name.indexOf(w) < 0; })) return;
+        if (want && (want.none ? fid !== null : !(fid !== null && want[fid]))) return;
+        var item = { id: e.cid, name: m.name, type: m.type, size: m.size, created: m.created, folder: fid };
+        if (m.kind === 'path') item.pointed = true;
+        found.push(item);
+      });
+      found.sort(SORTS[sortBy]);
+      return { items: found.slice(offset, offset + limit), total: found.length, unreadable: all.unreadable };
+    });
+  }
+
+  // ---- names, folders and moving ------------------------------------------------------------------------------------------------
+  // A name or a folder is only a field of a sealed record, so each of these ops opens the record, changes the field and seals it
+  // again with a fresh IV; no chunk is touched. They read and write in separate steps (the crypto cannot run inside a transaction),
+  // so two tabs of the same identity changing the SAME file at the same moment can lose one change; the ops of one tab never overlap.
+  async function sealManifest(s, cid, m) {
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: enc.encode(fileAad(s.did, cid)) }, s.key, enc.encode(JSON.stringify(m))));
+    var rec = { id: idOf(s.did, cid), did: s.did, iv: kd.b64u(iv), ct: ct };
+    await openRecord(s, rec, cid);                                  // what is about to be kept must open again, or it is not kept
+    return rec;
+  }
+  // The folders: [{ id, name, parent (null for the top level, else a top-level folder's id), created, deleted? }]. A deleted folder
+  // stays as a tombstone (so a later merge of another device's copy cannot bring it back) and is never listed or counted.
+  async function loadFolders(s) {
+    var rec = await tx(['docs'], 'readonly', function (t) { return get(t, 'docs', idOf(s.did, FOLDERS_ID)); });
+    if (!rec || rec.did !== s.did) return [];
+    var doc;
+    try { doc = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(rec.iv), additionalData: enc.encode(aad(s.did, FOLDERS_ID)) }, s.key, rec.ct))); }
+    catch (e) { throw new Error('The folders could not be decrypted (wrong identity, or the record was changed).'); }
+    if (!doc || doc.type !== FOLDERS_TYPE || !Array.isArray(doc.folders) || !doc.folders.every(function (f) {
+      return f && OBJ_ID.test(f.id) && typeof f.name === 'string' && typeof f.created === 'string' && (f.parent === null || OBJ_ID.test(f.parent)); })) throw new Error('The folders are damaged.');
+    return doc.folders;
+  }
+  async function sealFolders(s, list) {
+    var text = JSON.stringify({ objId: FOLDERS_ID, did: s.did, type: FOLDERS_TYPE, folders: list });
+    if (text.length > MAX_DOC) throw new Error('There are too many folders.');
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: enc.encode(aad(s.did, FOLDERS_ID)) }, s.key, enc.encode(text)));
+    return { id: idOf(s.did, FOLDERS_ID), did: s.did, iv: kd.b64u(iv), ct: ct };
+  }
+  function liveFolders(list) { return list.filter(function (f) { return !f.deleted; }); }
+  function folderById(live, id) {
+    id = String(id == null ? '' : id);
+    if (!OBJ_ID.test(id)) throw new Error('That is not a valid folder.');
+    var f = live.filter(function (x) { return x.id === id; })[0];
+    if (!f) throw new Error('That folder is not there any more.');
+    return f;
+  }
+  // The folder a file is in, or null: a field naming a folder that is gone (deleted, or never carried over) means "in no folder".
+  function folderOf(m, live) { return m.folder && live.some(function (f) { return f.id === m.folder; }) ? m.folder : null; }
+  function folderName(v) {
+    var n = String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+    if (!n) throw new Error('A folder needs a name.');
+    return n.slice(0, MAX_FOLDER_NAME);
+  }
+  function fileName(v) {
+    var n = String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').split(/[\\/]/).pop().trim();
+    if (!n) throw new Error('A file needs a name.');
+    return n.slice(0, MAX_NAME);
+  }
+  // Two folders in the same place may not share a name (in any case): a move to "Holiday" must mean one folder.
+  function nameTaken(live, parent, name, exceptId) {
+    var w = fold(name);
+    return live.some(function (f) { return f.parent === parent && f.id !== exceptId && fold(f.name) === w; });
+  }
+  // null (the top level) or the id of a live top-level folder. Folders go two levels deep and no deeper.
+  function parentOf(live, v) {
+    if (v == null || v === '') return null;
+    var f = folderById(live, v);
+    if (f.parent !== null) throw new Error('Folders can go only two levels deep.');
+    return f.id;
+  }
+
+  // args: { id, name }. Changes the name of a file (a label only, for a file kept where it lies). The extension is the screen's to keep.
+  // Resolves { id, name, folder, same }: `same` is how many OTHER files in the same folder already have this name (allowed; the screen
+  // warns).
+  function fileRename(args) {
+    return serial(async function () {
+      var s = session(), cid = cidOf(args && args.id), name = fileName(args.name), m = await openManifest(s, cid);
+      if (!m) {
+        var old = await tx(['blobs'], 'readonly', function (t) { return get(t, 'blobs', idOf(s.did, cid)); });
+        throw new Error(old && old.did === s.did ? 'That file was added before files had names, so it cannot be renamed yet.' : 'That file is not in the library.');
+      }
+      m.name = name;
+      var rec = await sealManifest(s, cid, m);
+      await tx(['files'], 'readwrite', function (t) { t.objectStore('files').put(rec); });
+      var live = liveFolders(await loadFolders(s)), fid = folderOf(m, live), w = fold(name);
+      var all = await allManifests(s);
+      var same = all.files.filter(function (e) { return e.cid !== cid && folderOf(e.m, live) === fid && fold(e.m.name) === w; }).length;
+      return { id: cid, name: name, folder: fid, same: same };
+    });
+  }
+  // args: { ids: [file ids], folder: a folder's id or 'unsorted' }. Puts the files in that folder. All of them or none. Resolves
+  // { moved, unchanged (already there), missing (not in the library, or of the older kind, which has no record to put it in) }.
+  function fileMove(args) {
+    return serial(async function () {
+      var s = session(); args = args || {};
+      if (!Array.isArray(args.ids) || !args.ids.length) throw new Error('Choose the files to move.');
+      if (args.ids.length > MAX_MOVE) throw new Error('At most ' + MAX_MOVE + ' files can be moved at once.');
+      var live = liveFolders(await loadFolders(s));
+      var target = args.folder === UNSORTED ? null : folderById(live, args.folder).id;
+      var seen = {}, recs = [], out = { moved: 0, unchanged: 0, missing: 0 };
+      for (var i = 0; i < args.ids.length; i++) {
+        var cid = cidOf(args.ids[i]);
+        if (seen[cid]) continue;
+        seen[cid] = true;
+        var m = await openManifest(s, cid);
+        if (!m) { out.missing++; continue; }
+        if (folderOf(m, live) === target && (m.folder || null) === target) { out.unchanged++; continue; }
+        if (target === null) delete m.folder; else m.folder = target;
+        recs.push(await sealManifest(s, cid, m));
+        out.moved++;
+      }
+      if (recs.length) await tx(['files'], 'readwrite', function (t) { recs.forEach(function (r) { t.objectStore('files').put(r); }); });
+      return out;
+    });
+  }
+  // args: { name, parent }. Resolves { id, name, parent }.
+  function folderCreate(args) {
+    return serial(async function () {
+      var s = session(); args = args || {};
+      var name = folderName(args.name), list = await loadFolders(s), live = liveFolders(list), parent = parentOf(live, args.parent);
+      if (live.length >= MAX_FOLDERS) throw new Error('There can be at most ' + MAX_FOLDERS + ' folders.');
+      if (nameTaken(live, parent, name)) throw new Error('There is already a folder called "' + name + '" here.');
+      var id = kd.b64u(crypto.getRandomValues(new Uint8Array(9)));       // 9 bytes make exactly the 12 characters of an id
+      list.push({ id: id, name: name, parent: parent, created: new Date().toISOString() });
+      var rec = await sealFolders(s, list);
+      await tx(['docs'], 'readwrite', function (t) { t.objectStore('docs').put(rec); });
+      return { id: id, name: name, parent: parent };
+    });
+  }
+  // args: { id, name }. Resolves { id, name, parent }.
+  function folderRename(args) {
+    return serial(async function () {
+      var s = session(); args = args || {};
+      var list = await loadFolders(s), live = liveFolders(list), f = folderById(live, args.id), name = folderName(args.name);
+      if (nameTaken(live, f.parent, name, f.id)) throw new Error('There is already a folder called "' + name + '" here.');
+      f.name = name;
+      var rec = await sealFolders(s, list);
+      await tx(['docs'], 'readwrite', function (t) { t.objectStore('docs').put(rec); });
+      return { id: f.id, name: name, parent: f.parent };
+    });
+  }
+  // args: { id }. Removes a folder and never a file: its files, and the folders inside it, go up to the folder above (or to no folder).
+  // A folder that comes up to the top level under a name already there there is renamed "Name (2)". The files and the folders change
+  // together or not at all. Resolves { id, files (moved up), folders (moved up), parent }.
+  function folderDelete(args) {
+    return serial(async function () {
+      var s = session(); args = args || {};
+      var list = await loadFolders(s), live = liveFolders(list), f = folderById(live, args.id), up = f.parent;
+      var all = await allManifests(s), recs = [], n = 0, sub = 0;
+      for (var i = 0; i < all.files.length; i++) {
+        var e = all.files[i];
+        if (e.m.folder !== f.id) continue;
+        if (up === null) delete e.m.folder; else e.m.folder = up;
+        recs.push(await sealManifest(s, e.cid, e.m));
+        n++;
+      }
+      live.forEach(function (x) {
+        if (x.parent !== f.id) return;
+        var name = x.name, k = 2;
+        function taken(w) { return live.some(function (y) { return y.id !== x.id && y.id !== f.id && y.parent === up && fold(y.name) === fold(w); }); }   // f is going away
+        while (taken(name)) name = x.name + ' (' + (k++) + ')';
+        x.name = name; x.parent = up; sub++;
+      });
+      f.deleted = new Date().toISOString();
+      var fr = await sealFolders(s, list);
+      await tx(['files', 'docs'], 'readwrite', function (t) {
+        recs.forEach(function (r) { t.objectStore('files').put(r); });
+        t.objectStore('docs').put(fr);
+      });
+      return { id: f.id, files: n, folders: sub, parent: up };
+    });
+  }
+  // Resolves { folders: [{ id, name, parent, created, count (files directly in it), total (and in the folders inside it) }, by name],
+  // unsorted (files in no folder), all (every file), unreadable }.
+  function folderList() {
+    return serial(async function () {
+      var s = session(), live = liveFolders(await loadFolders(s)), all = await allManifests(s);
+      var direct = {}, unsorted = 0;
+      all.files.forEach(function (e) { var fid = folderOf(e.m, live); if (fid === null) unsorted++; else direct[fid] = (direct[fid] || 0) + 1; });
+      var folders = live.map(function (f) {
+        var total = direct[f.id] || 0;
+        live.forEach(function (x) { if (x.parent === f.id) total += direct[x.id] || 0; });
+        return { id: f.id, name: f.name, parent: f.parent, created: f.created, count: direct[f.id] || 0, total: total };
+      });
+      folders.sort(function (a, b) { var x = fold(a.name), y = fold(b.name); return x < y ? -1 : x > y ? 1 : 0; });
+      return { folders: folders, unsorted: unsorted, all: all.files.length, unreadable: all.unreadable };
     });
   }
 
@@ -699,7 +916,7 @@
         if (docSet[key]) { out.skippedDocs++; continue; }
         try {
           var doc = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(r.iv), additionalData: enc.encode(aad(s.did, r.id)) }, s.key, r.ct)));
-          if (!doc || typeof doc !== 'object' || Array.isArray(doc) || doc.objId !== r.id || doc.did !== s.did || TYPES.indexOf(doc.type) < 0) throw new Error('not a library item');
+          if (!doc || typeof doc !== 'object' || Array.isArray(doc) || doc.objId !== r.id || doc.did !== s.did || (TYPES.indexOf(doc.type) < 0 && !(doc.type === FOLDERS_TYPE && r.id === FOLDERS_ID))) throw new Error('not a library item');
           docSet[key] = true; putDocs.push({ id: key, did: s.did, iv: r.iv, ct: r.ct });
         } catch (e) { out.unreadable++; }
       }
@@ -731,6 +948,7 @@
 
   window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob,
     fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSearch: fileSearch, fileRemove: fileRemove,
+    fileRename: fileRename, fileMove: fileMove, folderCreate: folderCreate, folderRename: folderRename, folderDelete: folderDelete, folderList: folderList,
     exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile, space: space, pointStore: pointStore,
     reset: reset, purge: purge, CHUNK_BYTES: CHUNK_BYTES };
 })();
