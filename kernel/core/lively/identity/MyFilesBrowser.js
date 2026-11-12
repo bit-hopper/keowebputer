@@ -222,7 +222,9 @@ module("lively.identity.MyFilesBrowser")
           var self = this, tries = 0;
           (function wait() {
             if (self._root) return;
-            if (!self.world()) { if (++tries < 100) setTimeout(wait, 100); return; }
+            var drawn = false;
+            try { drawn = !!(self.world() && self.renderContext() && self.renderContext().shapeNode); } catch (e) { drawn = false; }
+            if (!drawn) { if (++tries < 100) setTimeout(wait, 100); return; }
             self._items = []; self._pointState = {}; self._drag = null; self._menu = null; self._renaming = null; self._folderEdit = null;
             self._status = null; self._sel = []; self._spaceText = ""; self._sig = null;
             self._folders = { folders: [], unsorted: 0, all: 0, unreadable: 0 };
@@ -471,7 +473,7 @@ module("lively.identity.MyFilesBrowser")
               // what this window itself just did and already shows): leave the page as it is, so a click in progress, the scroll
               // position and a field being typed into are not disturbed.
               var sig = JSON.stringify([r, fl, self._loc, self._kind, self._sort, self._sel, self._renaming, self._pointState]);
-              if (sig === self._sig) { self._refreshSpace(); return; }
+              if (sig === self._sig) { self._checkPointed(); self._refreshSpace(); return; }
               self._sig = sig;
               self._renderAll();
               self._checkPointed();
@@ -480,16 +482,21 @@ module("lively.identity.MyFilesBrowser")
           });
         },
 
-        // Files kept where they lie: ask the shell whether each is still as it was.
+        // Files kept where they lie: ask the shell whether each is still as it was. Asked again at every reading of the library (a
+        // file can be moved away or put back while the window is open), and the page is drawn again only when an answer differs from
+        // the one it shows.
         _checkPointed: function () {
           var self = this;
           this._items.forEach(function (it) {
-            if (!it.pointed || self._pointState[it.id]) return;
-            self._pointState[it.id] = "checking";
+            if (!it.pointed || (self._pointBusy && self._pointBusy[it.id])) return;
+            (self._pointBusy = self._pointBusy || {})[it.id] = true;
             lf().info(it.id, function (err, info) {
-              if (err || !info || !self.world()) { delete self._pointState[it.id]; return; }
-              self._pointState[it.id] = info.state || "ok";
-              if (info.state && info.state !== "ok") { self._renderList(); self._renderPrev(); }
+              delete self._pointBusy[it.id];
+              if (err || !info || !self.world()) return;
+              var st = info.state || "ok";
+              if (self._pointState[it.id] === st) return;
+              self._pointState[it.id] = st;
+              self._renderList(); self._renderPrev();
             });
           });
         },
@@ -631,7 +638,7 @@ module("lively.identity.MyFilesBrowser")
             '<dt>Folder</dt><dd><button class="mf-lnk" data-act="pmove">' + esc(this._folderPath(it.folder)) + " ▾</button></dd>" +
             "<dt>Stored</dt><dd>" + (it.pointed ? "On this computer, not copied" + (bad ? ' <span class="mf-bad" style="color:#c0392b">(' + bad.replace("file ", "") + ")</span>" : "") : "Inside keo") + "</dd></dl>" +
             '<div class="mf-pbtns"><button class="mf-primary" data-act="place"' + (st === "missing" ? " disabled" : "") + '><span class="mf-ms">add_photo_alternate</span>Place in world</button>' +
-            (it.pointed && st && st !== "ok" && st !== "checking" && lf().pointAvailable ? '<button class="mf-line" data-act="repoint">Point to it again …</button>' : "") +
+            (it.pointed && (st === "missing" || st === "changed" || st === "denied") && lf().pointAvailable ? '<button class="mf-line" data-act="repoint">Point to it again …</button>' : "") +
             '<button class="mf-line" data-act="remove">' + (it.pointed ? "Stop using this file …" : "Remove from library …") + "</button></div>";
           // A picture is drawn as it is (if it is not large: it is read whole to do that).
           if (/^image\//.test(it.type) && it.size <= MAX_THUMB && !bad) {
