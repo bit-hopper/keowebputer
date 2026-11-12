@@ -6,7 +6,7 @@
 // for a PDF, 500 MB for a video, 50 MB for a book) keep the icon; older files get theirs the first time a list shows them; the list,
 // the grid and the preview pane show them; one that never finishes does not block the next; removing the file removes it.
 // PDFs, the video and the books are made in the page: a hand-written PDF with a real cross-reference table, a clip recorded from a
-// canvas (webm: the test browser cannot play mp4 video), zip files by a small writer.
+// canvas (webm: it can be recorded in the page with no tool; mp4 files are tried by tests/keo-thumbs-files-test.js), zip files by a small writer.
 // Usage: node keo-thumbs-media-test.js <repo root> <extension folder> <work dir>
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
