@@ -349,9 +349,7 @@ module("lively.identity.MenuBarEntry")
         // The files kept on this device (a local identity): one window at a time, found by name, like My worlds.
         openMyFiles: function openMyFiles() {
           lively.require("lively.identity.MyFilesBrowser").toRun(function () {
-            var open = $world.submorphs.filter(function (m) { return m.name === "MyFilesBrowser"; })[0];
-            if (open) return open.comeForward();
-            lively.BuildSpec("lively.identity.MyFilesBrowser").createMorph().openInWorldCenter();
+            lively.identity.MyFilesBrowser.open();       // finds the open one and brings it forward, or opens a new one
           });
         },
 

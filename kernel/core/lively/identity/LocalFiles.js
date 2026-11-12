@@ -200,11 +200,39 @@ module("lively.identity.LocalFiles")
         try { window.dispatchEvent(new CustomEvent("keo-files-changed")); } catch (e) { /* no page events here */ }
       },
 
-      // opts: { query, type, limit, offset }. thenDo(err, { items: [{ id, name, type, size, created, pointed? }], total, unreadable }).
-      // Words in the name, in any order and case; type is a kind or the start of one ("image/", "application/pdf"); newest first.
+      // opts: { query, type, folder, sort, limit, offset }. thenDo(err, { items: [{ id, name, type, size, created, folder, pointed? }], total, unreadable }).
+      // Words in the name, in any order and case; type is a kind or the start of one ("image/", "application/pdf"); folder is left out for
+      // every file, "unsorted" for the files in no folder, or a folder's id (its files and those of the folders inside it); sort is
+      // "added" (newest first, the default), "name", "size" (largest first) or "type".
       search: function search(opts, thenDo) {
         opts = opts || {};
-        this._call("library.fileSearch", { query: opts.query || "", type: opts.type || "", limit: opts.limit || 50, offset: opts.offset || 0 }, thenDo);
+        var args = { query: opts.query || "", type: opts.type || "", limit: opts.limit || 50, offset: opts.offset || 0 };
+        if (opts.folder) args.folder = opts.folder;
+        if (opts.sort) args.sort = opts.sort;
+        this._call("library.fileSearch", args, thenDo);
+      },
+
+      // ---- names and folders (the sealed record of a file holds both; the shell changes them) -----------------------------------------
+      // Each of these tells the other windows afterwards, like add and remove do. Folders go two levels deep; deleting one never deletes
+      // a file (its files and folders go up a level).
+      // thenDo(err, { id, name, folder, same }): `same` is how many other files in that folder already have the name (allowed; warn).
+      rename: function rename(id, name, thenDo) { this._changing("library.fileRename", { id: id, name: name }, thenDo); },
+      // folder: a folder's id, or "unsorted". thenDo(err, { moved, unchanged, missing }).
+      move: function move(ids, folder, thenDo) { this._changing("library.fileMove", { ids: ids, folder: folder }, thenDo); },
+      // thenDo(err, { folders: [{ id, name, parent, created, count, total }], unsorted, all, unreadable }).
+      folders: function folders(thenDo) { this._call("library.folderList", {}, thenDo); },
+      // thenDo(err, { id, name, parent }). parent: a top-level folder's id, or left out for the top level.
+      folderCreate: function folderCreate(name, parent, thenDo) { this._changing("library.folderCreate", parent ? { name: name, parent: parent } : { name: name }, thenDo); },
+      folderRename: function folderRename(id, name, thenDo) { this._changing("library.folderRename", { id: id, name: name }, thenDo); },
+      // thenDo(err, { id, files, folders, parent }): how many files and folders went up, and to which folder (null: no folder).
+      folderDelete: function folderDelete(id, thenDo) { this._changing("library.folderDelete", { id: id }, thenDo); },
+
+      _changing: function _changing(op, args, thenDo) {
+        var self = this;
+        this._call(op, args, function (err, result) {
+          if (!err) self.changed();
+          thenDo(err, result);
+        });
       },
 
       // Takes the file out of the library (for one kept where it lies: only the record, never the file on the computer). thenDo(err, removed).
