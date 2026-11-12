@@ -185,9 +185,9 @@ module("lively.identity.LocalFiles")
         this.info(id, function (err, info) {
           if (err || !info || !info.pointed) return;
           var sentences = {
-            missing: "This file is kept where it was added on this computer, and it is no longer there.",
-            changed: "This file is kept where it was added on this computer, and it has changed since, so keo will not show it.",
-            denied: "This file is kept on this computer, which will not let keo open it now.",
+            missing: "This file is stored where it was added on this computer, and it is no longer there.",
+            changed: "This file is stored where it was added on this computer, and it has changed since, so keo will not show it.",
+            denied: "This file is stored on this computer, which will not let keo open it now.",
           };
           if (sentences[info.state]) self.markProblem(morph, info.state, info.name ? '"' + info.name + '": ' + sentences[info.state] : sentences[info.state]);
           else self.clearProblem(morph);

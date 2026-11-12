@@ -271,7 +271,8 @@ const rawDocs = (page) => page.evaluate(() => new Promise((res, rej) => {
     await clickEl(page, frame.locator('.star-btn').nth(3));
     st = await until(async () => { const s = await booksState(frame); const b = s && s.books.find((x) => /Left Hand/.test(x.title)); return b && b.shelf === 'reading' && b.rating === 4 ? s : null; }, 8000);
     check('books: shelving it as "Reading" and rating it four stars are kept', !!st, st);
-    const stored2 = await lib(page, 'get', { objId: bookId });
+    // the screen shows the change before the store has it, so wait for the store itself (reading it at once sometimes found the version before)
+    const stored2 = (await until(async () => { const g = await lib(page, 'get', { objId: bookId }); return g && g.r && g.r.record && g.r.record.payload.rating === 4 && g.r.record.payload.shelf === 'reading' ? g : null; }, 8000)) || await lib(page, 'get', { objId: bookId });
     check('books: and are in the store; each change names the version before it (two changes since it was added)', stored2.r.record.payload.shelf === 'reading' && stored2.r.record.payload.rating === 4 && !!stored2.r.record.prevCid && stored2.r.record.prevCid !== stored.r.record.cid && stored2.r.record.cid !== stored.r.record.cid, stored2.r && stored2.r.record);
 
     // three changes to different fields of one book in the same instant must all be kept (each save reads the book before it writes)

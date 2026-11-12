@@ -6,7 +6,7 @@
 // library says, and that the window still works after it is brought forward.
 // Usage: node keo-myfiles-test.js <repo root> <extension folder> <work dir>
 // A headed browser with the extension loaded, `localhost` unresolvable, a virtual authenticator with PRF. The extension has no way to point
-// to a file where it lies, so that part of the window (the "Point to a file" button, the "kept on this computer" cards) is exercised by
+// to a file where it lies, so that part of the window (the "Point to a file" button, the "stored on this computer" cards) is exercised by
 // keo-desktop's scripts/files-window.js, not here; this test checks that the button is NOT offered here.
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
@@ -116,11 +116,11 @@ const addFile = (page, name, type, size, seed) => page.evaluate(async ([n, t, s,
     check('window: it opens at 820 x 580', Math.abs(win.size[0] - 820) <= 3 && Math.abs(win.size[1] - 580) <= 3, win.size);
     check('cards: each says its kind, its size and when it was added', win.rows.every((r) => /added (just now|\d+ min ago)/.test(r.meta)) && /^Video · 2 MB · added /.test(win.rows[0].meta) && /^PDF · 68\.4 KB · added /.test(win.rows[1].meta) && /^Audio · 4\.9 KB · added /.test(win.rows[2].meta) && /^Picture · 2\.9 KB · added /.test(win.rows[3].meta), win.rows.map((r) => r.meta));
     check('cards: each has the icon of its kind', win.rows.map((r) => r.icon).join() === 'video_file,picture_as_pdf,audio_file,image', win.rows.map((r) => r.icon));
-    check('window: in the extension there is no "Point to a file" button, and no card says it is kept on this computer', !win.hasPoint && win.rows.every((r) => !/kept on this computer/.test(r.meta)), win);
+    check('window: in the extension there is no "Point to a file" button, and no card says it is stored on this computer', !win.hasPoint && win.rows.every((r) => !/kept on this computer/.test(r.meta)), win);
     check('folders panel: All files (4) and Unsorted (4) and nothing else yet', win.locs.map((l) => l.name + ':' + l.n).join() === 'All files:4,Unsorted:4' && win.locs[0].on, win.locs);
     check('kinds: the pills are All, Pictures, Videos, Audios, Docs, and All is chosen', win.kinds === 'All,Pictures,Videos,Audios,Docs' && win.pressed === 'All', [win.kinds, win.pressed]);
     check('preview: with nothing chosen it says so', /Select a file to see it here/.test(win.prev), win.prev);
-    check('the line under the list says how many files, what they take and how much room is left', !!(await until(async () => { const s = await readWin(frame); return s && /^4 files · 2\.1 MB kept in keo · room for about [\d.]+ [GT]B more$/.test(s.status); })), (await readWin(frame)).status);
+    check('the line under the list says how many files, what they take and how much room is left', !!(await until(async () => { const s = await readWin(frame); return s && /^4 files · 2\.1 MB stored in keo · room for about [\d.]+ [GT]B more$/.test(s.status); })), (await readWin(frame)).status);
     try { await page.screenshot({ path: path.join(WORK, 'myfiles-list.png') }); } catch (e) { /* a picture for a person to look at */ }
 
     // ---- search by real typing; filter by kind

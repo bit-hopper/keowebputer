@@ -3,7 +3,7 @@
  *
  * Floating window for the FILES kept on this device in keo's library: the pictures, videos, sounds and PDFs a person dropped into a
  * world, and (in the desktop app) the ones they pointed to where they lie on the computer. Three rounded panels: the folders, the
- * files (one white card each: its name, what it is, how big, when it was added, whether it is kept on this computer) and a preview
+ * files (one white card each: its name, what it is, how big, when it was added, whether it is stored on this computer) and a preview
  * of the chosen file with its details and the buttons. Search by name, filter by kind, sort; rename a file (double-click its name,
  * F2 or the pencil); put files in folders (drag them onto one, or "Move to …"); place a file in the world they are in; remove it.
  * In the desktop app a button points to another local file.
@@ -534,7 +534,7 @@ module("lively.identity.MyFilesBrowser")
           if (!li || typeof li.libSpace !== "function") return;
           li.libSpace(function (err, sp) {
             if (err || !self.world()) return;
-            var files = sp.files > 0 ? lf().sizeText(sp.files, false) + " kept in keo" : "";
+            var files = sp.files > 0 ? lf().sizeText(sp.files, false) + " stored in keo" : "";
             var room = typeof sp.free === "number" ? (sp.free > 0 ? "room for about " + lf().sizeText(sp.free, true) + " more" : "no room left for more") : "";
             self._spaceText = [files, room].filter(Boolean).join("  ·  ");
             self._renderStatus();
@@ -616,7 +616,7 @@ module("lively.identity.MyFilesBrowser")
 
         _meta: function (it) {
           var bits = [esc(typeWord(it)), esc(lf().sizeText(it.size, false)), "added " + esc(ago(it.created))], out;
-          if (it.pointed) bits.push("kept on this computer");
+          if (it.pointed) bits.push("stored on this computer");
           out = bits.join("  ·  ");
           var w = { missing: "file missing", changed: "file changed", denied: "cannot open file" }[this._pointState[it.id]];
           if (w) out += '  ·  <span class="mf-bad">' + w + "</span>";
@@ -930,7 +930,7 @@ module("lively.identity.MyFilesBrowser")
             if (err) return self._say(err.message || String(err), true);
             if (!info) return;
             if (info.existed && !info.pointed) return self._say("“" + info.name + "” is already in your library as a copy, which is kept.");
-            self._say("Added “" + info.name + "”, kept where it is on this computer.");
+            self._say("Added “" + info.name + "”, stored where it is on this computer.");
           });
         }
       });

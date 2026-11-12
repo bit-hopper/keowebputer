@@ -797,7 +797,7 @@
     if (!(window.keoHost && window.keoHost.available())) throw new Error('"' + m.name + '" is kept on another computer or app and cannot be reached here.');
     var len = chunkLength(m, n), r;
     try { r = await window.keoHost.post('file', { op: 'read', path: m.point.path, mac: m.point.mac, offset: n * m.chunkBytes, length: len }); }
-    catch (e) { throw new Error('"' + m.name + '" is kept on this computer, and the app could not be reached to read it.'); }
+    catch (e) { throw new Error('"' + m.name + '" is stored on this computer, and the app could not be reached to read it.'); }
     if (r.error) throw new Error(pointedSentence(m, r.error));
     var bytes = r.bytes;
     if (!bytes || bytes.length !== len) throw new Error(changedSentence(m));
