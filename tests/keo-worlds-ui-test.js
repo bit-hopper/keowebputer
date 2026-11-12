@@ -154,7 +154,7 @@ const promptDiag = (frame) => frame.evaluate(() => { const out = []; (function w
     const viaWorld = (fn, args) => frame.evaluate(([f, a]) => new Promise((res) => lively.require('lively.identity.LocalIdentity').toRun(() => lively.identity.localIdentity[f].apply(lively.identity.localIdentity, a.concat([(err) => res(String(err || 'ok'))])))), [fn, args]);
     const worldsState = () => frame.evaluate(() => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); const f = $world.submorphs.find((m) => m.name === 'MyFilesBrowser'); return w ? { active: !!w.isActive(), aboveMyFiles: f ? $world.submorphs.indexOf(w) > $world.submorphs.indexOf(f) : null, listening: typeof w._onChanged === 'function' } : null; });
     for (const round of [1, 2]) {
-      await frame.evaluate(() => new Promise((res) => lively.require('lively.identity.MyFilesBrowser').toRun(() => { lively.BuildSpec('lively.identity.MyFilesBrowser').createMorph().openInWorldCenter(); res(); })));
+      await frame.evaluate(() => new Promise((res) => lively.require('lively.identity.MyFilesBrowser').toRun(() => { lively.identity.MyFilesBrowser.open(); res(); })));
       await sleep(800);
       const behind = await worldsState();
       check('forward ' + round + ': with My files opened on top, My worlds is behind it (so asking for it takes it out and puts it back)', behind && !behind.active && behind.aboveMyFiles === false, behind);

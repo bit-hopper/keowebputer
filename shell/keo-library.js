@@ -347,6 +347,7 @@
       if (args.n !== u.next) throw new Error('The chunks of a file must arrive in order.');
       var bytes = bytesOf(args.bytes), left = u.size - u.got;
       if (bytes.length === 0 || bytes.length > left) throw new Error('That chunk does not fit the size the file was announced with.');
+      if (bytes.length > CHUNK_BYTES) throw new Error('A chunk can be at most ' + CHUNK_BYTES + ' bytes.');       // else the rest of a big file could go in one piece and never read back
       if (bytes.length !== CHUNK_BYTES && bytes.length !== left) throw new Error('Only the last chunk of a file may be short.');
       var iv = crypto.getRandomValues(new Uint8Array(12));
       var ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: enc.encode(chunkAad(s.did, u.fid, u.next)) }, s.key, bytes));

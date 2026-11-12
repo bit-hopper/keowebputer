@@ -136,6 +136,7 @@ const SETUP = () => {
     r = await chunk(up, 1, C); check('a chunk out of order is refused', !r.ok && /in order/.test(r.e), r);
     r = await chunk(up, 0, 100); check('a short chunk that is not the last is refused', !r.ok && /last chunk/.test(r.e), r);
     r = await chunk(up, 0, C + 11); check('a chunk longer than the file is refused', !r.ok && /does not fit/.test(r.e), r);
+    r = await chunk(up, 0, C + 10); check('a chunk longer than the chunk size is refused even when it is all the file has left', !r.ok && /at most/.test(r.e), r);
     r = await chunk(up, 0, 0); check('an empty chunk is refused', !r.ok && /does not fit/.test(r.e), r);
     r = await T((u) => window.__t.tryp(window.keoLibrary.fileChunk({ upload: u, n: 0, bytes: 'text' })), up); check('a chunk that is not bytes is refused', !r.ok && /must be bytes/.test(r.e), r);
     r = await chunk(up, 0, C); check('a good first chunk is accepted', r.ok && r.r.received === C, r);
