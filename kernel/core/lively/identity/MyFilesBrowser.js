@@ -114,6 +114,24 @@ module("lively.identity.MyFilesBrowser")
         ".mf-empty .mf-ms { font-size: 40px; color: #cdcdcd; }",
         ".mf-more { display: block; margin: 4px auto 2px; background: none; border: 0; color: #2563eb; font-size: 12px; cursor: pointer; } .mf-more:hover { text-decoration: underline; }",
         ".mf-prev { width: clamp(170px, 29%, 232px); flex: none; background: #fff; border: 1px solid #dcdcdc; border-radius: 10px; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 9px; scrollbar-width: thin; }",
+        // the view switch (list / grid) next to the sort menu
+        ".mf-seg { display: flex; flex: none; border: 1px solid #bebebe; border-radius: 4px; overflow: hidden; background: #fff; }",
+        ".mf-seg button { display: flex; align-items: center; justify-content: center; width: 28px; height: 22px; padding: 0; border: 0; background: #fff; color: #6a6a6a; cursor: pointer; }",
+        ".mf-seg button + button { border-left: 1px solid #bebebe; }",
+        ".mf-seg button .mf-ms { font-size: 16px; } .mf-seg button:hover { background: #eff6ff; }",
+        ".mf-seg button[aria-pressed=true] { background: #2563eb; color: #fff; }",
+        // a picture's small picture in a list row, and the grid of tiles
+        ".mf-lead.mf-has { width: 38px; height: 38px; }",
+        ".mf-timg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 5px; border: 1px solid #e1e1e1; background: #f3f3f3; }",
+        ".mf-list.mf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; align-content: start; }",
+        ".mf-list.mf-grid .mf-more { grid-column: 1 / -1; }",
+        ".mf-tile { flex-direction: column; align-items: stretch; height: auto; margin: 0; padding: 6px; gap: 5px; min-width: 0; }",
+        ".mf-tile .mf-th { background: #f3f3f3; } .mf-tile .mf-th .mf-ms { font-size: 30px; } .mf-tile .mf-th img { object-fit: cover; }",
+        ".mf-tile .mf-chk { left: 11px; top: 11px; }",
+        ".mf-tile:hover .mf-chk, .mf-anysel .mf-tile .mf-chk { display: flex; }",
+        ".mf-tile .mf-act { position: absolute; right: 9px; top: 9px; display: none; background: rgba(255, 255, 255, .92); border-radius: 4px; padding: 2px; }",
+        ".mf-tile:hover .mf-act { display: flex; }",
+        ".mf-tile .mf-nmx { font-size: 12px; } .mf-tile .mf-meta { margin-top: 1px; } .mf-tile .mf-rename { max-width: 100%; flex: 1 1 auto; font-size: 12px; }",
         ".mf-th { width: 100%; aspect-ratio: 4 / 3; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #f3f3f3; border: 1px solid #e1e1e1; flex: none; }",
         ".mf-th .mf-ms { font-size: 44px; color: #b4b4b4; } .mf-th img { width: 100%; height: 100%; object-fit: contain; }",
         ".mf-pn { display: flex; align-items: flex-start; gap: 4px; }",
@@ -190,6 +208,7 @@ module("lively.identity.MyFilesBrowser")
           this._query = "";
           this._kind = "";
           this._sort = "added";
+          this._view = "list";        // "list" or "grid" (small pictures as tiles)
           this._loc = "all";          // "all", "unsorted" or a folder's id
           this._pageSize = PAGE;
           this._shown = PAGE;
@@ -247,7 +266,7 @@ module("lively.identity.MyFilesBrowser")
           root.innerHTML = [
             '<div class="mf-bar"><div class="mf-search"><span class="mf-ms">search</span><input type="text" data-el="q" placeholder="Search files by name" autocomplete="off" aria-label="Search files by name"></div>',
             '<span data-el="point"></span></div>',
-            '<div class="mf-bar2"><div class="mf-kinds" data-el="kinds"></div><select class="mf-sort" data-el="sort" aria-label="Sort"></select></div>',
+            '<div class="mf-bar2"><div class="mf-kinds" data-el="kinds"></div><select class="mf-sort" data-el="sort" aria-label="Sort"></select><div class="mf-seg" data-el="view" role="group" aria-label="View"></div></div>',
             '<div class="mf-mid"><aside class="mf-side" data-el="side"></aside>',
             '<div class="mf-center"><div data-el="sel"></div><div class="mf-list" data-el="list"></div></div>',
             '<aside class="mf-prev" data-el="prev"></aside></div>',
@@ -329,6 +348,13 @@ module("lively.identity.MyFilesBrowser")
             self.load();
           };
           window.addEventListener("keo-files-changed", this._onChanged);
+          // A small picture became ready: put it in place of the icon without drawing the list again (a click in progress, the scroll
+          // position and a name being typed are left alone).
+          this._onThumb = function (e) {
+            if (!self.world()) { window.removeEventListener("keo-thumb", self._onThumb); return; }
+            self._showThumb(e.detail.id, e.detail.url);
+          };
+          window.addEventListener("keo-thumb", this._onThumb);
         },
 
         _onClick: function (e) {
@@ -343,6 +369,7 @@ module("lively.identity.MyFilesBrowser")
           var ids;
           switch (act) {
             case "loc": this._loc = a.getAttribute("data-loc"); this._sel = []; this._status = null; this._shown = this._pageSize; this._renderSide(); this.load(); break;
+            case "view": this._view = a.getAttribute("data-view") === "grid" ? "grid" : "list"; this._renderBar(); this._renderList(); break;
             case "kind": this._kind = a.getAttribute("data-kind"); this._status = null; this._shown = this._pageSize; this._renderKinds(); this.load(); break;
             case "chk": e.stopPropagation(); this._toggle(id); break;
             // The second click of a double-click: counted by the browser (a "dblclick" event can be lost when the first click already
@@ -361,6 +388,7 @@ module("lively.identity.MyFilesBrowser")
             case "undo": var u = this._status && this._status.undo; this._status = null; this._renderStatus(); if (u) u(); break;
             case "mplace": ids = this._menu.ids; this._menu = null; this._renderPop(); this.place(ids); break;
             case "mrename": ids = this._menu.ids; this._menu = null; this._renderPop(); this.startRename(ids[0]); break;
+            case "msave": ids = this._menu.ids; this._menu = null; this._renderPop(); this.saveCopy(ids[0]); break;
             case "mmove": ids = this._menu.ids; this._menu = null; this._renderPop(); this._openMenu("move", e, ids); break;
             case "mremove": ids = this._menu.ids; this._menu = null; this._renderPop(); this.removeFiles(ids); break;
             case "move-to": ids = this._menu.ids; this._menu = null; this._renderPop(); this.moveFiles(ids, a.getAttribute("data-target")); break;
@@ -538,6 +566,10 @@ module("lively.identity.MyFilesBrowser")
         _renderBar: function () {
           var els = this._els;
           els.sort.value = this._sort;
+          var v = this._view;
+          els.view.innerHTML =
+            '<button data-act="view" data-view="list" title="List" aria-label="List" aria-pressed="' + (v !== "grid") + '"><span class="mf-ms">view_list</span></button>' +
+            '<button data-act="view" data-view="grid" title="Grid with small pictures" aria-label="Grid" aria-pressed="' + (v === "grid") + '"><span class="mf-ms">grid_view</span></button>';
           els.point.innerHTML = lf().pointAvailable
             ? '<button class="mf-point" data-act="point"><span class="mf-ms">attach_file</span>Point to a file</button>' : "";
         },
@@ -602,22 +634,50 @@ module("lively.identity.MyFilesBrowser")
               : "Nothing here yet. Drag files onto this folder or use Move to …") + "</div>";
             return;
           }
+          var grid = this._view === "grid";
+          el.className = "mf-list" + (grid ? " mf-grid" : "");
           var html = items.map(function (it) {
-            var sel = self._sel.indexOf(it.id) >= 0, name;
+            var sel = self._sel.indexOf(it.id) >= 0, name, thumb = lf().thumbUrl(it.id);
             if (self._renaming === it.id) {
               var p = splitName(it.name);
               name = '<div class="mf-nmx"><input class="mf-rename" value="' + esc(p.base) + '" aria-label="File name">' + (p.ext ? '<span class="mf-ext">.' + esc(p.ext) + "</span>" : "") + "</div>";
             } else name = '<div class="mf-nmx" data-act="name" title="' + esc(it.name) + '">' + nameHtml(it) + "</div>";
+            var more = '<button class="mf-act" data-act="more" title="More" aria-label="More"><span class="mf-ms">more_horiz</span></button>';
+            if (grid) {
+              return '<div class="mf-row mf-tile' + (sel ? " sel" : "") + '" draggable="true" data-id="' + esc(it.id) + '">' +
+                '<div class="mf-th" data-el="tile">' + (thumb ? '<img alt="" draggable="false" src="' + thumb + '">' : '<span class="mf-ms">' + iconFor(it) + "</span>") + "</div>" +
+                '<button class="mf-chk" data-act="chk" aria-label="Select"><span class="mf-ms">check</span></button>' + more +
+                '<div class="mf-txt">' + name + '<div class="mf-meta">' + esc(typeWord(it)) + "  ·  " + esc(lf().sizeText(it.size, false)) + "</div></div></div>";
+            }
             return '<div class="mf-row' + (sel ? " sel" : "") + '" draggable="true" data-id="' + esc(it.id) + '">' +
-              '<div class="mf-lead"><span class="mf-ms mf-kind">' + iconFor(it) + '</span><button class="mf-chk" data-act="chk" aria-label="Select"><span class="mf-ms">check</span></button></div>' +
-              '<div class="mf-txt">' + name + '<div class="mf-meta">' + self._meta(it) + "</div></div>" +
-              '<button class="mf-act" data-act="more" title="More" aria-label="More"><span class="mf-ms">more_horiz</span></button></div>';
+              '<div class="mf-lead' + (thumb ? " mf-has" : "") + '">' + (thumb ? '<img class="mf-timg" alt="" draggable="false" src="' + thumb + '">' : '<span class="mf-ms mf-kind">' + iconFor(it) + "</span>") +
+              '<button class="mf-chk" data-act="chk" aria-label="Select"><span class="mf-ms">check</span></button></div>' +
+              '<div class="mf-txt">' + name + '<div class="mf-meta">' + self._meta(it) + "</div></div>" + more + "</div>";
           }).join("");
           if (this._total > items.length) html += '<button class="mf-more" data-act="more-files">Show more (' + (this._total - items.length) + " more)</button>";
           el.innerHTML = html;
           el.scrollTop = keepTop;
           var r = el.querySelector(".mf-rename");
           if (r) { r.focus(); r.select(); }
+          lf().ensureThumbs(items);          // a picture without its small picture yet gets one; each is put in place when it is ready
+        },
+
+        // A small picture is ready: swap it for the icon of that file wherever it is drawn (list row or tile).
+        _showThumb: function (id, url) {
+          var rows = this._els && this._els.list ? this._els.list.querySelectorAll(".mf-row") : [];
+          Array.prototype.forEach.call(rows, function (row) {
+            if (row.getAttribute("data-id") !== id) return;
+            var lead = row.querySelector(".mf-lead"), th = row.querySelector('[data-el="tile"]');
+            if (th) th.innerHTML = '<img alt="" draggable="false" src="' + url + '">';
+            else if (lead && !lead.querySelector(".mf-timg")) {
+              var k = lead.querySelector(".mf-kind");
+              if (k) k.parentNode.removeChild(k);
+              lead.classList.add("mf-has");
+              var img = document.createElement("img");
+              img.className = "mf-timg"; img.alt = ""; img.draggable = false; img.src = url;
+              lead.insertBefore(img, lead.firstChild);
+            }
+          });
         },
 
         _renderPrev: function () {
@@ -683,6 +743,7 @@ module("lively.identity.MyFilesBrowser")
             var one = m.ids.length === 1, n = m.ids.length, f = one && this._item(m.ids[0]);
             h += it(one ? "Place in world" : "Place " + n + " files in world", "mplace");
             if (one) h += it("Rename …", "mrename");
+            if (one) h += it("Save a copy to this computer", "msave");
             h += it(one ? "Move to …" : "Move " + n + " files to …", "mmove");
             h += it(one ? (f && f.pointed ? "Stop using this file …" : "Remove from library …") : "Remove " + n + " files …", "mremove");
           } else if (m.type === "folder") {
@@ -706,6 +767,18 @@ module("lively.identity.MyFilesBrowser")
       },
 
       "what a person can do", {
+
+        // Hands a copy of the file to the browser as a download (the shell makes it). Where it goes is the browser's choice, so the line
+        // says only that it was sent.
+        saveCopy: function (id) {
+          var self = this, it = this._item(id);
+          if (!it) return;
+          this._say("Saving a copy of " + it.name + " …");
+          lf().save(id, function (err) {
+            if (err) return self._say("Could not save a copy: " + String(err.message || err), true);
+            self._say("A copy of " + it.name + " was sent to your browser's downloads.");
+          });
+        },
 
         startRename: function (id) {
           var it = this._item(id);

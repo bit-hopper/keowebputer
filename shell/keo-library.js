@@ -62,9 +62,10 @@
 
   function openDb() {
     return new Promise(function (res, rej) {
-      var q = indexedDB.open(DB_NAME, 3);
-      // version 1 had `docs`; version 2 adds the blob stores; version 3 adds the stores for files sent in chunks. Each is made only
-      // if it is not there, so an upgrade keeps what an older database held.
+      var q = indexedDB.open(DB_NAME, 4);
+      // version 1 had `docs`; version 2 adds the blob stores; version 3 adds the stores for files sent in chunks; version 4 adds the
+      // small pictures shown in place of a picture file. Each is made only if it is not there, so an upgrade keeps what an older
+      // database held.
       q.onupgradeneeded = function () {
         var db = q.result, names = db.objectStoreNames;
         if (!names.contains('docs')) db.createObjectStore('docs', { keyPath: 'id' }).createIndex('did', 'did');
@@ -73,6 +74,7 @@
         if (!names.contains('files')) db.createObjectStore('files', { keyPath: 'id' }).createIndex('did', 'did');
         if (!names.contains('chunks')) { var c = db.createObjectStore('chunks', { keyPath: 'id' }); c.createIndex('did', 'did'); c.createIndex('fk', 'fk'); }
         if (!names.contains('pending')) db.createObjectStore('pending', { keyPath: 'id' }).createIndex('did', 'did');
+        if (!names.contains('thumbs')) db.createObjectStore('thumbs', { keyPath: 'id' }).createIndex('did', 'did');
       };
       q.onsuccess = function () { res(q.result); };
       q.onerror = function () { rej(q.error); };
@@ -443,6 +445,70 @@
       return plain;
     });
   }
+  // Saves a copy of a file to the computer: its pieces are read back one at a time into a Blob and handed to the browser as a download,
+  // under the file's own name. Done HERE because this page may download and the world's frame (sandboxed without that right) may not;
+  // the world only asks. The Blob holds the whole file, so a file over MAX_SAVE is refused with a sentence instead of exhausting
+  // memory. The save dialog or the downloads folder is the browser's: this cannot say where the copy went. Not for sharing a file (a copy
+  // on disk is outside everything keo seals).
+  var MAX_SAVE = 2 * 1024 * 1024 * 1024;
+  async function fileSave(args) {
+    var info = await fileInfo({ id: args.id });
+    if (!info) throw new Error('That file is not in this device\'s library.');
+    if (info.size > MAX_SAVE) throw new Error('A copy of a file larger than 2 GB cannot be saved from here yet.');
+    var parts = [];
+    for (var n = 0; n < info.chunks; n++) {
+      var piece = await fileRead({ id: args.id, n: n });
+      if (!piece) throw new Error('A library file is damaged: a chunk is missing.');
+      parts.push(piece);
+    }
+    var url = URL.createObjectURL(new Blob(parts, { type: info.type || 'application/octet-stream' })), a = document.createElement('a');
+    a.href = url; a.download = info.name; a.rel = 'noopener'; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10 * 60 * 1000);      // the browser reads the Blob while it downloads
+    return { name: info.name, size: info.size };
+  }
+  // ---- small pictures (thumbnails) ---------------------------------------------------------------------------------------------
+  // A picture file is shown in My files as a small picture of it. The shell has no way to decode an image, so the WORLD makes the
+  // small picture (a JPEG) and hands it here; it is sealed under the identity like everything else, keyed by the file's name (its
+  // hash), and read back in a list. It is a cache, not data: it is never carried to another origin (a new one is made when the file is
+  // next shown), it is removed with its file and with the identity, it does not count towards the library's size, and a lost or
+  // damaged one is simply made again. Not for anything but a small picture of a file this identity holds.
+  var MAX_THUMB_BYTES = 64 * 1024, MAX_THUMB_LIST = 100;
+  function thumbAad(did, cid) { return 'keo-library-thumb\n' + did + '\n' + cid; }
+  // args: { id, bytes }: the file's id and a JPEG of at most 64 KB. Resolves true; false when this identity has no such file (or it is
+  // of the older single-record kind, which has no sealed record to hang a small picture on).
+  function thumbPut(args) {
+    return serial(async function () {
+      var s = session(), cid = cidOf(args.id), bytes = bytesOf(args.bytes);
+      if (bytes.length < 4 || bytes.length > MAX_THUMB_BYTES) throw new Error('A small picture can be at most ' + (MAX_THUMB_BYTES / 1024) + ' KB.');
+      if (bytes[0] !== 0xFF || bytes[1] !== 0xD8 || bytes[2] !== 0xFF) throw new Error('A small picture must be a JPEG.');
+      if (!(await openManifest(s, cid))) return false;
+      var iv = crypto.getRandomValues(new Uint8Array(12));
+      var ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: enc.encode(thumbAad(s.did, cid)) }, s.key, bytes));
+      await tx(['thumbs'], 'readwrite', function (t) { t.objectStore('thumbs').put({ id: idOf(s.did, cid), did: s.did, iv: kd.b64u(iv), ct: ct }); });
+      return true;
+    });
+  }
+  // args: { ids: [file id, ...] } (at most 100). Resolves { id: ArrayBuffer of the JPEG } for those that have one; the others are left
+  // out. A record that cannot be opened is left out too (it will be made again), not an error.
+  function thumbGet(args) {
+    return serial(async function () {
+      var s = session(), ids = args && args.ids;
+      if (!Array.isArray(ids) || ids.length > MAX_THUMB_LIST) throw new Error('Ask for at most ' + MAX_THUMB_LIST + ' small pictures at a time.');
+      var cids = ids.map(cidOf), recs = await tx(['thumbs'], 'readonly', function (t) {
+        var reqs = cids.map(function (c) { return t.objectStore('thumbs').get(idOf(s.did, c)); });
+        return function () { return reqs.map(function (r) { return r.result; }); };
+      });
+      var out = {};
+      for (var i = 0; i < cids.length; i++) {
+        var rec = recs[i];
+        if (!rec || rec.did !== s.did) continue;
+        try { out[cids[i]] = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(rec.iv), additionalData: enc.encode(thumbAad(s.did, cids[i])) }, s.key, rec.ct); }
+        catch (e) { /* damaged: made again */ }
+      }
+      return out;
+    });
+  }
   // Search by name (and, optionally, by kind of file). A name lives only in the sealed manifest, and a manifest is a few hundred bytes,
   // so a search opens them as it goes instead of keeping a second, readable index of names that would have to be kept in step and
   // protected. Files of the older single-record kind have no name and are not found.
@@ -691,6 +757,7 @@
     return serial(async function () {
       var s = session(), cid = cidOf(args.id), m = await openManifest(s, cid);
       if (!m) return removeLegacy(s, cid);
+      await tx(['thumbs'], 'readwrite', function (t) { t.objectStore('thumbs').delete(idOf(s.did, cid)); });      // its small picture goes with it
       // A file kept where it lies has nothing of its own to take back: only the record goes, never the file on the computer.
       if (m.kind === 'path') { await tx(['files'], 'readwrite', function (t) { t.objectStore('files').delete(idOf(s.did, cid)); }); return true; }
       var used = await readTotal(s.did), fk = s.did + '|' + m.fid;
@@ -872,8 +939,8 @@
   function purge(did) {
     return serial(function () {
       uploads = {};
-      return tx(['docs', 'blobs', 'blobtotal', 'files', 'chunks', 'pending'], 'readwrite', function (t) {
-        ['docs', 'blobs', 'files', 'chunks', 'pending'].forEach(function (name) {
+      return tx(['docs', 'blobs', 'blobtotal', 'files', 'chunks', 'pending', 'thumbs'], 'readwrite', function (t) {
+        ['docs', 'blobs', 'files', 'chunks', 'pending', 'thumbs'].forEach(function (name) {
           var ix = t.objectStore(name).index('did').openKeyCursor(IDBKeyRange.only(did));
           ix.onsuccess = function () { var c = ix.result; if (c) { t.objectStore(name).delete(c.primaryKey); c.continue(); } };
         });
@@ -949,7 +1016,7 @@
   }
 
   window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob,
-    fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSearch: fileSearch, fileRemove: fileRemove,
+    fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSave: fileSave, thumbPut: thumbPut, thumbGet: thumbGet, fileSearch: fileSearch, fileRemove: fileRemove,
     fileRename: fileRename, fileMove: fileMove, folderCreate: folderCreate, folderRename: folderRename, folderDelete: folderDelete, folderList: folderList,
     exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile, space: space, pointStore: pointStore,
     reset: reset, purge: purge, CHUNK_BYTES: CHUNK_BYTES };

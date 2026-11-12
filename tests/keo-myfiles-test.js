@@ -332,7 +332,21 @@ const addFile = (page, name, type, size, seed) => page.evaluate(async ([n, t, s,
     // ---- the card's menu, and removing a file (the question is answered by clicking)
     await click(frame, row(ids.tone) + ' [data-act=more]');
     win = await until(async () => { const s = await readWin(frame); return s && s.popItems.length ? s : null; });
-    check('card menu: a copy offers Place, Rename, Move to and Remove, and nothing about pointing', win && win.popItems.join('|') === 'Place in world|Rename …|Move to …|Remove from library …', win && win.popItems);
+    check('card menu: a copy offers Place, Rename, Save a copy, Move to and Remove, and nothing about pointing', win && win.popItems.join('|') === 'Place in world|Rename …|Save a copy to this computer|Move to …|Remove from library …', win && win.popItems);
+    // Save a copy: a real click; the shell makes a download of the file's own bytes under its own name
+    const downloads = [];
+    page.on('download', (d) => downloads.push(d));
+    await click(frame, R('.mf-pop .mf-it:has-text("Save a copy")'));
+    const saved = await until(async () => (downloads.length ? downloads[0] : null), 15000);
+    const savedBytes = saved ? require('fs').readFileSync(await saved.path()) : null;
+    const savedId = savedBytes ? require('crypto').createHash('sha256').update(savedBytes).digest('base64').split('+').join('-').split('/').join('_').split('=').join('') : null;
+    check('save a copy: the browser gets a download named tone.wav', !!saved && saved.suggestedFilename() === 'tone.wav', saved && saved.suggestedFilename());
+    check('save a copy: its bytes are exactly the library file (they hash to its name)', savedId === ids.tone, [savedId, ids.tone]);
+    win = await until(async () => { const s = await readWin(frame); return s && /was sent to your browser/.test(s.status) ? s : null; });
+    check('save a copy: the line says a copy was sent to the browser\'s downloads', !!win && /^A copy of tone\.wav was sent to your browser's downloads\.$/.test(win.status), win && win.status);
+    check('save a copy: a file that is not in the library gets a sentence, and no download', (await keoCall(frame, 'library.fileSave', { id: 'A'.repeat(43) })).e === 'That file is not in this device\'s library.' && downloads.length === 1);
+    await click(frame, row(ids.tone) + ' [data-act=more]');
+    await until(async () => { const s = await readWin(frame); return s && s.popItems.length ? s : null; });
     await click(frame, R('.mf-pop .mf-it:has-text("Remove from library")'));
     check('remove: it asks first, and says worlds that show the file will not be able to, and that it cannot be undone', !!(await until(() => hasText(frame, 'Worlds that show it will not be able to show it any more\\. This cannot be undone'), 6000)) && (await keoCall(frame, 'library.fileInfo', { id: ids.tone })).r !== null);
     check('remove: the question has a button to confirm', await okClick(page, frame));

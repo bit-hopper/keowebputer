@@ -86,6 +86,7 @@ module("lively.identity.LocalFiles")
                 if (err) return fail(err);
                 opts.onProgress && opts.onProgress(1);
                 self.changed();
+                if (!end.existed) self.thumbSoon(end.id, file.type === type ? file : new Blob([file], { type: type }));      // a new picture gets its small picture now
                 thenDo(null, { id: end.id, name: name, type: type, size: end.size, existed: end.existed,
                   ref: { handle: HANDLE, objId: end.id, blobCid: end.id } });
               });
@@ -234,6 +235,114 @@ module("lively.identity.LocalFiles")
           thenDo(err, result);
         });
       },
+
+      // ---- small pictures (thumbnails) ------------------------------------------------------------------------------------------
+      // A picture file is shown in My files as a small picture of it. The shell cannot decode an image, so it is made HERE (the picture is
+      // drawn small on a canvas and kept as a JPEG), handed to the shell, which keeps it sealed (see thumbPut in shell/keo-library.js).
+      // It is made once: when the picture is added (from the file at hand), or for a file that was added before, the first time a list
+      // shows it. They are made one at a time, so a list of hundreds of pictures never holds more than one in memory. A picture that
+      // cannot be made small (damaged, too large, not decodable) is not tried again in this session. Not for anything that is not a
+      // picture, and not a way to read a file: only the small picture comes back.
+      THUMB_SIDE: 200,
+      THUMB_MAX_SOURCE: 64 * 1024 * 1024,
+
+      isPicture: function isPicture(type, size) { return /^image\//.test(String(type || "")) && size <= this.THUMB_MAX_SOURCE; },
+
+      // The address of the small picture of file `id` if one is ready in this session, else null (ensureThumbs makes it ready).
+      thumbUrl: function thumbUrl(id) { return (this._thumbUrls && this._thumbUrls[id]) || null; },
+
+      // `items`: [{ id, type, size }]. Those that already have a small picture in the shell are read in one go; the others are made, one
+      // after the other. Each one that becomes ready is announced to every window of this world with the page event "keo-thumb"
+      // ({ detail: { id, url } }); nothing is announced for one that cannot be made.
+      ensureThumbs: function ensureThumbs(items, thenDo) {
+        var self = this;
+        if (!this._thumbUrls) { this._thumbUrls = {}; this._thumbFail = {}; this._thumbPending = {}; this._thumbQ = []; }
+        var want = (items || []).filter(function (it) {
+          return self.isPicture(it.type, it.size) && !self._thumbUrls[it.id] && !self._thumbFail[it.id] && !self._thumbPending[it.id];
+        }).map(function (it) { return it.id; });
+        want.forEach(function (id) { self._thumbPending[id] = true; });
+        (function batch(from) {
+          if (from >= want.length) return thenDo && thenDo();
+          var ids = want.slice(from, from + 100);
+          self._call("library.thumbGet", { ids: ids }, function (err, got) {
+            ids.forEach(function (id) {
+              if (!err && got && got[id]) { delete self._thumbPending[id]; self._thumbReady(id, got[id]); }
+              else self._thumbQ.push({ id: id, source: null });       // none yet (or the shell could not say): make it
+            });
+            self._pumpThumbs();
+            batch(from + 100);
+          });
+        })(0);
+      },
+
+      // At once, from a file at hand (a File or Blob just sent to the library).
+      thumbSoon: function thumbSoon(id, file) {
+        if (!this.isPicture(file && file.type, file && file.size)) return;
+        if (!this._thumbUrls) { this._thumbUrls = {}; this._thumbFail = {}; this._thumbPending = {}; this._thumbQ = []; }
+        if (this._thumbUrls[id] || this._thumbPending[id]) return;
+        this._thumbPending[id] = true;
+        this._thumbQ.push({ id: id, source: file });
+        this._pumpThumbs();
+      },
+
+      _thumbReady: function _thumbReady(id, bytes) {
+        var url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
+        this._thumbUrls[id] = url;
+        try { window.dispatchEvent(new CustomEvent("keo-thumb", { detail: { id: id, url: url } })); } catch (e) { /* no page events here */ }
+      },
+
+      _pumpThumbs: function _pumpThumbs() {
+        var self = this;
+        if (this._thumbBusy || !this._thumbQ.length) return;
+        this._thumbBusy = true;
+        var job = this._thumbQ.shift();
+        function done(err, bytes) {
+          self._thumbBusy = false;
+          delete self._thumbPending[job.id];
+          if (err) self._thumbFail[job.id] = true; else self._thumbReady(job.id, bytes);
+          setTimeout(function () { self._pumpThumbs(); }, 0);
+        }
+        function draw(blob) {
+          self._drawThumb(blob, function (err, jpeg) {
+            if (err) return done(err);
+            self._call("library.thumbPut", { id: job.id, bytes: jpeg }, function (err2, ok) {
+              if (err2 || ok === false) return done(err2 || new Error("There is no such file."));
+              done(null, jpeg);
+            });
+          });
+        }
+        if (job.source) draw(job.source);
+        else this.blobFor(job.id, function (err, blob) { if (err) return done(err); draw(blob); });
+      },
+
+      // A small JPEG (as an ArrayBuffer) of a picture Blob: longest side THUMB_SIDE, never enlarged, on white (a transparent picture
+      // would turn black). thenDo(err, bytes).
+      _drawThumb: function _drawThumb(blob, thenDo) {
+        var side = this.THUMB_SIDE, url = URL.createObjectURL(blob), img = new Image();
+        function finish(err, bytes) { try { URL.revokeObjectURL(url); } catch (e) { /* gone */ } thenDo(err, bytes); }
+        img.onerror = function () { finish(new Error("That picture cannot be shown small.")); };
+        img.onload = function () {
+          try {
+            var w = img.naturalWidth, h = img.naturalHeight;
+            if (!w || !h) return finish(new Error("That picture has no size."));
+            var k = Math.min(1, side / Math.max(w, h)), cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
+            var c = document.createElement("canvas"); c.width = cw; c.height = ch;
+            var g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, cw, ch); g.drawImage(img, 0, 0, cw, ch);
+            c.toBlob(function (jpg) {
+              if (!jpg) return finish(new Error("That picture cannot be shown small."));
+              jpg.arrayBuffer().then(function (buf) {
+                if (buf.byteLength > 60 * 1024) return finish(new Error("That small picture is too large."));
+                finish(null, buf);
+              }, finish);
+            }, "image/jpeg", 0.8);
+          } catch (e) { finish(e); }
+        };
+        img.src = url;
+      },
+
+      // Saves a copy of the file to this computer: the shell makes a download (the world's frame cannot), so the browser decides where it
+      // goes. thenDo(err, { name, size }).
+      save: function save(id, thenDo) { this._call("library.fileSave", { id: id }, thenDo, 10 * 60 * 1000); },
 
       // Takes the file out of the library (for one kept where it lies: only the record, never the file on the computer). thenDo(err, removed).
       // Worlds that show it will not be able to: nothing yet counts which worlds do.

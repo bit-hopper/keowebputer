@@ -114,6 +114,15 @@ const SETUP = () => {
     check('the last chunk has the length that is left', (await T((id) => window.keoLibrary.fileRead({ id, n: 2 }).then((b) => b.byteLength), id1)) === 12345);
     check('the total grew by the size of the file', (await T(() => window.__t.total())) === SIZE);
 
+    // ---- a copy saved to the computer: three chunks put back together as a download of the shell page
+    const dls = []; page.on('download', (d) => dls.push(d));
+    const savedR = await T((id) => window.__t.tryp(window.keoLibrary.fileSave({ id })), id1);
+    for (let i = 0; i < 60 && !dls.length; i++) await sleep(250);
+    const savedBytes = dls.length ? fs.readFileSync(await dls[0].path()) : null;
+    const savedHash = savedBytes ? require('crypto').createHash('sha256').update(savedBytes).digest('base64').split('+').join('-').split('/').join('_').split('=').join('') : null;
+    check('save a copy: a three-chunk file is handed to the browser under its own name, and the answer says which', savedR.ok && savedR.r.name === 'holiday.png' && savedR.r.size === SIZE && dls.length === 1 && dls[0].suggestedFilename() === 'holiday.png', [savedR, dls.length]);
+    check('save a copy: the downloaded bytes are the file\'s bytes, all three chunks (they hash to its name)', savedHash === want && savedBytes.length === SIZE, [savedHash, want]);
+
     // ---- the same bytes again
     const chunksBefore = await T(() => window.__t.count('chunks'));
     const again = await T(() => window.__t.tryp(window.__t.send('f1', 'copy.png', 'image/png')));
@@ -356,14 +365,43 @@ const SETUP = () => {
     console.log('     (a thousand one-chunk files made in ' + bulkMs + ' ms; a search over ' + r.r.total + ' manifests took ' + oneMs + ' ms, listing took ' + allMs + ' ms)');
     check('a search over a thousand files takes less than ten seconds on this machine', oneMs < 10000 && allMs < 10000, [oneMs, allMs]);
 
+    // ---- small pictures: a cache the world makes and the shell seals
+    const JPG = (n, seed) => Array.from({ length: n }, (_, i) => (i < 3 ? [0xFF, 0xD8, 0xFF][i] : (i * 7 + seed) & 255));
+    const tput = (id, a) => T(([i, x]) => window.__t.tryp(window.keoLibrary.thumbPut({ id: i, bytes: new Uint8Array(x).buffer })), [id, a]);
+    const tget = (ids) => T((x) => window.__t.tryp(window.keoLibrary.thumbGet({ ids: x }).then((o) => { const out = {}; for (const k of Object.keys(o)) { if (!(o[k] instanceof ArrayBuffer)) throw new Error('not an ArrayBuffer'); out[k] = Array.from(new Uint8Array(o[k])); } return out; })), ids);
+    await T(() => window.__t.make('th', 6000, 51));
+    const thId = (await T(() => window.__t.tryp(window.__t.send('th', 'pic.jpg', 'image/jpeg')))).r.end.id;
+    const jpgA = JPG(900, 1);
+    r = await tput(thId, jpgA); check('a small picture is kept for a file the library has', r.ok && r.r === true, r);
+    r = await tget([thId, 'B'.repeat(43)]);
+    check('and read back byte for byte; a file with none is left out', r.ok && Object.keys(r.r).join() === thId && r.r[thId].join() === jpgA.join(), r.ok && Object.keys(r.r));
+    const raw = await T(() => window.__t.idb(['thumbs'], 'readonly', (t) => { const q = t.objectStore('thumbs').getAll(); return () => q.result.map((x) => ({ id: x.id, n: x.ct.length, head: Array.from(x.ct.slice(0, 6)) })); }));
+    check('it is kept sealed: 16 bytes longer than the picture and not the picture itself', raw.length === 1 && raw[0].n === 916 && raw[0].head.join() !== jpgA.slice(0, 6).join(), raw);
+    r = await tput(thId, JPG(700, 2)); r = await tget([thId]);
+    check('a new one replaces the old', r.ok && r.r[thId].length === 700, r.ok && Object.keys(r.r));
+    r = await tput('C'.repeat(43), jpgA); check('there is none for a file the library does not have', r.ok && r.r === false, r);
+    r = await tput(thId, [1, 2, 3, 4, 5, 6]); check('a picture that is not a JPEG is refused', !r.ok && /must be a JPEG/.test(r.e), r);
+    r = await tput(thId, JPG(64 * 1024 + 1, 3)); check('one over 64 KB is refused', !r.ok && /at most 64 KB/.test(r.e), r);
+    r = await tput(thId, JPG(2, 3)); check('and one of two bytes', !r.ok && /at most 64 KB/.test(r.e), r);
+    r = await tput('x', jpgA); check('a bad file id is refused', !r.ok && /not a valid file id/.test(r.e), r);
+    r = await tget(Array.from({ length: 101 }, () => thId)); check('a hundred and one at a time are refused', !r.ok && /at most 100/.test(r.e), r);
+    r = await tget(Array.from({ length: 100 }, () => thId)); check('a hundred are fine', r.ok && Object.keys(r.r).length === 1, r.ok && Object.keys(r.r));
+    await T(([a, b]) => window.__t.idb(['thumbs'], 'readwrite', (t) => { const st = t.objectStore('thumbs'), q = st.get(a); q.onsuccess = () => { const v = q.result; st.put({ id: b, did: v.did, iv: v.iv, ct: v.ct }); }; }), [DID + '|' + thId, DID + '|' + idB]);
+    r = await tget([idB]); check('a record copied under another file\'s name does not open (it is bound to its file) and is left out', r.ok && Object.keys(r.r).length === 0, r);
+    await T((k) => window.__t.idb(['thumbs'], 'readwrite', (t) => { const st = t.objectStore('thumbs'), q = st.get(k); q.onsuccess = () => { const v = q.result; v.ct[3] ^= 1; st.put(v); }; }), DID + '|' + thId);
+    r = await tget([thId]); check('a damaged one is left out, not an error', r.ok && Object.keys(r.r).length === 0, r);
+    await tput(thId, jpgA);
+    check('removing the file removes its small picture', (await T((id) => window.keoLibrary.fileRemove({ id }), thId)) === true && (await T(() => window.__t.count('thumbs'))) === 1 && Object.keys((await tget([thId])).r).length === 0, await T(() => window.__t.count('thumbs')));
+
     // ---- removing the identity removes its files
     await T(([n]) => window.__t.make('g', n, 41), [C + 7]);
-    await T(() => window.__t.send('g', 'g.bin', 'text/plain'));
+    const gId = (await T(() => window.__t.send('g', 'g.bin', 'text/plain'))).end.id;
+    await tput(gId, jpgA);
     const up3 = (await begin(C + 5)).r.upload; await chunk(up3, 0, C);
     check('(setup) there are files, chunks and an unfinished upload', (await T(() => window.__t.count('files'))) >= 1 && (await T(() => window.__t.count('chunks'))) >= 2 && (await T(() => window.__t.count('pending'))) >= 1);
     await T((d) => window.keoLibrary.purge(d), DID);
-    check('purging the identity empties the file stores, the chunks, the unfinished uploads and the total',
-      (await T(() => window.__t.count('files'))) === 0 && (await T(() => window.__t.count('chunks'))) === 0 && (await T(() => window.__t.count('pending'))) === 0 && (await T(() => window.__t.total())) === 0);
+    check('purging the identity empties the file stores, the chunks, the small pictures, the unfinished uploads and the total',
+      (await T(() => window.__t.count('files'))) === 0 && (await T(() => window.__t.count('thumbs'))) === 0 && (await T(() => window.__t.count('chunks'))) === 0 && (await T(() => window.__t.count('pending'))) === 0 && (await T(() => window.__t.total())) === 0);
 
     check('no page errors', errors.length === 0, errors);
     // the home world asks for a video player script that its own policy refuses: not ours, and every suite that opens it ignores it

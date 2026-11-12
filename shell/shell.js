@@ -130,6 +130,11 @@
     'library.fileInfo': function (a) { return window.keoLibrary.fileInfo({ id: a.id }); },
     'library.fileRead': function (a) { return window.keoLibrary.fileRead({ id: a.id, n: a.n }); },
     'library.fileSearch': function (a) { return window.keoLibrary.fileSearch({ query: a.query, type: a.type, folder: a.folder, sort: a.sort, limit: a.limit, offset: a.offset }); },
+    // A copy of a file saved to the computer as a download made by this page (the world's frame cannot download).
+    'library.fileSave': function (a) { return window.keoLibrary.fileSave({ id: a.id }); },
+    // The small picture shown for a picture file: the world makes it, the shell keeps it sealed (a cache: see keo-library.js).
+    'library.thumbPut': function (a) { return window.keoLibrary.thumbPut({ id: a.id, bytes: a.bytes }); },
+    'library.thumbGet': function (a) { return window.keoLibrary.thumbGet({ ids: a.ids }); },
     'library.fileRemove': function (a) { return window.keoLibrary.fileRemove({ id: a.id }); },
     // The names and folders of the files (the My files window): a name and a folder are fields of the sealed record, changed here.
     'library.fileRename': function (a) { return window.keoLibrary.fileRename({ id: a.id, name: a.name }); },
