@@ -72,7 +72,7 @@ module("lively.identity.LocalFiles")
       _putNow: function _putNow(file, opts, thenDo) {
         var self = this;
         opts = opts || {};
-        var name = opts.name || file.name || "file", type = file.type || "application/octet-stream";
+        var name = opts.name || file.name || "file", type = this.docTypeOf(name) || file.type || "application/octet-stream";
         if (!this.isAvailable()) return thenDo(new Error("Files can be kept only inside the keo app."));
         this._call("library.fileBegin", { name: name, type: type, size: file.size }, function (err, begin) {
           if (err) return thenDo(err);
@@ -245,13 +245,37 @@ module("lively.identity.LocalFiles")
         });
       },
 
-      // What kind of thing a media type is, in a word a person reads: "Picture", "Video", "Sound", "PDF", "File".
+      // The documents other than PDF that keo can show (lively.data.DocumentUpload), by the ending of the name. A browser often gives such
+      // a file no type at all (or a wrong one), so a library file with one of these endings is kept under the type below.
+      DOC_TYPES: {
+        md: "text/markdown", markdown: "text/markdown", txt: "text/plain", html: "text/html", htm: "text/html",
+        epub: "application/epub+zip", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      },
+
+      // What the Docs filter asks the library for: PDF and every document above, as a list the search takes.
+      DOC_KINDS: "application/pdf,text/markdown,text/plain,text/html,application/epub+zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+
+      // The type for a name's ending, or null when it is not one of the documents above.
+      docTypeOf: function docTypeOf(name) {
+        var m = /\.([A-Za-z0-9]+)$/.exec(String(name || ""));
+        var ext = m ? m[1].toLowerCase() : "";
+        return Object.prototype.hasOwnProperty.call(this.DOC_TYPES, ext) ? this.DOC_TYPES[ext] : null;
+      },
+
+      // True for PDF and for the types above.
+      isDocType: function isDocType(type) {
+        var t = String(type || "").toLowerCase(), d = this.DOC_TYPES;
+        return t === "application/pdf" || Object.keys(d).some(function (k) { return d[k] === t; });
+      },
+
+      // What kind of thing a media type is, in a word a person reads: "Picture", "Video", "Sound", "PDF", "Document", "File".
       kindWord: function kindWord(type) {
         var t = String(type || "");
         if (/^image\//.test(t)) return "Picture";
         if (/^video\//.test(t)) return "Video";
         if (/^audio\//.test(t)) return "Sound";
         if (t === "application/pdf") return "PDF";
+        if (this.isDocType(t)) return "Document";
         return "File";
       },
 

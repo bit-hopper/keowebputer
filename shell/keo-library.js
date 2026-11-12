@@ -46,7 +46,7 @@
   var MAX_UPLOADS = 2;                              // files being added at once
   var UPLOAD_IDLE_MS = 5 * 60 * 1000;               // an upload that sends nothing for this long is given up
   var MAX_NAME = 255;
-  var MAX_QUERY = 200, MAX_TERMS = 8, MAX_RESULTS = 200, DEFAULT_RESULTS = 50;
+  var MAX_QUERY = 200, MAX_TERMS = 8, MAX_RESULTS = 200, DEFAULT_RESULTS = 50, MAX_KINDS = 12;
   var CID = /^[A-Za-z0-9_-]{43}$/;
   var OBJ_ID = /^[A-Za-z0-9_-]{12}$/;
   // What kind of object a document may be. The runtime's apps use these; anything else is refused so the store is not a general
@@ -467,7 +467,8 @@
     type: function (a, b) { var x = extOf(a.name), y = extOf(b.name); return x < y ? -1 : x > y ? 1 : SORTS.added(a, b); }
   };
   // args: { query, type, folder, sort, limit, offset }. query: words that must ALL appear in the name, in any case ('' matches every
-  // file); type: a media type or the start of one ('image/', 'application/pdf'); folder: left out for every file, 'unsorted' for the
+  // file); type: a media type or the start of one ('image/', 'application/pdf'), or several of them joined by commas (a file of any of
+  // them matches); folder: left out for every file, 'unsorted' for the
   // files in no folder, or a folder's id for the files in it AND in the folders inside it; sort: see SORTS. Resolves
   // { items: [{ id, name, type, size, created, folder (the folder's id or null), pointed? }], total (all matches), unreadable (records
   // that could not be opened and were skipped) }.
@@ -478,8 +479,8 @@
       if (q.length > MAX_QUERY) throw new Error('A search can be at most ' + MAX_QUERY + ' characters.');
       var terms = q ? q.split(/\s+/) : [];
       if (terms.length > MAX_TERMS) throw new Error('A search can have at most ' + MAX_TERMS + ' words.');
-      var type = fold(args.type).trim();
-      if (type.length > 100) throw new Error('That is not a kind of file.');
+      var types = fold(args.type).split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+      if (String(args.type == null ? '' : args.type).length > 400 || types.length > MAX_KINDS) throw new Error('That is not a kind of file.');
       var sortBy = args.sort == null ? 'added' : args.sort;
       if (!Object.prototype.hasOwnProperty.call(SORTS, sortBy)) throw new Error('That is not a way to sort files.');
       var limit = typeof args.limit === 'number' && Math.floor(args.limit) === args.limit && args.limit >= 1 ? Math.min(args.limit, MAX_RESULTS) : DEFAULT_RESULTS;
@@ -492,7 +493,7 @@
       var all = await allManifests(s), found = [];
       all.files.forEach(function (e) {
         var m = e.m, name = fold(m.name), fid = folderOf(m, live);
-        if (type && String(m.type).indexOf(type) !== 0) return;
+        if (types.length && !types.some(function (t) { return String(m.type).indexOf(t) === 0; })) return;
         if (terms.some(function (w) { return name.indexOf(w) < 0; })) return;
         if (want && (want.none ? fid !== null : !(fid !== null && want[fid]))) return;
         var item = { id: e.cid, name: m.name, type: m.type, size: m.size, created: m.created, folder: fid };

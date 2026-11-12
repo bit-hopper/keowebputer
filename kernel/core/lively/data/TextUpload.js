@@ -3,6 +3,9 @@ module('lively.data.TextUpload').requires('lively.data.FileUpload').toRun(functi
 lively.data.FileUpload.Handler.subclass('lively.Clipboard.TextUploader', {
 
     handles: function(file) {
+        // a document keo shows in a box of its own (markdown, text, web page) is left to lively.data.DocumentUpload
+        var docs = lively.data.DocumentUpload && lively.data.DocumentUpload.Handler;
+        if (docs && docs.prototype.handles(file)) return false;
         return file.type.match(/text.*/);
     },
 

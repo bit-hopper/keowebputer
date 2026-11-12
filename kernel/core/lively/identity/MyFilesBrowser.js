@@ -40,7 +40,7 @@ module("lively.identity.MyFilesBrowser")
       { label: "Pictures", type: "image/" },
       { label: "Videos", type: "video/" },
       { label: "Audios", type: "audio/" },
-      { label: "Docs", type: "application/pdf" }
+      { label: "Docs", type: lively.identity.localFiles.DOC_KINDS }      // PDF, markdown, text, web page, book, word-processor file
     ];
     var SORTS = [["added", "Newest first"], ["name", "Name"], ["size", "Largest first"], ["type", "Type"]];
     var MAX_THUMB = 8 * 1024 * 1024;       // a picture bigger than this is not drawn in the preview (it is read whole to do so)
@@ -171,7 +171,7 @@ module("lively.identity.MyFilesBrowser")
       if (/^image\//.test(t)) return "image";
       if (/^video\//.test(t)) return "video_file";
       if (/^audio\//.test(t)) return "audio_file";
-      if (t === "application/pdf") return "picture_as_pdf";
+      if (lively.identity.localFiles.isDocType(t)) return "picture_as_pdf";      // every document wears the PDF sign
       return "draft";
     }
     function nameHtml(it) { var p = splitName(it.name); return esc(p.base) + (p.ext ? '<span class="mf-ext">.' + esc(p.ext) + "</span>" : ""); }

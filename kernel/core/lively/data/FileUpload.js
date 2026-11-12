@@ -295,6 +295,8 @@ module("lively.data.FileUpload")
       // dropped files use; they get a plain stand-in for the file whose reference identityUpload hands straight back. Calls
       // thenDo(err) when no handler knows the kind.
       openPointed: function (info, pos, thenDo) {
+        var self = this;
+        if (!this.handlersLoaded()) return this.whenHandlersLoaded(function () { self.openPointed(info, pos, thenDo); });
         var handlerClasses = lively.data.classes(true).concat(lively.Clipboard.classes(true))
           .filter(function (ea) { return ea.isSubclassOf(lively.data.FileUpload.Handler); });
         var file = { name: info.name, type: info.type, size: info.size, keoLibraryRef: info.ref };
@@ -316,6 +318,34 @@ module("lively.data.FileUpload")
         this.openPointed(info, at, thenDo);
       },
 
+      // The modules of the handlers, loaded with this one. whenHandlersLoaded waits for them (and gives up waiting after a few seconds,
+      // so one module that cannot be read cannot stop every other kind of file from being dropped).
+      handlerModules: [
+        "lively.data.DirectoryUpload",
+        "lively.data.ODFImport",
+        "lively.data.PDFUpload",
+        "lively.data.DocumentUpload",
+        "lively.data.ImageUpload",
+        "lively.data.VideoUpload",
+        "lively.data.AudioUpload",
+        "lively.data.TextUpload",
+      ],
+
+      handlersLoaded: function () {
+        return this.handlerModules.every(function (name) { return module(name).isLoaded(); });
+      },
+
+      whenHandlersLoaded: function (thenDo) {
+        var pending = this.handlerModules.map(module).filter(function (m) { return !m.isLoaded(); }), left = pending.length, done = false;
+        function finish() { if (done) return; done = true; thenDo(); }
+        if (!left) return finish();
+        setTimeout(finish, 5000);
+        pending.forEach(function (m) {
+          m.load();
+          m.runWhenLoaded(function () { if (--left === 0) finish(); });
+        });
+      },
+
       handleImportEvent: function (evt) {
         // see https://developer.mozilla.org/en/Using_files_from_web_applications
         var files = evt.dataTransfer.files;
@@ -329,6 +359,12 @@ module("lively.data.FileUpload")
       },
 
       handleDroppedFiles: function (files, evt) {
+        // The first drop of a session can come before the handler modules have been read (they load when this module has loaded, one
+        // after the other): wait for them, or no handler would be found for a file that has one. The File objects stay valid after the
+        // event; the list that holds them does not, so it is copied first.
+        var self = this;
+        files = Array.from(files);
+        if (!this.handlersLoaded()) return this.whenHandlersLoaded(function () { self.handleDroppedFiles(files, evt); });
         // handler for specific file types
         var pos = evt.getPosition(),
           i = 0,
@@ -489,16 +525,5 @@ module("lively.data.FileUpload")
       },
     });
 
-    (function loadFileUploadHandlers() {
-      var handlerModules = [
-        "lively.data.DirectoryUpload",
-        "lively.data.ODFImport",
-        "lively.data.PDFUpload",
-        "lively.data.ImageUpload",
-        "lively.data.VideoUpload",
-        "lively.data.AudioUpload",
-        "lively.data.TextUpload",
-      ];
-      handlerModules.map(module).invoke("load");
-    })();
+    lively.data.FileUpload.handlerModules.map(module).invoke("load");
   }); // end of module

@@ -40,6 +40,7 @@ module('lively.data.EncryptedMedia')
     'lively.data.FileUpload',
     'lively.data.VideoUpload',
     'lively.data.PDFUpload',
+    'lively.data.DocumentUpload',
     'lively.data.AudioUpload',
     'lively.identity.FileCrypto',
     'lively.identity.DID',
@@ -277,6 +278,44 @@ module('lively.data.EncryptedMedia')
           function (err, result) {
             if (err) { console.error('[EncryptedPDF] resolve failed', err); _problem(self, self.shape.fileHandle, err); return; }
             var container = lively.data.FileUpload.buildPDFContainer(result.bytes);
+            var node = self.shape.shapeNode;
+            while (node.firstChild) node.removeChild(node.firstChild);
+            node.appendChild(container);
+            if (restoring) self.setExtent(self.getExtent());     // put the saved size on the page element again
+          },
+        );
+      },
+
+      onrestore: function () {
+        if (!this.shape || !this.shape.fileHandle) return;
+        var self = this;
+        this.whenOpenedInWorld(function () { self._rebuildContent(true); });
+      },
+    });
+
+    // ─── Documents (markdown, text, web page, book, word-processor file) ───
+
+    lively.morphic.Morph.subclass('lively.data.FileUpload.EncryptedDocument', {
+      // fileRef: {handle, objId}; mime and name tell which reader to use and what to call it
+      initialize: function ($super, fileRef, mime, name) {
+        var shape = new lively.morphic.Shapes.EncryptedExternal(_loadingPlaceholder());
+        shape.fileHandle = fileRef.handle;
+        shape.fileObjId = fileRef.objId;
+        shape.mime = mime;
+        shape.docName = name;
+        $super(shape);
+        this.applyStyle({ extent: pt(600, 800), borderWidth: 1, borderColor: Color.black });
+      },
+
+      // Raw bytes, as for a PDF: the readers work on the bytes (a book and a word-processor file are zip files).
+      _rebuildContent: function (restoring) {
+        var self = this;
+        _watch(this, this.shape.fileHandle, this.shape.fileObjId);
+        _bytesFor(
+          this.shape.fileHandle, this.shape.fileObjId,
+          function (err, result) {
+            if (err) { console.error('[EncryptedDocument] resolve failed', err); _problem(self, self.shape.fileHandle, err); return; }
+            var container = lively.data.FileUpload.buildDocumentContainer(result.bytes, { type: self.shape.mime, name: self.shape.docName });
             var node = self.shape.shapeNode;
             while (node.firstChild) node.removeChild(node.firstChild);
             node.appendChild(container);

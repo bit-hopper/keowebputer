@@ -329,7 +329,11 @@ const SETUP = () => {
     r = await S({ limit: 0, offset: -3 }); check('a limit or offset that makes no sense falls back to the defaults', r.ok && r.r.items.length === 6, r);
     r = await S({ query: 'a'.repeat(201) }); check('a search of more than 200 characters is refused', !r.ok && /at most 200/.test(r.e), r);
     r = await S({ query: 'a b c d e f g h i' }); check('and one of more than 8 words', !r.ok && /at most 8 words/.test(r.e), r);
-    r = await S({ type: 'x'.repeat(101) }); check('and a kind that is too long', !r.ok && /not a kind/.test(r.e), r);
+    r = await S({ type: 'x'.repeat(401) }); check('and a kind that is too long', !r.ok && /not a kind/.test(r.e), r);
+    r = await S({ type: 'image/, application/PDF' }); check('several kinds joined by commas find a file of any of them', r.ok && r.r.total === 3, r);
+    r = await S({ type: 'application/pdf,application/vnd.ms-excel,,' }); check('empty pieces count for nothing', r.ok && r.r.total === 3, r);
+    r = await S({ query: 'holiday', type: 'image/,text/plain' }); check('words and several kinds together', r.ok && r.r.total === 2, r);
+    r = await S({ type: 'a/a,b/b,c/c,d/d,e/e,f/f,g/g,h/h,i/i,j/j,k/k,l/l,m/m' }); check('and more than 12 kinds are refused', !r.ok && /not a kind/.test(r.e), r);
     r = await S({ query: null }); check('a missing query lists everything', r.ok && r.r.total === 6, r);
     const legSearch = await T(async () => { const u = window.__t.fill(1000, 123); const c = await window.__t.cid(u); await window.keoLibrary.putBlob({ cid: c, bytes: u.buffer }); return c; });
     r = await S({ query: '' }); check('a file of the older kind has no name and is not listed', r.ok && r.r.total === 6, r);
