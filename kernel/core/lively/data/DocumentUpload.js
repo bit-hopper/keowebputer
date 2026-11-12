@@ -461,6 +461,34 @@ function pageHtml(body, size) {
         '<style>' + STYLE.replace('%SIZE%%', size + '%') + '</style></head><body><div class="page">' + body + '</div></body></html>';
 }
 
+// The cover picture of a book, for the small picture My files shows (lively.identity.localFiles). Promise<Blob> of the cover as the
+// book stores it, or a rejection when the book names none, the picture is missing or larger than MAX_IMAGE. An epub 3 marks the
+// manifest item with the property "cover-image"; an epub 2 names it in <meta name="cover" content="<item id>">. Nothing is guessed
+// from file names beyond that. Reads only that one entry; the caller already holds the whole archive. Not for showing a book.
+function epubCoverOf(u8) {
+    var zip = readZip(u8);
+    return zip.read('META-INF/container.xml', 1 << 20).then(function(c) {
+        var root = xml(decodeText(c)).getElementsByTagName('rootfile')[0];
+        var opfPath = root && root.getAttribute('full-path');
+        if (!opfPath) throw new Error('This book names no contents file.');
+        return zip.read(opfPath, 8 << 20).then(function(o) {
+            var opf = xml(decodeText(o)), items = {}, found = null, metaId = null;
+            Array.prototype.forEach.call(opf.getElementsByTagName('item'), function(it) {
+                var m = { href: it.getAttribute('href'), type: it.getAttribute('media-type') || '' };
+                items[it.getAttribute('id')] = m;
+                if (!found && /(^|\s)cover-image(\s|$)/.test(it.getAttribute('properties') || '')) found = m;
+            });
+            Array.prototype.forEach.call(opf.getElementsByTagName('meta'), function(m) { if (!metaId && m.getAttribute('name') === 'cover') metaId = m.getAttribute('content'); });
+            if (!found && metaId && items[metaId]) found = items[metaId];
+            if (!found || !found.href) throw new Error('This book has no cover picture.');
+            var path = resolvePath(opfPath, found.href), type = /^image\//.test(found.type) ? found.type : imageTypeOf(path);
+            if (!type) throw new Error('The cover of this book is not a picture.');
+            return zip.read(path, MAX_IMAGE).then(function(bytes) { return new Blob([bytes], { type: type }); });
+        });
+    });
+}
+lively.data.DocumentUpload.epubCoverOf = epubCoverOf;
+
 var MESSAGES = { loading: 'Loading…' };
 
 // Factored out like buildPDFContainer, so lively.data.EncryptedMedia's EncryptedDocument rebuilds the identical viewer on a fresh

@@ -678,6 +678,11 @@ module("lively.identity.MyFilesBrowser")
               lead.insertBefore(img, lead.firstChild);
             }
           });
+          // A selected file that is not a picture is shown in the preview as its small picture, as soon as that is ready.
+          if (this._sel.length === 1 && this._sel[0] === id && this._els.prev) {
+            var pth = this._els.prev.querySelector('[data-el="thumb"]');
+            if (pth && !pth.querySelector("img")) pth.innerHTML = '<img alt="" src="' + url + '">';
+          }
         },
 
         _renderPrev: function () {
@@ -710,6 +715,10 @@ module("lively.identity.MyFilesBrowser")
               self._thumbUrl = URL.createObjectURL(blob);
               th.innerHTML = '<img alt="" src="' + self._thumbUrl + '">';
             });
+          } else if (lf().thumbUrl(it.id)) {
+            // A video, a PDF or a book: its small picture, if it has one already (_showThumb adds it later otherwise).
+            var tu = lf().thumbUrl(it.id), th2 = this._els.prev.querySelector('[data-el="thumb"]');
+            if (th2) th2.innerHTML = '<img alt="" src="' + tu + '">';
           }
         },
 

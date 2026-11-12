@@ -237,16 +237,33 @@ module("lively.identity.LocalFiles")
       },
 
       // ---- small pictures (thumbnails) ------------------------------------------------------------------------------------------
-      // A picture file is shown in My files as a small picture of it. The shell cannot decode an image, so it is made HERE (the picture is
-      // drawn small on a canvas and kept as a JPEG), handed to the shell, which keeps it sealed (see thumbPut in shell/keo-library.js).
-      // It is made once: when the picture is added (from the file at hand), or for a file that was added before, the first time a list
-      // shows it. They are made one at a time, so a list of hundreds of pictures never holds more than one in memory. A picture that
-      // cannot be made small (damaged, too large, not decodable) is not tried again in this session. Not for anything that is not a
-      // picture, and not a way to read a file: only the small picture comes back.
+      // A picture, a video, a PDF and a book (epub) are shown in My files as a small picture of them: the picture itself, a frame of the
+      // video, the first page of the PDF, the cover of the book. The shell cannot decode any of that, so it is made HERE (drawn small on
+      // a canvas and kept as a JPEG), handed to the shell, which keeps it sealed (see thumbPut in shell/keo-library.js).
+      // It is made once: when the file is added (from the file at hand), or for a file that was added before, the first time a list
+      // shows it. They are made one at a time, so a list of hundreds of files never holds more than one in memory. One that cannot be
+      // made small (damaged, protected, too large, not decodable, taking too long) is not tried again in this session. A PDF and an
+      // epub are read whole to do it and a video older than this session is held whole in memory, which is what the limits below are
+      // for. Not for any other kind, and not a way to read a file: only the small picture comes back.
       THUMB_SIDE: 200,
-      THUMB_MAX_SOURCE: 64 * 1024 * 1024,
+      THUMB_MAX_SOURCE: 64 * 1024 * 1024,        // a picture
+      THUMB_MAX_PDF: 50 * 1024 * 1024,
+      THUMB_MAX_VIDEO: 500 * 1024 * 1024,
+      THUMB_MAX_EPUB: 50 * 1024 * 1024,
+      THUMB_TIMEOUT: 30000,                      // longer than this for one small picture: give up (a video that never answers must not block the rest)
 
       isPicture: function isPicture(type, size) { return /^image\//.test(String(type || "")) && size <= this.THUMB_MAX_SOURCE; },
+
+      // What a small picture of a file would be made from: "image", "video", "pdf", "epub", or null (no small picture for that kind, or
+      // the file is larger than the limit for its kind).
+      previewKind: function previewKind(type, size) {
+        type = String(type || "");
+        if (this.isPicture(type, size)) return "image";
+        if (/^video\//.test(type)) return size <= this.THUMB_MAX_VIDEO ? "video" : null;
+        if (type === "application/pdf") return size <= this.THUMB_MAX_PDF ? "pdf" : null;
+        if (type === "application/epub+zip") return size <= this.THUMB_MAX_EPUB ? "epub" : null;
+        return null;
+      },
 
       // The address of the small picture of file `id` if one is ready in this session, else null (ensureThumbs makes it ready).
       thumbUrl: function thumbUrl(id) { return (this._thumbUrls && this._thumbUrls[id]) || null; },
@@ -258,16 +275,18 @@ module("lively.identity.LocalFiles")
         var self = this;
         if (!this._thumbUrls) { this._thumbUrls = {}; this._thumbFail = {}; this._thumbPending = {}; this._thumbQ = []; }
         var want = (items || []).filter(function (it) {
-          return self.isPicture(it.type, it.size) && !self._thumbUrls[it.id] && !self._thumbFail[it.id] && !self._thumbPending[it.id];
-        }).map(function (it) { return it.id; });
-        want.forEach(function (id) { self._thumbPending[id] = true; });
+          return self.previewKind(it.type, it.size) && !self._thumbUrls[it.id] && !self._thumbFail[it.id] && !self._thumbPending[it.id];
+        });
+        var kinds = {};
+        want.forEach(function (it) { kinds[it.id] = self.previewKind(it.type, it.size); self._thumbPending[it.id] = true; });
+        want = want.map(function (it) { return it.id; });
         (function batch(from) {
           if (from >= want.length) return thenDo && thenDo();
           var ids = want.slice(from, from + 100);
           self._call("library.thumbGet", { ids: ids }, function (err, got) {
             ids.forEach(function (id) {
               if (!err && got && got[id]) { delete self._thumbPending[id]; self._thumbReady(id, got[id]); }
-              else self._thumbQ.push({ id: id, source: null });       // none yet (or the shell could not say): make it
+              else self._thumbQ.push({ id: id, source: null, kind: kinds[id] });       // none yet (or the shell could not say): make it
             });
             self._pumpThumbs();
             batch(from + 100);
@@ -277,11 +296,12 @@ module("lively.identity.LocalFiles")
 
       // At once, from a file at hand (a File or Blob just sent to the library).
       thumbSoon: function thumbSoon(id, file) {
-        if (!this.isPicture(file && file.type, file && file.size)) return;
+        var kind = this.previewKind(file && file.type, file && file.size);
+        if (!kind) return;
         if (!this._thumbUrls) { this._thumbUrls = {}; this._thumbFail = {}; this._thumbPending = {}; this._thumbQ = []; }
         if (this._thumbUrls[id] || this._thumbPending[id]) return;
         this._thumbPending[id] = true;
-        this._thumbQ.push({ id: id, source: file });
+        this._thumbQ.push({ id: id, source: file, kind: kind });
         this._pumpThumbs();
       },
 
@@ -295,15 +315,19 @@ module("lively.identity.LocalFiles")
         var self = this;
         if (this._thumbBusy || !this._thumbQ.length) return;
         this._thumbBusy = true;
-        var job = this._thumbQ.shift();
+        var job = this._thumbQ.shift(), timer;
         function done(err, bytes) {
+          if (job.finished) return;
+          job.finished = true;
+          clearTimeout(timer);
           self._thumbBusy = false;
           delete self._thumbPending[job.id];
           if (err) self._thumbFail[job.id] = true; else self._thumbReady(job.id, bytes);
           setTimeout(function () { self._pumpThumbs(); }, 0);
         }
         function draw(blob) {
-          self._drawThumb(blob, function (err, jpeg) {
+          self._drawThumb(blob, job.kind, function (err, jpeg) {
+            if (job.finished) return;
             if (err) return done(err);
             self._call("library.thumbPut", { id: job.id, bytes: jpeg }, function (err2, ok) {
               if (err2 || ok === false) return done(err2 || new Error("There is no such file."));
@@ -311,33 +335,120 @@ module("lively.identity.LocalFiles")
             });
           });
         }
+        timer = setTimeout(function () { done(new Error("That took too long.")); }, this.THUMB_TIMEOUT);
         if (job.source) draw(job.source);
         else this.blobFor(job.id, function (err, blob) { if (err) return done(err); draw(blob); });
       },
 
-      // A small JPEG (as an ArrayBuffer) of a picture Blob: longest side THUMB_SIDE, never enlarged, on white (a transparent picture
-      // would turn black). thenDo(err, bytes).
-      _drawThumb: function _drawThumb(blob, thenDo) {
-        var side = this.THUMB_SIDE, url = URL.createObjectURL(blob), img = new Image();
+      // A small JPEG (as an ArrayBuffer) of a file's Blob, by its kind (previewKind). thenDo(err, bytes).
+      _drawThumb: function _drawThumb(blob, kind, thenDo) {
+        if (kind === "video") return this._thumbFromVideo(blob, thenDo);
+        if (kind === "pdf") return this._thumbFromPdf(blob, thenDo);
+        if (kind === "epub") return this._thumbFromEpub(blob, thenDo);
+        this._thumbFromPicture(blob, thenDo);
+      },
+
+      // Longest side THUMB_SIDE, never enlarged, on white (a transparent picture would turn black), as a JPEG under 60 KB. w and h are
+      // the size of the original; draw(g, width, height, scale, ok) paints it onto a canvas of the small size and calls ok(err).
+      _jpegOf: function _jpegOf(w, h, draw, thenDo) {
+        try {
+          if (!w || !h) return thenDo(new Error("That file has no picture size."));
+          var k = Math.min(1, this.THUMB_SIDE / Math.max(w, h)), cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
+          var c = document.createElement("canvas"); c.width = cw; c.height = ch;
+          var g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, cw, ch);
+          draw(g, cw, ch, k, function (err) {
+            if (err) return thenDo(err);
+            c.toBlob(function (jpg) {
+              if (!jpg) return thenDo(new Error("That picture cannot be shown small."));
+              jpg.arrayBuffer().then(function (buf) {
+                if (buf.byteLength > 60 * 1024) return thenDo(new Error("That small picture is too large."));
+                thenDo(null, buf);
+              }, thenDo);
+            }, "image/jpeg", 0.8);
+          });
+        } catch (e) { thenDo(e); }
+      },
+
+      _thumbFromPicture: function _thumbFromPicture(blob, thenDo) {
+        var self = this, url = URL.createObjectURL(blob), img = new Image();
         function finish(err, bytes) { try { URL.revokeObjectURL(url); } catch (e) { /* gone */ } thenDo(err, bytes); }
         img.onerror = function () { finish(new Error("That picture cannot be shown small.")); };
         img.onload = function () {
-          try {
-            var w = img.naturalWidth, h = img.naturalHeight;
-            if (!w || !h) return finish(new Error("That picture has no size."));
-            var k = Math.min(1, side / Math.max(w, h)), cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
-            var c = document.createElement("canvas"); c.width = cw; c.height = ch;
-            var g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, cw, ch); g.drawImage(img, 0, 0, cw, ch);
-            c.toBlob(function (jpg) {
-              if (!jpg) return finish(new Error("That picture cannot be shown small."));
-              jpg.arrayBuffer().then(function (buf) {
-                if (buf.byteLength > 60 * 1024) return finish(new Error("That small picture is too large."));
-                finish(null, buf);
-              }, finish);
-            }, "image/jpeg", 0.8);
-          } catch (e) { finish(e); }
+          self._jpegOf(img.naturalWidth, img.naturalHeight, function (g, cw, ch, k, ok) { g.drawImage(img, 0, 0, cw, ch); ok(); }, finish);
         };
         img.src = url;
+      },
+
+      // A frame about a second in (the middle of a clip shorter than two seconds). The element is never put on the page and is muted.
+      // A video the browser cannot decode (a codec this build lacks) fails here and keeps its icon.
+      _thumbFromVideo: function _thumbFromVideo(blob, thenDo) {
+        var self = this, url = URL.createObjectURL(blob), v = document.createElement("video"), over = false;
+        function finish(err, bytes) {
+          if (over) return;
+          over = true;
+          try { v.removeAttribute("src"); v.load(); } catch (e) { /* gone */ }
+          try { URL.revokeObjectURL(url); } catch (e) { /* gone */ }
+          thenDo(err, bytes);
+        }
+        v.muted = true; v.preload = "auto";
+        v.onerror = function () { finish(new Error("That video cannot be shown small.")); };
+        v.onloadedmetadata = function () {
+          var d = v.duration;
+          try { v.currentTime = isFinite(d) && d > 0 ? (d >= 2 ? 1 : d / 2) : 0; } catch (e) { finish(e); }
+        };
+        v.onseeked = function () {
+          self._jpegOf(v.videoWidth, v.videoHeight, function (g, cw, ch, k, ok) { g.drawImage(v, 0, 0, cw, ch); ok(); }, finish);
+        };
+        v.src = url;
+      },
+
+      // pdf.js (part of the runtime, core/lib/pdfjs) draws the first page. It takes the bytes, never a blob address (see buildPDFContainer).
+      _thumbFromPdf: function _thumbFromPdf(blob, thenDo) {
+        var self = this;
+        this._withPdfjs(function (err, lib) {
+          if (err) return thenDo(err);
+          blob.arrayBuffer().then(function (buf) {
+            var doc = null;
+            function finish(e, bytes) { try { doc && doc.destroy(); } catch (x) { /* gone */ } thenDo(e, bytes); }
+            lib.getDocument({ data: new Uint8Array(buf) }).promise.then(function (pdf) {
+              doc = pdf;
+              return pdf.getPage(1);
+            }).then(function (page) {
+              var vp1 = page.getViewport({ scale: 1 });
+              self._jpegOf(vp1.width, vp1.height, function (g, cw, ch, k, ok) {
+                var vp = page.getViewport({ scale: cw / vp1.width });
+                page.render({ canvasContext: g, viewport: vp }).promise.then(function () { ok(); }, ok);
+              }, finish);
+            }).then(null, function (e) { finish(e instanceof Error ? e : new Error(String(e && e.message || e))); });
+          }, thenDo);
+        });
+      },
+
+      _withPdfjs: function _withPdfjs(thenDo) {
+        function ready() {
+          var lib = window.pdfjsLib;
+          if (!lib) return thenDo(new Error("The PDF reader could not be loaded."));
+          if (!lib.GlobalWorkerOptions.workerSrc) lib.GlobalWorkerOptions.workerSrc = Config.codeBase + "lib/pdfjs/pdf.worker.min.js";
+          thenDo(null, lib);
+        }
+        if (window.pdfjsLib) return ready();
+        var s = document.createElement("script");
+        s.src = Config.codeBase + "lib/pdfjs/pdf.min.js";
+        s.onload = ready;
+        s.onerror = function () { thenDo(new Error("The PDF reader could not be loaded.")); };
+        document.head.appendChild(s);
+      },
+
+      // The cover picture the book names (see epubCoverOf in DocumentUpload); a book that names none keeps its icon.
+      _thumbFromEpub: function _thumbFromEpub(blob, thenDo) {
+        var self = this;
+        lively.require("lively.data.DocumentUpload").toRun(function () {
+          blob.arrayBuffer().then(function (buf) {
+            return lively.data.DocumentUpload.epubCoverOf(new Uint8Array(buf));
+          }).then(function (cover) {
+            self._thumbFromPicture(cover, thenDo);
+          }, function (e) { thenDo(e instanceof Error ? e : new Error(String(e))); });
+        });
       },
 
       // Saves a copy of the file to this computer: the shell makes a download (the world's frame cannot), so the browser decides where it
