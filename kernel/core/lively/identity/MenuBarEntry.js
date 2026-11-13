@@ -215,6 +215,7 @@ module("lively.identity.MenuBarEntry")
                 ["Change webName ...", function () { self.renameLocal(); }],
                 ["Link a new webputer ...", function () { self.linkNewWebputer(); }],
                 ["Move my data ...",   function () { self.moveMyData(); }],
+                ["Trusted sites ...",  function () { self.openTrustedSites(); }],
               ]],
               ["Sign out",           function () { self.signOut(); }],
             ]);
@@ -289,6 +290,11 @@ module("lively.identity.MenuBarEntry")
           lively.identity.localIdentity.transferOpen(function (err) {
             if (err) $world.setStatusMessage(err.message || String(err), Color.red, 5);
           });
+        },
+
+        // The sites a person said not to be warned about when a link to them leaves keo, with a way to take each back.
+        openTrustedSites: function openTrustedSites() {
+          lively.require("lively.identity.LinkWarning").toRun(function () { lively.identity.LinkWarning.openTrusted(); });
         },
 
         // A direct connection to another device, and file sharing over it (inside keo only: the connection lives in its shell).

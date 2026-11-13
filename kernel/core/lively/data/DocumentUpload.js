@@ -163,7 +163,12 @@ function sanitizeInto(src, dst, out, ctx, depth) {
             if (tag === 'a') {
                 var href = attr('href') || '';
                 if (/^#[^\s]{0,200}$/.test(href)) el.setAttribute('href', href);
-                else if (/^(https?:|mailto:)/i.test(href)) { el.setAttribute('class', 'ext'); el.setAttribute('title', href.slice(0, 300)); }    // shown, never followed
+                // A link out of the document has no address the frame could follow: it carries the address as text, and the viewer shows the
+                // warning before anything is opened (lively.identity.LinkWarning). Where the viewer does not listen, it is shown and nothing more.
+                else if (/^(https?:|mailto:)/i.test(href)) {
+                    el.setAttribute('class', 'ext'); el.setAttribute('title', href.slice(0, 300));
+                    if (href.length <= 4096) { el.setAttribute('data-ext', href); el.setAttribute('tabindex', '0'); el.setAttribute('role', 'link'); }
+                }
             }
             if ((tag === 'td' || tag === 'th')) {
                 ['colspan', 'rowspan'].forEach(function(a) { var v = parseInt(attr(a), 10); if (v > 1 && v <= 1000) el.setAttribute(a, v); });
@@ -543,7 +548,7 @@ var STYLE =
     '.page{max-width:46em;margin:0 auto}' +
     'h1,h2,h3,h4,h5,h6{font-family:Arial,Helvetica,sans-serif;line-height:1.25;margin:1.4em 0 .5em}h1{font-size:1.7em}h2{font-size:1.4em}h3{font-size:1.2em}h4,h5,h6{font-size:1em}' +
     'h1.title{text-align:center}.subtitle{text-align:center;color:#555;font-style:italic}.center{text-align:center}.right{text-align:right}.justify{text-align:justify}' +
-    'p{margin:.7em 0}img{max-width:100%;height:auto}a{color:#1d4ed8}a.ext{text-decoration:underline dotted;cursor:default}.gone{color:#777;font-style:italic}' +
+    'p{margin:.7em 0}img{max-width:100%;height:auto}a{color:#1d4ed8}a.ext{text-decoration:underline dotted;cursor:default}a[data-ext]{cursor:pointer}a[data-ext]:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px}.gone{color:#777;font-style:italic}' +
     'pre,code{font-family:Consolas,"Courier New",monospace;font-size:.92em}pre{background:#f5f5f7;padding:10px 12px;overflow:auto;border-radius:6px}code{background:#f5f5f7;padding:0 .25em;border-radius:3px}pre code{background:none;padding:0}' +
     'pre.plain{background:none;padding:0;white-space:pre-wrap;font-size:.95em;line-height:1.55}' +
     'blockquote{margin:.9em 0;padding:.1em 1em;border-left:4px solid #bfdbfe;color:#444}' +
@@ -553,10 +558,31 @@ var STYLE =
     'table{border-collapse:collapse;margin:1em 0;max-width:100%}td,th{border:1px solid #ccc;padding:4px 8px;vertical-align:top}th{background:#f5f5f7}' +
     'hr{border:0;border-top:1px solid #ddd;margin:1.5em 0}';
 
-function pageHtml(body, size) {
+// The one script a page may carry, under keo: on a click (or Enter) on a link that leaves the document it says WHICH link, as its place among
+// the page's links that have an address, and nothing else. It reads and sends no address, text or anything of the page.
+// It also keeps a link to a place in the same page working: left to the browser, that click sends a frame with no address of its own to
+// an error page ("blocked"), so the script scrolls to the place itself. (Without this script, as outside keo, such a link is not usable.)
+var LINK_SCRIPT = '(function(){function pick(e){var a=e.target&&e.target.closest?e.target.closest("a"):null;if(!a)return;var h=a.getAttribute("href");' +
+    'if(h&&h.charAt(0)==="#"){e.preventDefault();var id=h.slice(1);try{id=decodeURIComponent(id)}catch(x){}var el=id?document.getElementById(id):null;' +
+    'if(el&&el.scrollIntoView)el.scrollIntoView();else if(!id||id==="top")window.scrollTo(0,0);return}' +
+    'if(!a.hasAttribute("data-ext"))return;e.preventDefault();' +
+    'var l=document.querySelectorAll("a[data-ext]");for(var i=0;i<l.length;i++)if(l[i]===a){parent.postMessage({keoLink:1,i:i},"*");return}}' +
+    'document.addEventListener("click",pick);document.addEventListener("keydown",function(e){if(e.key==="Enter")pick(e)})})();';
+
+// `nonce`: when given, the page may run LINK_SCRIPT and nothing else (the policy names the nonce, and only the script tag made here has it).
+function pageHtml(body, size, nonce) {
     return '<!doctype html><html><head><meta charset="utf-8">' +
-        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'">' +
-        '<style>' + STYLE.replace('%SIZE%%', size + '%') + '</style></head><body><div class="page">' + body + '</div></body></html>';
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'' + (nonce ? '; script-src \'nonce-' + nonce + '\'' : '') + '">' +
+        '<style>' + STYLE.replace('%SIZE%%', size + '%') + '</style>' +
+        // in the head, so that what is read back from the body is the clean page and only that
+        (nonce ? '<script nonce="' + nonce + '">' + LINK_SCRIPT + '</script>' : '') + '</head><body><div class="page">' + body + '</div></body></html>';
+}
+
+// The links of a clean page that leave the document, in the order the page has them: [{ href, text }]. The viewer keeps this, so a click
+// reported by the page (a number) is looked up here and never taken from the page.
+function externalLinks(body) {
+    var parsed = new DOMParser().parseFromString('<div class="page">' + body + '</div>', 'text/html');
+    return Array.prototype.map.call(parsed.querySelectorAll('a[data-ext]'), function(a) { return { href: a.getAttribute('data-ext'), text: a.textContent }; });
 }
 
 // The cover picture of a book, for the small picture My files shows (lively.identity.localFiles). Promise<Blob> of the cover as the
@@ -599,8 +625,25 @@ Object.extend(lively.data.FileUpload, {
         var type = info.type || '', size = 100, state = { render: null };
 
         var frame = document.createElement('iframe');
-        frame.setAttribute('sandbox', '');            // no scripts, no forms, no popups, no same-origin: it can show and nothing else
+        // No forms, no popups, no origin of its own: it can show and nothing else. Under keo it is also allowed ONE script, ours, so that a
+        // click on a link that leaves the document can be told to this viewer, which shows the warning before anything is opened. The
+        // page's own policy allows no script but that one (it names a number made for this viewer; the clean page has no way to carry
+        // it), and the script says only WHICH link was clicked, as a number: the viewer looks the address up in its own copy of the page.
+        // So even a script that got in could only pick one of the links the document already has. Without keo's shell there is nobody
+        // to ask, so the frame stays as closed as it was (no script, links shown and not followed).
+        var canWarn = !!(window.keo && typeof window.keo.call === 'function');
+        var nonce = '', extLinks = [];
+        if (canWarn) { var nb = new Uint8Array(16); crypto.getRandomValues(nb); nonce = Array.prototype.map.call(nb, function(b) { return ('0' + b.toString(16)).slice(-2); }).join(''); }
+        frame.setAttribute('sandbox', canWarn ? 'allow-scripts' : '');
         frame.setAttribute('title', info.name || 'document');
+        function onFrameMessage(ev) {
+            if (!container.isConnected) { window.removeEventListener('message', onFrameMessage); return; }
+            if (!frame.contentWindow || ev.source !== frame.contentWindow) return;
+            var m = ev.data, link = m && m.keoLink === 1 && typeof m.i === 'number' && m.i >= 0 && m.i < extLinks.length && Math.floor(m.i) === m.i ? extLinks[m.i] : null;
+            if (!link) return;
+            lively.require('lively.identity.LinkWarning').toRun(function() { lively.identity.LinkWarning.go(link.href, { text: link.text, source: info.name || 'a document' }); });
+        }
+        if (canWarn) window.addEventListener('message', onFrameMessage);
         frame.style.cssText = 'flex:1;border:0;width:100%;background:#fff;min-height:0';
 
         function button(text, title) {
@@ -634,7 +677,8 @@ Object.extend(lively.data.FileUpload, {
         // limits either way.
         function show(body, frag) {
             bodyHtml = body; dropBlob();
-            var page = pageHtml(body, size);
+            if (canWarn) extLinks = externalLinks(body);
+            var page = pageHtml(body, size, nonce);
             if (frag && /^[A-Za-z0-9_:.-]{1,100}$/.test(frag)) {
                 blobUrl = URL.createObjectURL(new Blob([page], { type: 'text/html' }));
                 frame.removeAttribute('srcdoc');

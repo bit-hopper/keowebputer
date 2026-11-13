@@ -71,6 +71,9 @@ var KPV_CSS = [
     '.kpv-text ::selection{background:rgba(37,99,235,.35)}',
     // the world switches text selection off for everything in it (user-select: none, inherited); the page's text, the note and the find box need it back
     '.kpv-text,.kpv-text span,.kpv-pop textarea,.kpv-find input{user-select:text;-webkit-user-select:text}',
+    // the links of the page, over its text: the layer lets the pointer through, the links themselves take it
+    '.kpv-links a{position:absolute;display:block;cursor:pointer;pointer-events:auto;border-radius:2px}',
+    '.kpv-links a:hover,.kpv-links a:focus-visible{background:rgba(37,99,235,.14);outline:1px solid rgba(37,99,235,.55)}',
     '.kpv-pop{position:absolute;z-index:5;width:240px;padding:8px;background:#fff;border:1px solid #94a3b8;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.25)}',
     '.kpv-pop textarea{display:block;width:100%;height:84px;resize:vertical;border:1px solid #cbd5e1;border-radius:6px;padding:6px;font:12px Arial,sans-serif;color:#1f2937}',
     '.kpv-pop textarea:focus{outline:2px solid #93c5fd;border-color:#2563eb}',
@@ -186,7 +189,8 @@ Object.extend(lively.data.FileUpload, {
         var hlLayer = kpvEl('div', 'kpv-layer kpv-hl');
         var hitLayer = kpvEl('div', 'kpv-layer kpv-hits');
         var textLayer = kpvEl('div', 'kpv-text');
-        [canvas, hlLayer, hitLayer, textLayer].forEach(function(n) { pageBox.appendChild(n); });
+        var linkLayer = kpvEl('div', 'kpv-layer kpv-links');
+        [canvas, hlLayer, hitLayer, textLayer, linkLayer].forEach(function(n) { pageBox.appendChild(n); });
         view.appendChild(pageBox);
 
         var body = kpvEl('div', 'kpv-body');
@@ -260,6 +264,8 @@ Object.extend(lively.data.FileUpload, {
             }).then(function() {
                 var scrollToHit = hitScroll; hitScroll = false;
                 drawHighlights(); drawHits(scrollToHit);
+                return drawLinks(page, vp);
+            }).then(function() {
                 pageBox.setAttribute('data-drawn', num + '@' + Math.round(lastScale * 1000));      // which page at which size is on show (for tests too)
             }).catch(function(e) {
                 if (!(e && e.name === 'RenderingCancelledException')) pageInfo.textContent = 'Render error: ' + (e && e.message || e);
@@ -269,6 +275,52 @@ Object.extend(lively.data.FileUpload, {
                 if (zoomMode !== 'width' && zoomMode !== 'page') zoomSel.value = String(zoomMode);
                 if (again || lastAvail !== view.clientWidth + 'x' + view.clientHeight) render();
             });
+        }
+        // ---- links ---------------------------------------------------------------------------------------------------------
+        // The links the page has: one clickable area over each. A link to another place in the file goes there; a link to an outside address
+        // is never followed from here: it goes to the warning (lively.identity.LinkWarning), which asks the shell and opens nothing until the
+        // person says so. Outside keo there is nobody to ask, so only the links inside the file are drawn.
+        var canLink = !!(window.keo && typeof window.keo.call === 'function');
+        function textUnder(el) {
+            var r = el.getBoundingClientRect(), out = [];
+            for (var i = 0; i < textDivs.length; i++) {
+                var b = textDivs[i].getBoundingClientRect(), cx = b.left + b.width / 2, cy = b.top + b.height / 2;
+                if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) out.push(textStrs[i] != null ? textStrs[i] : textDivs[i].textContent);
+            }
+            return out.join('').trim().slice(0, 300);
+        }
+        function followLink(el) {
+            var to = el._kpvUrl;
+            if (to) {
+                var said = textUnder(el);
+                lively.require('lively.identity.LinkWarning').toRun(function() { lively.identity.LinkWarning.go(to, { text: said, source: opts.name || 'a PDF' }); });
+                return;
+            }
+            destPage(el._kpvDest).then(function(i) { if (typeof i === 'number') goPage(i + 1); });
+        }
+        function drawLinks(page, vp) {
+            var layer = kpvEl('div', 'kpv-layer kpv-links');
+            pageBox.replaceChild(layer, linkLayer);
+            linkLayer = layer;
+            return page.getAnnotations({intent: 'display'}).then(function(list) {
+                var n = 0;
+                (list || []).forEach(function(a) {
+                    if (!a || a.subtype !== 'Link' || !a.rect || n >= 300) return;
+                    var to = typeof (a.url || a.unsafeUrl) === 'string' ? String(a.url || a.unsafeUrl) : '';
+                    if (!to && !(a.dest !== undefined && a.dest !== null)) return;
+                    if (to && !canLink) return;
+                    var r = vp.convertToViewportRectangle(a.rect), x = Math.min(r[0], r[2]), y = Math.min(r[1], r[3]), w = Math.abs(r[2] - r[0]), h = Math.abs(r[3] - r[1]);
+                    if (!(w >= 2 && h >= 2)) return;
+                    var el = kpvEl('a');
+                    el.setAttribute('role', 'link'); el.tabIndex = 0;
+                    el.style.left = x + 'px'; el.style.top = y + 'px'; el.style.width = w + 'px'; el.style.height = h + 'px';
+                    el.title = to ? to.slice(0, 200) : 'Go to the place this link names';
+                    el._kpvUrl = to; el._kpvDest = to ? null : a.dest;
+                    el.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); followLink(el); });
+                    el.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); followLink(el); } });
+                    layer.appendChild(el); n++;
+                });
+            }, function() { /* a page whose links cannot be read still shows */ });
         }
         function goPage(n, keepScroll) {
             if (!pdfDoc) return;
