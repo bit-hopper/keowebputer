@@ -153,7 +153,9 @@ const row = (id) => R('.mf-row[data-id="' + id + '"] .mf-txt');
     await keoCall(frame, 'world.remove', { name: 'Alpha' });
     u = await keoCall(frame, 'world.usedIn', { ids: all });
     check('after Alpha is removed, A is in no world and B only in Beta', JSON.stringify(u.r[ids.A]) === '[]' && JSON.stringify(u.r[ids.B]) === '["Beta"]', u.r);
-    await frame.evaluate(() => { $world.withAllSubmorphsDo((m) => { if (m.shape && m.shape.fileObjId) m.remove(); }); });
+    // (collect first, remove after: withAllSubmorphsDo walks the live list by index, so a morph removed while it is being visited moves
+    // the next one into its place and that one is skipped; two pictures side by side lost one of them in about half the runs)
+    await frame.evaluate(() => { const found = []; $world.withAllSubmorphsDo((m) => { if (m.shape && m.shape.fileObjId) found.push(m); }); found.forEach((m) => m.remove()); });
     await frame.evaluate(SAVE);
     u = await keoCall(frame, 'world.usedIn', { ids: all });
     check('after the pictures are taken out of Beta and it is saved, no file is shown anywhere', all.every((id) => JSON.stringify(u.r[id]) === '[]'), u.r);
