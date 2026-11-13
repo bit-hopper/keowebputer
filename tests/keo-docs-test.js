@@ -167,7 +167,7 @@ const MOVE_AWAY = ([id, n]) => {
     const im = await info(made.md.id);
     check('markdown: kept in the library under its name and the markdown type, although the browser gave the file no type', im && im.name === 'notes.md' && im.type === 'text/markdown', im);
     check('markdown: a document morph holding a library reference', v && /EncryptedDocument/.test(v.type) && v.handle === 'keo:local' && v.mime === 'text/markdown', v && [v.type, v.handle, v.mime]);
-    check('markdown: the box is a frame with an empty sandbox (nothing is allowed)', v && v.sandbox === '', v && v.sandbox);
+    check('markdown: the box is a frame that lets a script run and nothing else (the one script is the viewer\'s own, for clicks on links: see keo-links-test.js)', v && v.sandbox === 'allow-scripts', v && v.sandbox);
     check('markdown: heading, bold text, list and code block are shown', v && /<h1[^>]*>Field notes<\/h1>/.test(v.html) && /<strong>bold<\/strong>/.test(v.html) && (v.html.match(/<li>/g) || []).length === 2 && /<pre><code>code here/.test(v.html), v && v.html);
     check('markdown: the page carries a content policy of its own that allows no script and no remote picture', v && /Content-Security-Policy[^>]*default-src 'none'; img-src data:/.test(v.srcdoc), v && v.srcdoc.slice(0, 300));
     check('markdown: no script, no event handler, no remote picture or link in what is shown', v && !/<script|onerror|onclick|javascript:|(src|href)="https?:|<iframe|<object|<form/.test(v.html), v && v.html);
@@ -188,7 +188,7 @@ const MOVE_AWAY = ([id, n]) => {
     check('web page: a document morph, kept as text/html', v && /EncryptedDocument/.test(v.type) && v.mime === 'text/html', v && v.mime);
     check('web page: its words are shown', v && /Hello page/.test(v.text) && /The end/.test(v.text) && /bad link/.test(v.text), v && v.text);
     check('web page: no script, style, event handler, frame, object, form, remote picture or javascript: address', v && !/<script|<style|onload|onclick|style=|<iframe|<object|<form|<input|<button|javascript:|(src|href)="https?:/.test(v.html), v && v.html);
-    check('web page: an address inside the page (#end) still works, an outside link shows its address on hover and goes nowhere', v && /<a href="#end">an anchor<\/a>/.test(v.html) && /<a class="ext" title="https:\/\/example\.com\/go">a link<\/a>/.test(v.html), v && v.html);
+    check('web page: an address inside the page (#end) still works, an outside link shows its address on hover and goes nowhere', v && /<a href="#end">an anchor<\/a>/.test(v.html) && /<a class="ext" title="https:\/\/example\.com\/go" data-ext="https:\/\/example\.com\/go" tabindex="0" role="link">a link<\/a>/.test(v.html), v && v.html);
     await gone('html');
 
     // ---- book
@@ -269,7 +269,7 @@ const MOVE_AWAY = ([id, n]) => {
     await sleep(3500);
     for (const [k, what, re] of [['docx', 'word-processor file', /Quarterly memo/], ['epub', 'book', /Chapter one/], ['md', 'markdown file placed from the library', /Field notes/]]) {
       const r = await view(made[k].id);
-      check('opened again: the ' + what + ' is back and shows its text', r && /EncryptedDocument/.test(r.type) && re.test(r.text) && r.sandbox === '', r && [r.type, r.sandbox, (r.text || '').slice(0, 80)]);
+      check('opened again: the ' + what + ' is back and shows its text', r && /EncryptedDocument/.test(r.type) && re.test(r.text) && r.sandbox === 'allow-scripts', r && [r.type, r.sandbox, (r.text || '').slice(0, 80)]);
     }
     const r2 = await view(made.epub.id);
     check('opened again: the book still has its chapter list', r2 && r2.options && r2.options.join('|') === 'Beginning|Ending', r2 && r2.options);

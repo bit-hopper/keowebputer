@@ -14,6 +14,7 @@
     "test:enrollcode": "node tests/keo-enroll-code-test.js",
     "test:devcycle": "node tests/keo-dev-cycle-test.js",
     "test:worldtext": "node tests/keo-worldtext-test.js",
+    "test:linkcheck": "node tests/keo-linkcheck-test.js",
     "refresh-kernel": "node extension/refresh-kernel.js",
     "dev-cycle": "node extension/dev-cycle.js",
     "test:qr": "node tests/keo-qr-test.js",

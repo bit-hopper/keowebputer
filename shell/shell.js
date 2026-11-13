@@ -165,6 +165,12 @@
     // The identity's own small settings (encrypted with its worlds): only the names keo-worlds.js allows.
     'prefs.get': function () { return window.keoWorlds.prefsGet(); },
     'prefs.set': function (a) { return window.keoWorlds.prefsSet({ key: a.key, value: a.value }); },
+    // A link that leaves keo (keo-links.js): what the address says (nothing is fetched), then opening it in a new tab with no referrer. The world
+    // draws the warning; this page re-checks the address before it opens anything and refuses the kinds that are never opened.
+    'link.check': function (a) { return window.keoLinks.check({ url: a.url, text: a.text }); },
+    'link.open': function (a) { return window.keoLinks.open({ url: a.url, text: a.text, clean: a.clean === true, trust: a.trust === true }); },
+    'link.trusted': function () { return window.keoLinks.trusted(); },
+    'link.untrust': function (a) { return window.keoLinks.untrust({ site: a.site }); },
     // Move to another page: the home page, a blank world, or a saved world by name. The world frame is restarted with a new
     // startup; the session stays. This is all a link would do, so the world may ask for it, but only for the signed-in identity.
     'world.go': function (a) { return go(a); },

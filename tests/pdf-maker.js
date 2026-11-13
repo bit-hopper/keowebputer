@@ -19,6 +19,13 @@ function makePdf(spec) {
     pageIds.push(add(`<</Type/Page/Parent ${pagesRoot} 0 R/MediaBox[0 0 ${W} ${H}]/Resources<</Font<</F1 ${font} 0 R>>>>/Contents ${content} 0 R>>`));
   });
   objs[pagesRoot - 1] = `<</Type/Pages/Kids[${pageIds.map((i) => i + ' 0 R').join(' ')}]/Count ${pages.length}>>`;
+  // links: one list per page of { x, y, w, h, uri } (an outside address) or { x, y, w, h, page } (another page, 1-based), as link annotations
+  (spec.links || []).forEach((list, pi) => {
+    if (!list || !list.length) return;
+    const ids = list.map((l) => add(`<</Type/Annot/Subtype/Link/Rect[${l.x} ${l.y} ${l.x + l.w} ${l.y + l.h}]/Border[0 0 0]` +
+      (l.uri !== undefined ? `/A<</S/URI/URI(${esc(l.uri)})>>` : `/Dest[${pageIds[l.page - 1]} 0 R/Fit]`) + '>>'));
+    objs[pageIds[pi] - 1] = objs[pageIds[pi] - 1].replace(/>>$/, `/Annots[${ids.map((i) => i + ' 0 R').join(' ')}]>>`);
+  });
   let outlines = '';
   if (spec.outline && spec.outline.length) {
     const root = add(null);

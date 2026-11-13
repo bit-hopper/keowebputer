@@ -33,8 +33,11 @@
   // The settings an identity may keep, and what a value may be. The world asks to set them, so nothing else gets in.
   //   homeTheme  the name of the theme of the home page (the home page is rebuilt on every visit, so a theme applied to it
   //              would otherwise be lost), or null for none
+  //   trustedSites  the sites a link may go to without a warning (keo-links.js keeps and cleans it)
   var PREF_KEYS = { homeTheme: function (v) { return v === null || (typeof v === 'string' && /^[A-Za-z0-9 _-]{1,64}$/.test(v)); },
-    lanVisible: function (v) { return typeof v === 'boolean'; } };
+    lanVisible: function (v) { return typeof v === 'boolean'; },
+    // sites the person said not to be warned about when a link to them leaves keo (keo-links.js); a short list of plain site names
+    trustedSites: function (v) { return Array.isArray(v) && v.length <= 200 && v.every(function (s) { return typeof s === 'string' && s.length <= 253 && /^[a-z0-9.-]+$/.test(s); }); } };
 
   function openDb() {
     return new Promise(function (res, rej) {

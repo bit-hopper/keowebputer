@@ -54,7 +54,7 @@ const BUILD = async () => {
   };
   const X = (body) => '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>' + body + '</body></html>';
   const CH1 = X('<h1>Chapter one</h1><p>Go to <a href="ch2.xhtml#deep">the deep section</a>, or <a href="ch3.xhtml">the last chapter</a>, or back to <a href="ch1.xhtml#top1">the top of this one</a>. A <a href="http://example.com/x">web link</a>, a <a href="missing.xhtml">file not in the book</a>, a <a href="#local">place in this part</a>, the <a href="ch2.xhtml#deep">same deep section</a> again, and a <a href="ch2.xhtml#bad%20place">bad place</a>.</p><h2 id="top1">Top of one</h2><p id="local">Local place.</p>');
-  const CH2 = X('<h1>Chapter two</h1>' + Array.from({ length: 140 }, (_, i) => '<p>Line ' + (i + 1) + ' of the long text.</p>').join('') + '<h2 id="deep">The deep section</h2><p>Deep words.</p>' + Array.from({ length: 140 }, (_, i) => '<p>More line ' + (i + 1) + '.</p>').join('') + '');
+  const CH2 = X('<h1>Chapter two</h1><p>An <a href="http://example.com/in-two">outside link in two</a>.</p>' + Array.from({ length: 140 }, (_, i) => '<p>Line ' + (i + 1) + ' of the long text.</p>').join('') + '<h2 id="deep">The deep section</h2><p>Deep words.</p>' + Array.from({ length: 140 }, (_, i) => '<p>More line ' + (i + 1) + '.</p>').join('') + '');
   const CH3 = X('<h1>Chapter three</h1><p>The last words, with no links at all.</p>');
   const OPF = '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Linked</dc:title></metadata><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml"/><item id="c3" href="ch3.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/><itemref idref="c3"/></spine></package>';
   const bytes = await makeZip([
@@ -111,7 +111,7 @@ const PAGE = () => ({ title: ((document.querySelector('h1') || {}).textContent |
     let tb = await frame.evaluate(TOOLBAR);
     check('the book opens at part one', !!p1 && tb.chapter === 'Part 1' && tb.prevDisabled && !tb.nextDisabled, [p1 && p1.title, tb]);
     check('the list shows only the three links to other parts (the deep section, the last chapter, the top of this part by file name) and the bad-place link, one entry for each place; the web link, the missing file, the plain place, and the second link to the same place are not in it', tb.linksShown && tb.links.join('|') === 'Links (4)|the deep section › Part 2|the last chapter › Part 3|the top of this one › Part 1|bad place › Part 2', tb.links);
-    check('the frame is as closed as before: sandbox with no allowance, a policy that allows no script, no script in the page, and no link to another part is live', !!p1 && tb.sandbox === '' && /default-src 'none'/.test(p1.csp || '') && p1.scripts === 0 && p1.liveLinks.every((h) => h.charAt(0) === '#'), [tb.sandbox, p1 && p1.csp, p1 && p1.scripts, p1 && p1.liveLinks]);
+    check('the frame lets one script run, the viewer\'s own, and nothing else: sandbox "allow-scripts" only, a policy that names that script\'s nonce and allows nothing else, one script in the page, and no link to another part is live', !!p1 && tb.sandbox === 'allow-scripts' && /default-src 'none'/.test(p1.csp || '') && /script-src 'nonce-[0-9a-f]{32}'$/.test(p1.csp || '') && p1.scripts === 1 && p1.liveLinks.every((h) => h.charAt(0) === '#'), [tb.sandbox, p1 && p1.csp, p1 && p1.scripts, p1 && p1.liveLinks]);
     check('part one is shown from a page given as text (no address)', tb.hasSrcdoc === true && !tb.src, tb);
 
     // ---- a link to a place in another part
@@ -122,7 +122,12 @@ const PAGE = () => ({ title: ((document.querySelector('h1') || {}).textContent |
     check('the part list follows (Part 2), Prev and Next both work now, and this part has no links so the list is gone', tb.chapter === 'Part 2' && !tb.prevDisabled && !tb.nextDisabled && !tb.linksShown, tb);
     // asked of the page itself (the test tool's own record of a frame's address can lag behind a move from a text page to an address)
     const where = await inner().evaluate(() => location.href).catch((e) => 'ERR ' + e.message.slice(0, 80));
-    check('the frame is still closed after going to a place (the page now comes from an address made in the page, with the place after it)', /^blob:null\/[0-9a-f-]+#deep$/.test(where) && tb.sandbox === '' && tb.hasSrcdoc === false, [where, tb]);
+    check('the frame is still closed after going to a place (the page now comes from an address made in the page, with the place after it)', /^blob:null\/[0-9a-f-]+#deep$/.test(where) && tb.sandbox === 'allow-scripts' && tb.hasSrcdoc === false, [where, tb]);
+    // a click on a link that leaves the book works in this mode too (the page comes from an address made in the page, and carries the same script)
+    await inner().locator('a', { hasText: 'outside link in two' }).click({ timeout: 8000 });
+    const warned = await until(() => frame.evaluate(() => { const w = $world.submorphs.filter((m) => m.name === 'LinkWarning')[0]; return w ? (document.querySelector('.lw-host') || {}).textContent : null; }), 10000);
+    check('a click on a link that leaves the book, from a part opened at a place, shows the warning for that address', warned === 'example.com', warned);
+    await frame.evaluate(() => { const w = $world.submorphs.filter((m) => m.name === 'LinkWarning')[0]; if (w) w.remove(); });
 
     // ---- Prev, Next and the text size after going to a place
     await frame.locator('#__book button', { hasText: 'Next' }).click();
