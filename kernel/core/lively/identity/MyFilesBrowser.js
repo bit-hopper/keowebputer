@@ -69,6 +69,9 @@ module("lively.identity.MyFilesBrowser")
         ".mf-search input:focus { border-color: #2563eb; }",
         ".mf-point { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; font-size: 11px; font-weight: bold; color: #2563eb; background: #dbeafe; border: 1px solid #93c5fd; border-radius: 5px; cursor: pointer; }",
         ".mf-point .mf-ms { font-size: 14px; } .mf-point:hover { background: #bfdbfe; }",
+        // the pill: the same button with fully rounded ends, for what comes from another device (the files mock-up's lightning pill)
+        ".mf-point.mf-pill { border-radius: 15px; padding: 0 12px 0 9px; }",
+        ".mf-point + .mf-point { margin-left: 6px; }",
         ".mf-kinds { display: flex; flex-wrap: wrap; gap: 6px; }",
         ".mf-kinds button { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 2px 11px; font-size: 11px; color: #2563eb; cursor: pointer; }",
         ".mf-kinds button:hover { background: #dbeafe; }",
@@ -228,6 +231,7 @@ module("lively.identity.MyFilesBrowser")
           this._wire();
           var self = this;
           lf().checkPointAvailable(function () { if (self.world()) self._renderBar(); });
+          lively.identity.localIdentity.checkPhoneAvailable(function () { if (self.world()) self._renderBar(); });
           this.load();
         },
 
@@ -251,6 +255,7 @@ module("lively.identity.MyFilesBrowser")
             self._wire();
             self._els.q.value = self._query || "";
             lf().checkPointAvailable(function () { if (self.world()) self._renderBar(); });
+          lively.identity.localIdentity.checkPhoneAvailable(function () { if (self.world()) self._renderBar(); });
             self.load();
           })();
         },
@@ -382,6 +387,7 @@ module("lively.identity.MyFilesBrowser")
             case "clear": this._sel = []; this._last = null; this._renderSel(); this._renderList(); this._renderPrev(); break;
             case "repoint": this._menu = null; this.pointToFile(); break;
             case "point": this.pointToFile(); break;
+            case "phone": lively.require("lively.identity.PhoneDialog").toRun(function () { var open = $world.get("IdentityPhoneDialog"); if (open) open.comeForward(); else lively.BuildSpec("lively.identity.PhoneDialog").createMorph().openInWorldCenter(); }); break;
             case "newfolder": this._folderEdit = { id: null }; this._menu = null; this._renderSide(); this._renderPop(); break;
             case "more-files": this._shown += this._pageSize; this.load(); break;
             case "undo": var u = this._status && this._status.undo; this._status = null; this._renderStatus(); if (u) u(); break;
@@ -570,8 +576,10 @@ module("lively.identity.MyFilesBrowser")
           els.view.innerHTML =
             '<button data-act="view" data-view="list" title="List" aria-label="List" aria-pressed="' + (v !== "grid") + '"><span class="mf-ms">view_list</span></button>' +
             '<button data-act="view" data-view="grid" title="Grid with small pictures" aria-label="Grid" aria-pressed="' + (v === "grid") + '"><span class="mf-ms">grid_view</span></button>';
-          els.point.innerHTML = lf().pointAvailable
-            ? '<button class="mf-point" data-act="point"><span class="mf-ms">attach_file</span>Point to a file</button>' : "";
+          els.point.innerHTML = (lf().pointAvailable
+            ? '<button class="mf-point" data-act="point"><span class="mf-ms">attach_file</span>Point to a file</button>' : "") +
+            (lively.identity.localIdentity.phoneReady
+              ? '<button class="mf-point mf-pill" data-act="phone" title="Receive files from a phone on the same Wi-Fi"><span class="mf-ms">bolt</span>WarpDrop</button>' : "");
         },
 
         _renderKinds: function () {

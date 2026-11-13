@@ -206,8 +206,10 @@ module("lively.identity.MenuBarEntry")
               ["My files",           function () { self.openMyFiles(); }],
               ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
+            ].concat(lively.identity.localIdentity && lively.identity.localIdentity.phoneReady
+              ? [["Connect a phone ...", function () { self.openPhoneDialog(); }]] : []).concat([
               ["Friends ...",        function () { self.openFriendsDialog(); }],
-            ].concat(lively.identity.localFiles && lively.identity.localFiles.pointAvailable
+            ]).concat(lively.identity.localFiles && lively.identity.localFiles.pointAvailable
               ? [["Point to a local file ...", function () { self.pointToLocalFile(); }]] : []).concat([
               ["Identity", [
                 [lively.identity.localIdentity.shortDid(did) + "   (copy DID)", function () { self.copyDid(); }],
@@ -301,6 +303,16 @@ module("lively.identity.MenuBarEntry")
         openPeerDialog: function openPeerDialog() {
           lively.require("lively.identity.PeerDialog").toRun(function () {
             lively.BuildSpec("lively.identity.PeerDialog").createMorph().openInWorldCenter();
+          });
+        },
+
+        // Files from a phone over the local network (the desktop app only: it runs the server). One window at a time: a second request brings
+        // the open one forward.
+        openPhoneDialog: function openPhoneDialog() {
+          lively.require("lively.identity.PhoneDialog").toRun(function () {
+            var open = $world.get("IdentityPhoneDialog");
+            if (open) { open.comeForward(); return; }
+            lively.BuildSpec("lively.identity.PhoneDialog").createMorph().openInWorldCenter();
           });
         },
 

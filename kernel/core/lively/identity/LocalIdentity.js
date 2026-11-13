@@ -194,6 +194,32 @@ module("lively.identity.LocalIdentity")
         return window.keo.on("open", fn);
       },
 
+      // ─── receiving files from a phone (shell/keo-phone.js, the desktop app only) ───────────────────────────────
+      // The window (PhoneDialog) starts a small web server in the desktop app, shows its address as a code, and tells the person what is
+      // happening. The QUESTION about each batch of files is the shell's own: nothing here answers it. phoneStart resolves { running, urls,
+      // qrs (a picture of each address as a data URL), claimed, phone: { who, ip } | null, asking }; phoneStop stops the server.
+      // onPhoneEvent(fn): fn({ type }) with type "claimed" (who, ip), "asked" (count, total), "answered" (accepted), "progress" (done, total),
+      // "saving" (index, count), "saved" (count, existed, failed, folder), "cancelled", "refused" (reason), "error" (message), "expired",
+      // "closed". Never a file name or a byte. Not queued: ask phoneState for what is at hand when a listener starts. Returns a function that
+      // stops listening. phoneReady says whether this app can do it at all (learned once, so a menu can be drawn without waiting).
+      phoneReady: false,
+
+      checkPhoneAvailable: function checkPhoneAvailable(thenDo) {
+        var self = this;
+        if (!this.isAvailable()) return thenDo && thenDo(null, false);
+        this._run("phone.available", {}, 15000, function (err, yes) {
+          self.phoneReady = !err && yes === true;
+          thenDo && thenDo(null, self.phoneReady);
+        });
+      },
+      phoneStart: function phoneStart(thenDo) { this._run("phone.start", {}, 60000, thenDo); },
+      phoneStop: function phoneStop(thenDo) { this._run("phone.stop", {}, 30000, thenDo || function () {}); },
+      phoneState: function phoneState(thenDo) { this._run("phone.state", {}, 30000, thenDo); },
+      onPhoneEvent: function onPhoneEvent(fn) {
+        if (!this.isAvailable() || typeof window.keo.on !== "function") return function () {};
+        return window.keo.on("phone", fn);
+      },
+
       // ─── friends (shell/keo-friend.js, keo-contacts.js) ─────────────────────────
       // Files, messages and calls work only between friends. Two devices become friends when each person has added the other,
       // and adding happens only in a dialog the SHELL draws: the person reads their own eight words to the other and types the
@@ -329,5 +355,7 @@ module("lively.identity.LocalIdentity")
     });
 
     lively.identity.localIdentity = new lively.identity.LocalIdentity();
+    // Learn once whether this app can receive files from a phone, so the menu can offer it without waiting (the desktop app only).
+    try { lively.identity.localIdentity.checkPhoneAvailable(); } catch (e) { /* not inside keo */ }
 
   }); // end module('lively.identity.LocalIdentity')
