@@ -65,6 +65,21 @@
   #keo-point button:hover { background: #444a5e; }
   #keo-point button:disabled { opacity: .5; cursor: default; }
   #keo-point button.go { background: #2f9e5b; color: #fff; }
+  /* The question about files a phone offers (keo-phone.js): drawn and placed by this page only, BELOW the vault's unlock frame like the others. The window that shows the code is the world's (PhoneDialog). */
+  #keo-phone { position: fixed; inset: 0; z-index: 2147483003; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  #keo-phone[hidden] { display: none; }
+  #keo-phone .box { width: 400px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow: auto; box-sizing: border-box; padding: 16px; background: #1d1f27; color: #f2f3f7;
+                    border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.45); }
+  #keo-phone .title { font-weight: 600; font-size: 15px; margin-bottom: 12px; }
+  #keo-phone .text { color: #d6d9e4; line-height: 1.4; overflow-wrap: anywhere; }
+  #keo-phone .list { list-style: none; margin: 10px 0 0; padding: 0; font-size: 13px; }
+  #keo-phone .list li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; }
+  #keo-phone .list .n { overflow-wrap: anywhere; } #keo-phone .list .s, #keo-phone .list .more { color: #a9adbd; white-space: nowrap; }
+  #keo-phone .note { color: #a9adbd; line-height: 1.4; margin-top: 10px; font-size: 13px; }
+  #keo-phone .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #keo-phone button { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; background: #343847; color: inherit; }
+  #keo-phone button:hover { background: #444a5e; }
+  #keo-phone button.go { background: #2f9e5b; color: #fff; }
   /* The friend dialog (keo-friend.js): drawn and placed by this page only. Like the others it stays BELOW the vault's unlock frame. */
   #keo-friend { position: fixed; inset: 0; z-index: 2147483002; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
   #keo-friend[hidden] { display: none; }
@@ -217,5 +232,6 @@
 <script src="keo-host.js"></script>
 <script src="keo-lan.js"></script>
 <script src="keo-point.js"></script>
+<script src="keo-phone.js"></script>
 <script src="shell.js"></script>
 <script src="keo-gate.js"></script>
