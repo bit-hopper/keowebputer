@@ -509,6 +509,113 @@
       return out;
     });
   }
+  // ---- highlights and notes on a PDF ---------------------------------------------------------------------------------------------
+  // What a person marks in a PDF is kept in a sealed record BESIDE the file, never in it: the PDF's bytes (and so its name, the hash of
+  // them) never change. It is one document in `docs` under an id worked out from the file's name, so it is found without a search,
+  // moves with "Move my data" like any document, and goes with its file when the file is removed or the identity is. Unlike a small
+  // picture it is DATA: nothing else holds it. A highlight is { id, page, rects (fractions of the page: x, y, width, height), text, note,
+  // created, updated }; a removed one stays as { id, at } so a later merge of another device's copy cannot bring it back. The world
+  // cannot write this kind through `put`: only notePut, which checks every field.
+  var NOTES_TYPE = 'pdfnotes';
+  var MAX_HIGHLIGHTS = 2000, MAX_HL_RECTS = 100, MAX_HL_TEXT = 1000, MAX_NOTE = 4000, MAX_REMOVED = 500, MAX_PAGE = 100000;
+  var NOTE_ID = /^[A-Za-z0-9_-]{6,24}$/;
+  async function noteObjId(cid) {
+    var d = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode('keo-pdf-notes\n' + cid)));
+    return kd.b64u(d.subarray(0, 9));                                    // 9 bytes make exactly the 12 characters of an id
+  }
+  function noteDate(v) {
+    return typeof v === 'string' && v.length <= 40 && isFinite(Date.parse(v)) ? v : new Date().toISOString();
+  }
+  function noteText(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, max); }
+  function noteNum(v, lo, hi) {
+    if (typeof v !== 'number' || !isFinite(v) || v < lo || v > hi) throw new Error('The notes are not valid: a highlight has a place outside its page.');
+    return Math.round(v * 100000) / 100000;
+  }
+  // The checked, tidied copy of the notes the world sent: { highlights, removed }. Throws a sentence for anything that is not a note.
+  function cleanNotes(doc) {
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new Error('The notes are not valid.');
+    var hs = doc.highlights == null ? [] : doc.highlights, rs = doc.removed == null ? [] : doc.removed, seen = {};
+    if (!Array.isArray(hs) || !Array.isArray(rs)) throw new Error('The notes are not valid.');
+    if (hs.length > MAX_HIGHLIGHTS) throw new Error('A document can have at most ' + MAX_HIGHLIGHTS + ' highlights.');
+    var highlights = hs.map(function (h) {
+      if (!h || typeof h !== 'object' || typeof h.id !== 'string' || !NOTE_ID.test(h.id) || seen[h.id]) throw new Error('The notes are not valid: a highlight has no valid id.');
+      seen[h.id] = true;
+      if (!Number.isInteger(h.page) || h.page < 1 || h.page > MAX_PAGE) throw new Error('The notes are not valid: a highlight is on no valid page.');
+      if (!Array.isArray(h.rects) || !h.rects.length || h.rects.length > MAX_HL_RECTS) throw new Error('The notes are not valid: a highlight has no valid place.');
+      var rects = h.rects.map(function (r) {
+        if (!Array.isArray(r) || r.length !== 4) throw new Error('The notes are not valid: a highlight has no valid place.');
+        return [noteNum(r[0], -0.01, 1.01), noteNum(r[1], -0.01, 1.01), noteNum(r[2], 0, 1.01), noteNum(r[3], 0, 1.01)];
+      });
+      return { id: h.id, page: h.page, rects: rects, text: noteText(h.text, MAX_HL_TEXT), note: noteText(h.note, MAX_NOTE), created: noteDate(h.created), updated: noteDate(h.updated) };
+    });
+    var removed = rs.slice(-MAX_REMOVED).map(function (r) {
+      if (!r || typeof r !== 'object' || typeof r.id !== 'string' || !NOTE_ID.test(r.id)) throw new Error('The notes are not valid.');
+      return { id: r.id, at: noteDate(r.at) };
+    });
+    return { highlights: highlights, removed: removed };
+  }
+  // true when `doc` is a notes record that belongs under `id`: it names a file, the id is the one worked out from that name, and every
+  // field passes the same checks notePut makes (used when data arrives from another origin, which must not bring in anything notePut refuses).
+  async function isNotesFor(doc, id) {
+    try {
+      if (typeof doc.file !== 'string' || !CID.test(doc.file) || (await noteObjId(doc.file)) !== id) return false;
+      cleanNotes(doc);
+      return true;
+    } catch (e) { return false; }
+  }
+  async function haveFile(s, cid) {
+    if (await openManifest(s, cid)) return true;
+    var old = await tx(['blobs'], 'readonly', function (t) { return get(t, 'blobs', idOf(s.did, cid)); });
+    return !!(old && old.did === s.did);
+  }
+  async function dropNotes(s, cid) {
+    var objId = await noteObjId(cid);
+    await tx(['docs'], 'readwrite', function (t) { t.objectStore('docs').delete(idOf(s.did, objId)); });
+  }
+  // args: { id }. Resolves { highlights, removed }, or null when this file has none.
+  function noteGet(args) {
+    return serial(async function () {
+      var s = session(), cid = cidOf(args && args.id), objId = await noteObjId(cid);
+      var rec = await tx(['docs'], 'readonly', function (t) { return get(t, 'docs', idOf(s.did, objId)); });
+      if (!rec || rec.did !== s.did) return null;
+      var doc;
+      try { doc = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(rec.iv), additionalData: enc.encode(aad(s.did, objId)) }, s.key, rec.ct))); }
+      catch (e) { throw new Error('The notes could not be decrypted (wrong identity, or the record was changed).'); }
+      if (!doc || doc.type !== NOTES_TYPE || doc.file !== cid) throw new Error('The notes are damaged.');
+      return cleanNotes(doc);
+    });
+  }
+  // args: { id, doc: { highlights, removed } }. Replaces the notes of that file; notes with nothing in them remove the record.
+  // Resolves true, or false when this identity has no such file.
+  function notePut(args) {
+    return serial(async function () {
+      var s = session(), cid = cidOf(args && args.id), clean = cleanNotes(args.doc), objId = await noteObjId(cid);
+      if (!(await haveFile(s, cid))) return false;
+      var key = idOf(s.did, objId);
+      if (!clean.highlights.length && !clean.removed.length) { await dropNotes(s, cid); return true; }
+      var text = JSON.stringify({ objId: objId, did: s.did, type: NOTES_TYPE, file: cid, highlights: clean.highlights, removed: clean.removed });
+      if (text.length > MAX_DOC) throw new Error('The notes on this document are too big to keep.');
+      var iv = crypto.getRandomValues(new Uint8Array(12));
+      var ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: enc.encode(aad(s.did, objId)) }, s.key, enc.encode(text)));
+      var full = false;
+      try {
+        await tx(['docs'], 'readwrite', function (t) {
+          var st = t.objectStore('docs'), have = st.get(key), count = st.index('did').count(IDBKeyRange.only(s.did));
+          have.onsuccess = function () {
+            count.onsuccess = function () {
+              if (!have.result && count.result >= MAX_DOCS) { full = true; t.abort(); return; }
+              st.put({ id: key, did: s.did, iv: kd.b64u(iv), ct: ct });
+            };
+          };
+        });
+      } catch (e) {
+        if (full) throw new Error('The library is full: it holds at most ' + MAX_DOCS + ' items.');
+        throw e;
+      }
+      return true;
+    });
+  }
+
   // Search by name (and, optionally, by kind of file). A name lives only in the sealed manifest, and a manifest is a few hundred bytes,
   // so a search opens them as it goes instead of keeping a second, readable index of names that would have to be kept in step and
   // protected. Files of the older single-record kind have no name and are not found.
@@ -756,8 +863,9 @@
   function fileRemove(args) {
     return serial(async function () {
       var s = session(), cid = cidOf(args.id), m = await openManifest(s, cid);
-      if (!m) return removeLegacy(s, cid);
+      if (!m) { var gone = await removeLegacy(s, cid); if (gone) await dropNotes(s, cid); return gone; }
       await tx(['thumbs'], 'readwrite', function (t) { t.objectStore('thumbs').delete(idOf(s.did, cid)); });      // its small picture goes with it
+      await dropNotes(s, cid);                                                                                      // and so do its highlights and notes
       // A file kept where it lies has nothing of its own to take back: only the record goes, never the file on the computer.
       if (m.kind === 'path') { await tx(['files'], 'readwrite', function (t) { t.objectStore('files').delete(idOf(s.did, cid)); }); return true; }
       var used = await readTotal(s.did), fk = s.did + '|' + m.fid;
@@ -1001,7 +1109,7 @@
         if (docSet[key]) { out.skippedDocs++; continue; }
         try {
           var doc = JSON.parse(dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(r.iv), additionalData: enc.encode(aad(s.did, r.id)) }, s.key, r.ct)));
-          if (!doc || typeof doc !== 'object' || Array.isArray(doc) || doc.objId !== r.id || doc.did !== s.did || (TYPES.indexOf(doc.type) < 0 && !(doc.type === FOLDERS_TYPE && r.id === FOLDERS_ID))) throw new Error('not a library item');
+          if (!doc || typeof doc !== 'object' || Array.isArray(doc) || doc.objId !== r.id || doc.did !== s.did || (TYPES.indexOf(doc.type) < 0 && !(doc.type === FOLDERS_TYPE && r.id === FOLDERS_ID) && !(doc.type === NOTES_TYPE && await isNotesFor(doc, r.id)))) throw new Error('not a library item');
           docSet[key] = true; putDocs.push({ id: key, did: s.did, iv: r.iv, ct: r.ct });
         } catch (e) { out.unreadable++; }
       }
@@ -1032,7 +1140,7 @@
   }
 
   window.keoLibrary = { exportSealed: exportSealed, importSealed: importSealed, get: getDoc, put: putDoc, getBlob: getBlob, putBlob: putBlob, removeBlob: removeBlob,
-    fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSave: fileSave, fileShow: fileShow, thumbPut: thumbPut, thumbGet: thumbGet, fileSearch: fileSearch, fileRemove: fileRemove,
+    fileBegin: fileBegin, fileChunk: fileChunk, fileEnd: fileEnd, fileAbort: fileAbort, fileInfo: fileInfo, fileRead: fileRead, fileSave: fileSave, fileShow: fileShow, thumbPut: thumbPut, thumbGet: thumbGet, noteGet: noteGet, notePut: notePut, fileSearch: fileSearch, fileRemove: fileRemove,
     fileRename: fileRename, fileMove: fileMove, folderCreate: folderCreate, folderRename: folderRename, folderDelete: folderDelete, folderList: folderList,
     exportFileList: exportFileList, exportFileChunk: exportFileChunk, importFile: importFile, space: space, pointStore: pointStore,
     reset: reset, purge: purge, CHUNK_BYTES: CHUNK_BYTES };

@@ -277,7 +277,16 @@ module('lively.data.EncryptedMedia')
           this.shape.fileHandle, this.shape.fileObjId,
           function (err, result) {
             if (err) { console.error('[EncryptedPDF] resolve failed', err); _problem(self, self.shape.fileHandle, err); return; }
-            var container = lively.data.FileUpload.buildPDFContainer(result.bytes);
+            // A file in this device's library keeps its highlights and notes in a record beside it; a host's file has no such place.
+            var opts = null;
+            if (_isLocal(self.shape.fileHandle)) {
+              var lf = lively.identity.localFiles, id = self.shape.fileObjId;
+              opts = { notes: {
+                load: function (thenDo) { lf.notesGet(id, thenDo); },
+                save: function (doc, thenDo) { lf.notesPut(id, doc, thenDo); },
+              } };
+            }
+            var container = lively.data.FileUpload.buildPDFContainer(result.bytes, opts);
             var node = self.shape.shapeNode;
             while (node.firstChild) node.removeChild(node.firstChild);
             node.appendChild(container);

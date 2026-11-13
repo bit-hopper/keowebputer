@@ -139,6 +139,9 @@
     // The small picture shown for a picture file: the world makes it, the shell keeps it sealed (a cache: see keo-library.js).
     'library.thumbPut': function (a) { return window.keoLibrary.thumbPut({ id: a.id, bytes: a.bytes }); },
     'library.thumbGet': function (a) { return window.keoLibrary.thumbGet({ ids: a.ids }); },
+    // The highlights and notes a person made on a PDF: a sealed record beside the file (keo-library.js), checked field by field.
+    'library.noteGet': function (a) { return window.keoLibrary.noteGet({ id: a.id }); },
+    'library.notePut': function (a) { return window.keoLibrary.notePut({ id: a.id, doc: a.doc }); },
     'library.fileRemove': function (a) { return window.keoLibrary.fileRemove({ id: a.id }); },
     // The names and folders of the files (the My files window): a name and a folder are fields of the sealed record, changed here.
     'library.fileRename': function (a) { return window.keoLibrary.fileRename({ id: a.id, name: a.name }); },

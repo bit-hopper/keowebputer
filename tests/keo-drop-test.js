@@ -269,8 +269,8 @@ const DROP = ([key, x, y]) => {
     check('the PDF is in the library with its name and type', ip && ip.name === 'doc.pdf' && ip.type === 'application/pdf' && ip.size === made.pdf.size, ip);
     await sleep(2500);
     const pv = await frame.evaluate(() => {
-      const cv = Array.from(document.querySelectorAll('canvas')).find((c) => c.width === c.width && c.closest && c.parentElement && c.parentElement.parentElement && /Page \d+ of/.test(c.parentElement.parentElement.textContent || ''));
-      const spans = Array.from(document.querySelectorAll('span')).map((e) => e.textContent).filter((t) => /Page \d+ of|PDF viewer|Failed to load|Render error/.test(t));
+      const cv = document.querySelector('.kpv-page canvas');
+      const spans = Array.from(document.querySelectorAll('.kpv .kpv-info')).map((e) => e.textContent).filter((t) => /Page \d+ of|PDF viewer|Failed to load|Render error/.test(t));
       if (!cv || !cv.width) return { spans, canvas: !!cv };
       const px = cv.getContext('2d').getImageData(Math.floor(cv.width / 2), Math.floor(cv.height / 2), 1, 1).data;
       return { spans, w: cv.width, h: cv.height, px: Array.from(px) };

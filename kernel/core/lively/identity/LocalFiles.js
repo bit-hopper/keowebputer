@@ -532,6 +532,11 @@ module("lively.identity.LocalFiles")
       // The file's description: { id, name, type, size, chunks, ... } or null when this identity has no such file.
       info: function info(id, thenDo) { this._call("library.fileInfo", { id: id }, thenDo); },
 
+      // The highlights and notes kept for a PDF (a sealed record beside the file; the PDF itself is never changed): { highlights, removed }
+      // or null when there are none yet. notesPut replaces the whole record; an empty one removes it.
+      notesGet: function notesGet(id, thenDo) { this._call("library.noteGet", { id: id }, thenDo); },
+      notesPut: function notesPut(id, doc, thenDo) { this._call("library.notePut", { id: id, doc: doc }, thenDo); },
+
       // A Blob of the whole file, made here from the slices (never one array of the whole file). thenDo(null, blob, info).
       blobFor: function blobFor(id, thenDo) { this._readBlob(id, 0, thenDo); },
 
