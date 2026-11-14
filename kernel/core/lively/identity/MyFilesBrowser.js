@@ -372,7 +372,7 @@ module("lively.identity.MyFilesBrowser")
           if (!a) { if (e.target.closest(".mf-list")) { this._sel = []; this._last = null; this._renderSel(); this._renderList(); this._renderPrev(); } return; }
           var ids;
           switch (act) {
-            case "loc": this._loc = a.getAttribute("data-loc"); this._sel = []; this._status = null; this._shown = this._pageSize; this._renderSide(); this.load(); break;
+            case "loc": this.showLocation(a.getAttribute("data-loc")); break;
             case "view": this._view = a.getAttribute("data-view") === "grid" ? "grid" : "list"; this._renderBar(); this._renderList(); break;
             case "kind": this._kind = a.getAttribute("data-kind"); this._status = null; this._shown = this._pageSize; this._renderKinds(); this.load(); break;
             case "chk": e.stopPropagation(); this._toggle(id); break;
@@ -554,6 +554,13 @@ module("lively.identity.MyFilesBrowser")
           if (n && n.focus) n.focus({ preventScroll: true });
         },
 
+        // What a click on a place in the list at the side does ("all", "unsorted" or a folder's id): show that place from its start, with
+        // nothing chosen. Also what "Show in My files" in the phone window uses, through openOnFolder.
+        showLocation: function (loc) {
+          this._loc = loc; this._sel = []; this._status = null; this._shown = this._pageSize;
+          this._renderSide();
+          this.load();
+        },
         _folderById: function (id) { return this._folders.folders.filter(function (f) { return f.id === id; })[0] || null; },
         _folderPath: function (id) {
           var f = this._folderById(id);
@@ -1028,6 +1035,20 @@ module("lively.identity.MyFilesBrowser")
         // every mouse press, the press and the release then land on different elements, and no click ever happens (measured).
         // A window left open when a world is saved is rebuilt by onrestore instead.
         win.comeForward();
+        return win;
+      },
+
+      // The window, on one folder of the top level found by its name (or on all files when no folder has it). The same window as open():
+      // a window that is already open is brought forward and moved to the folder. Asks the shell for the folders, so the place is shown
+      // a moment after the window.
+      openOnFolder: function (name) {
+        var win = lively.identity.MyFilesBrowser.open(), view = win && win.get("myFilesContent");
+        if (!view) return win;
+        lf().folders(function (err, fl) {
+          if (err || !view.world()) return;
+          var f = ((fl && fl.folders) || []).filter(function (x) { return !x.parent && x.name === name; })[0];
+          view.showLocation(f ? f.id : "all");
+        });
         return win;
       }
     });

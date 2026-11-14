@@ -2725,6 +2725,10 @@ lively.morphic.Box.subclass("lively.morphic.TitleBar",
 },
 'properties', {
     controlSpacing: 3,
+    // Distance of the menu button from the window's left edge, and of the right-most button (close) from its right edge. Kept apart from
+    // controlSpacing, which also pads the title text above and below and between the title and the buttons: widening that would
+    // squeeze the title's own box, while only the icons are meant to stand a little off the corners.
+    controlEdgeMargin: 6,
     // Gap between adjacent right-anchored title bar buttons (close/
     // collapse) specifically — kept separate from controlSpacing (which
     // also sets the corner margin to the window edge and the menu
@@ -2809,10 +2813,11 @@ lively.morphic.Box.subclass("lively.morphic.TitleBar",
     adjustElementPositions: function() {
         var innerBounds = this.innerBounds(),
             sp = this.controlSpacing,
+            edge = this.controlEdgeMargin == null ? sp : this.controlEdgeMargin,
             btnGap = this.controlButtonGap,
             btnY = this.controlVerticalOffset;
 
-        var buttonLocation = this.innerBounds().topRight().subXY(sp, -sp);
+        var buttonLocation = this.innerBounds().topRight().subXY(edge, -sp);
 
         this.buttons.forEach(function(ea) {
             buttonLocation = buttonLocation.subXY(ea.shape.bounds().width, 0);
@@ -2827,9 +2832,10 @@ lively.morphic.Box.subclass("lively.morphic.TitleBar",
         // bar's left edge instead, immediately before the title label —
         // see Window#makeTitleBar and LivelyMorphic.md §8.
         if (this.menuButton && this.menuButton.owner) {
-            var mExt = this.menuButton.shape.bounds().extent(), menuGap = 6;
-            this.menuButton.setPosition(lively.pt(labelStart, btnY));
-            labelStart = labelStart + mExt.x + menuGap;
+            var mExt = this.menuButton.shape.bounds().extent(), menuGap = 6,
+                menuX = this.innerBounds().topLeft().x + edge;
+            this.menuButton.setPosition(lively.pt(menuX, btnY));
+            labelStart = menuX + mExt.x + menuGap;
         }
 
         if (this.label) {

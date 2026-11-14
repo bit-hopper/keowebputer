@@ -1,4 +1,4 @@
-// This file was generated on Thu, 12 Nov 2026 06:01:17 GMT
+// This file was generated on Sat, 14 Nov 2026 04:04:03 GMT
 
 JSLoader.expectToLoadModules(["core/lib/lively-libs-debug.js","node_modules/lively.lang/dist/lively.lang.dev.js","node_modules/lively.ast/dist/lively.ast_no-deps.js","core/lively/Migration.js","core/lively/JSON.js","core/lively/lang/LocalStorage.js","core/lively/Base.js","core/lively/ModuleSystem.js","core/lively/net/Wiki.js","core/lively/store/Interface.js","core/lively/net/SessionTracker.js","core/lively/Network.js","core/lively/IPad.js","core/lively/ide.js","core/lively/ide/tools/Differ.js","core/lively/ide/CommandLineInterface.js","core/lively/ide/FileSystem.js","core/lively/morphic/Graphics.js","apps/ColorParser.js","core/lively/persistence/BuildSpec.js","core/lively/persistence/BuildSpecMorphExtensions.js","core/lively/morphic/Core.js","core/lively/Traits.js","core/lively/morphic/Shapes.js","core/lively/morphic/Serialization.js","core/lively/users/Core.js","core/lively/DOMAbstraction.js","core/lively/morphic/TextCore.js","core/cop/Layers.js","core/lively/persistence/Serializer.js","core/lively/ide/ErrorViewer.js","core/lively/ide/SystemCodeBrowser.js","core/lively/ide/SyntaxHighlighting.js","core/lively/ide/BrowserFramework.js","core/lively/morphic/Widgets.js","core/lively/morphic/MobileInterface.js","core/lively/morphic/Styles.js","core/lively/CrayonColors.js","core/lively/morphic/Events.js","core/lively/ide/commands/default.js","core/lively/morphic/Clipboard.js","core/lively/data/FileUpload.js","core/lively/ide/CodeEditor.js","core/lively/lang/VM.js","core/lively/ast/acorn.js","core/lively/ide/codeeditor/Modes.js","core/lively/ide/codeeditor/ace.js","core/lively/ide/codeeditor/Snippets.js","core/lively/ide/codeeditor/EvalMarker.js","core/lively/ide/codeeditor/Keyboard.js","core/lively/ide/codeeditor/JumpChar.js","core/lively/ide/codeeditor/TextOverlay.js","core/lively/ide/codeeditor/Commands.js","core/lively/ide/codeeditor/DocumentChange.js","core/lively/morphic.js","core/lively/morphic/Complete.js","core/lively/morphic/TextFormattingSupport.js","core/lively/morphic/TextFormattingToolbar.js","core/lively/morphic/constraints/Core.js","core/lively/morphic/ObjectMigration.js","core/lively/morphic/Layout.js","core/lively/morphic/Halos.js","core/lively/morphic/ScriptingSupport.js","core/lively/morphic/Connectors.js","core/lively/bindings/GeometryBindings.js","core/lively/bindings/Core.js","core/lively/morphic/AdditionalMorphs.js","core/lively/morphic/TabMorphs.js","core/lively/morphic/Grid.js","core/lively/persistence/MassMorphCreation.js","core/lively/PartsBin.js","core/lively/morphic/MorphAddons.js","core/lively/morphic/Lists.js","core/lively/morphic/StyleSheets.js","core/lively/morphic/StyleSheetsHTML.js","core/lively/morphic/HTML.js","core/lively/morphic/PathShapes.js","core/lively/morphic/Rendering.js","core/lively/morphic/StyleSheetRepresentation.js","apps/cssParser.js","core/lively/ide/SourceDatabase.js","core/lively/ide/FileParsing.js","core/lively/LKFileParser.js","core/ometa/lively.js","core/lively/Ometa.js","core/lively/ide/BrowserCommands.js","core/lively/ide/SystemBrowserNodes.js","core/lively/Helper.js","core/lively/LogHelper.js","core/lively/Main.js","core/lively/bindings.js"]);
 
@@ -40432,6 +40432,10 @@ module('lively.morphic.Widgets').requires(['lively.morphic.Core', 'lively.morphi
         documentation: "Title bar for lively.morphic.Window"
     }, 'properties', {
         controlSpacing: 3,
+        // Distance of the menu button from the window's left edge, and of the right-most button (close) from its right edge. Kept apart from
+        // controlSpacing, which also pads the title text above and below and between the title and the buttons: widening that would
+        // squeeze the title's own box, while only the icons are meant to stand a little off the corners.
+        controlEdgeMargin: 6,
         // Gap between adjacent right-anchored title bar buttons (close/
         // collapse) specifically — kept separate from controlSpacing (which
         // also sets the corner margin to the window edge and the menu
@@ -40511,10 +40515,11 @@ module('lively.morphic.Widgets').requires(['lively.morphic.Core', 'lively.morphi
         adjustElementPositions: function adjustElementPositions() {
             var innerBounds = this.innerBounds(),
                 sp = this.controlSpacing,
+                edge = this.controlEdgeMargin == null ? sp : this.controlEdgeMargin,
                 btnGap = this.controlButtonGap,
                 btnY = this.controlVerticalOffset;
 
-            var buttonLocation = this.innerBounds().topRight().subXY(sp, -sp);
+            var buttonLocation = this.innerBounds().topRight().subXY(edge, -sp);
 
             this.buttons.forEach(function (ea) {
                 buttonLocation = buttonLocation.subXY(ea.shape.bounds().width, 0);
@@ -40530,9 +40535,10 @@ module('lively.morphic.Widgets').requires(['lively.morphic.Core', 'lively.morphi
             // see Window#makeTitleBar and LivelyMorphic.md §8.
             if (this.menuButton && this.menuButton.owner) {
                 var mExt = this.menuButton.shape.bounds().extent(),
-                    menuGap = 6;
-                this.menuButton.setPosition(lively.pt(labelStart, btnY));
-                labelStart = labelStart + mExt.x + menuGap;
+                    menuGap = 6,
+                    menuX = this.innerBounds().topLeft().x + edge;
+                this.menuButton.setPosition(lively.pt(menuX, btnY));
+                labelStart = menuX + mExt.x + menuGap;
             }
 
             if (this.label) {

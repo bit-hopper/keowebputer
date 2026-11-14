@@ -207,7 +207,7 @@ module("lively.identity.MenuBarEntry")
               ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
             ].concat(lively.identity.localIdentity && lively.identity.localIdentity.phoneReady
-              ? [["Connect a phone ...", function () { self.openPhoneDialog(); }]] : []).concat([
+              ? [["WarpDrop ...", function () { self.openPhoneDialog(); }]] : []).concat([
               ["Friends ...",        function () { self.openFriendsDialog(); }],
             ]).concat(lively.identity.localFiles && lively.identity.localFiles.pointAvailable
               ? [["Point to a local file ...", function () { self.pointToLocalFile(); }]] : []).concat([
