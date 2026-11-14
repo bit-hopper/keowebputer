@@ -245,11 +245,14 @@ module("lively.identity.PhoneDialog")
         });
       },
 
-      // What arrived is in My files, in the Dropped folder: open it there.
+      // What arrived is in My files, in the Dropped folder: open it there. This window stays in front of every other window, and over My
+      // files it would cover the list of folders, so it then folds down to its title bar (the "+" there opens it again; so does the
+      // next thing that happens on the phone's side, see render).
       showFiles: function showFiles() {
-        var folder = (this._p.result && this._p.result.folder) || lively.identity.PhoneDialog.FOLDER;
+        var self = this, folder = (this._p.result && this._p.result.folder) || lively.identity.PhoneDialog.FOLDER;
         lively.require("lively.identity.MyFilesBrowser").toRun(function () {
           lively.identity.MyFilesBrowser.openOnFolder(folder);
+          self.collapse();
         });
       },
 
@@ -259,6 +262,9 @@ module("lively.identity.PhoneDialog")
       // (updateProgress). The window is sized to its content: the window's extent is set first, because its layout stretches the
       // content by the change of its height, and the content's extent last (the same as PeerDialog).
       render: function render() {
+        // A window folded to its title bar has no content to draw into (the window takes it out until it opens again), so a change on the
+        // phone's side opens the window first and draws when it is open: the person is not left looking at a stale title bar.
+        if (this.isCollapsed()) { var folded = this; this.expand().then(function () { folded.render(); }); return; }
         var content = this.get("phoneContent"), p = this._p, NS = lively.identity.PhoneDialog, local = lively.identity.localIdentity;
         if (!content) return;
         content.removeAllMorphs();
