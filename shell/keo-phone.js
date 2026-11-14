@@ -1,4 +1,4 @@
-// Receiving files from a phone over the local network, SHELL side (desktop app only). The world draws the "Connect a phone" window
+// Receiving files from a phone over the local network, SHELL side (desktop app only). The world draws the WarpDrop window
 // (kernel: lively.identity.PhoneDialog); this page does the parts the world must not be trusted with. The app (keo-desktop, lib/phone.js)
 // runs a small web server on this computer while the window is open; this page starts and stops it, draws each address as a QR code, asks the
 // person about every batch of files a phone offers, and moves what arrives into the library in pieces (the same ingest a drop uses:
@@ -20,6 +20,8 @@
   'use strict';
   var POLL_MS = 400, ROWS = 6;
   var FOLDER = 'Dropped';
+  // Who ended a batch, as the app says it. Only these words reach the world, so that the window can say which it was.
+  var WHO = ['phone', 'computer', 'timeout', 'gone'];
   var ask = null, sess = null, listener = null;
 
   function emit(ev) { if (listener) { try { listener(ev); } catch (e) {} } }
@@ -63,7 +65,7 @@
     u.list.textContent = '';
     names.forEach(function (f) { var li = el('li'); li.appendChild(el('span', 'n', f.name)); li.appendChild(el('span', 's', sizeText(f.size))); u.list.appendChild(li); });
     if (r.files.length > ROWS) u.list.appendChild(el('li', 'more', 'and ' + (r.files.length - ROWS) + ' more'));
-    u.note.textContent = 'This device is not verified: its address and what it says it is can be wrong. Accept only what you chose to send from your own phone. The files are kept in a folder called ' + FOLDER + ' until you look at them.';
+    u.note.textContent = 'This device is not verified: its address and how it identifies can be misleading. Accept only what you chose to send from your own phone. The files are stored in the ' + FOLDER + ' folder.';
     sess.pending = r;
     u.root.hidden = false;
     emit({ type: 'asked', count: r.files.length, total: r.total });
@@ -74,7 +76,13 @@
     closeAsk();
     if (yes) sess.batches[r.id] = { id: r.id, files: r.files, total: r.total, got: 0, saved: 0, existed: 0, failed: 0 };
     emit({ type: 'answered', accepted: yes });
-    post('decide', { id: r.id, accept: yes }).then(function (x) { if (!x.ok) { delete sess.batches[r.id]; emit({ type: 'cancelled' }); } }, function () { emit({ type: 'error', message: 'The app could not be reached.' }); });
+    // An answer that comes too late (the phone gave up, or the time ran out) is told by the app as a cancelled batch, with who ended it;
+    // only if that has not come yet is it said without a reason.
+    post('decide', { id: r.id, accept: yes }).then(function (x) {
+      if (x.ok || !sess) return;
+      delete sess.batches[r.id];
+      if (!sess.cancelled[r.id]) emit({ type: 'cancelled' });
+    }, function () { emit({ type: 'error', kind: 'app', message: 'The app could not be reached.' }); });
   }
 
   // ---- what happens in the app ------------------------------------------------------------------------------------------------
@@ -86,17 +94,18 @@
     else if (e.type === 'cancelled') {
       if (sess.pending && sess.pending.id === e.id) closeAsk();
       else delete sess.batches[e.id];
-      emit({ type: 'cancelled' });
+      sess.cancelled[e.id] = true;
+      emit({ type: 'cancelled', by: WHO.indexOf(e.by) >= 0 ? e.by : undefined });
     }
     else if (e.type === 'progress') { var pb = sess.batches[e.id]; if (pb && e.size) emit({ type: 'progress', done: pb.got + e.received, total: pb.total }); }
     else if (e.type === 'file') { var fb = sess.batches[e.id]; if (fb) { fb.got += e.size; sess.queue.push(e); pump(); } }
-    else if (e.type === 'failed') emit({ type: 'error', message: 'A file did not finish. The phone can try again.' });
+    else if (e.type === 'failed') emit({ type: 'error', kind: 'upload', message: 'A file did not finish. The phone can try again.' });
     else if (e.type === 'expired') { emit({ type: 'expired' }); shutdown(true); }
   }
   function tick() {
     if (!sess || sess.polling) return;
     sess.polling = true;
-    post('events').then(function (r) { (r.events || []).forEach(onEvent); }, function () { emit({ type: 'error', message: 'The app could not be reached.' }); }).then(function () { if (sess) sess.polling = false; });
+    post('events').then(function (r) { (r.events || []).forEach(onEvent); }, function () { emit({ type: 'error', kind: 'app', message: 'The app could not be reached.' }); }).then(function () { if (sess) sess.polling = false; });
   }
 
   // ---- into the library ------------------------------------------------------------------------------------------------------
@@ -137,7 +146,8 @@
           if (r.existed) bt.existed++; else bt.saved++;
         } catch (e) {
           bt.failed++;
-          if (sess === s) emit({ type: 'error', message: '"' + f.name + '" was not saved: ' + String(e && e.message || e) });
+          // No name and no reason text: the world is told no file names, and the count of files not saved comes with the result.
+          if (sess === s) emit({ type: 'error', kind: 'save', message: 'A file could not be saved.' });
         }
         post('discard', { id: f.id, fid: f.fid }).catch(function () {});
         if (sess !== s) return;
@@ -182,7 +192,7 @@
     }).then(function (st) {
       if (!st) return view();
       if (st.error || !st.running) throw new Error('The app could not start listening for a phone.');
-      sess = { urls: st.urls || [], qrs: pictures(st.urls || []), claimed: false, phone: null, pending: null, batches: {}, queue: [], polling: false, pumping: false, timer: null };
+      sess = { urls: st.urls || [], qrs: pictures(st.urls || []), claimed: false, phone: null, pending: null, batches: {}, cancelled: {}, queue: [], polling: false, pumping: false, timer: null };
       sess.timer = setInterval(tick, POLL_MS);
       return view();
     });
