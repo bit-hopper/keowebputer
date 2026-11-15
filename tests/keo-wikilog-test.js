@@ -385,6 +385,20 @@ const resigned = async (person, dev, env, f) => { const c = clone(env); f(c.even
   permute(updatesOf).forEach((p) => { const d = new Y.Doc(); p.forEach((u) => Y.applyUpdate(d, u)); texts.add(d.getText('body').toString()); });
   ok('applying the four updates in each of the 24 possible orders gives the same page (' + JSON.stringify(Array.from(texts)[0]) + ')', texts.size === 1, Array.from(texts));
   ok('both people\'s edits are in it', (() => { const t = Array.from(texts)[0]; return t.includes('B says: ') && t.includes('from A') && t.includes('hello'); })(), Array.from(texts));
+  // what one edit shows by itself about its own clock numbers: the run it fills under each client id, which must be one unbroken stretch
+  ok('a verified edit reports the run of clock numbers it fills under each client id', (await W.verifyVersion(e1, ctx)).ranges[idOfA].start === 0 && (await W.verifyVersion(e1, ctx)).ranges[idOfA].end === 5, (await W.verifyVersion(e1, ctx)).ranges);
+  const gapDoc2 = await peerDoc(A.d1, 'nonce-gap-01');
+  const gapUps = [0, 1, 2].map((i) => edit(gapDoc2, (d) => d.getText('t').insert(i, 'abc')));
+  const gapEvent = await version(A, A.d1, Y.mergeUpdates([gapUps[0], gapUps[2]]), { nonces: ['nonce-gap-01'] });
+  await refusedBy('an edit with a hole in its own run of clock numbers (a Skip between two of its changes) is refused', gapEvent, null, /gap in the changes it writes/);
+  ok('an edit that fills a run but starts above zero is fine by itself (whether it continues the author\'s earlier edits is for the store)', (await W.verifyVersion(await version(A, A.d1, gapUps[2], { nonces: ['nonce-gap-01'] }), ctx)).ranges[await W.clientIdFor(A.d1.id, OBJ, 'nonce-gap-01')].start === 6);
+  // two sections for one client, written byte by byte: Yjs decodes both but applies only the last (measured below)
+  const varUint = (n) => { const out = []; while (n > 127) { out.push((n % 128) | 128); n = Math.floor(n / 128); } out.push(n); return out; };
+  const twoSections = new Uint8Array([2].concat([1], varUint(idOfA), [0], [0, 2], [1], varUint(idOfA), [2], [0, 3], [0]));
+  const sections = new Y.Doc(); Y.applyUpdate(sections, twoSections);
+  const decodedTotal = Y.decodeUpdate(twoSections).structs.reduce((n, s) => n + s.length, 0);
+  ok('(measured: Yjs DECODES both sections of one client, five clock numbers in all, but applying them leaves the first section out: state vector ' + JSON.stringify(Array.from(Y.decodeStateVector(Y.encodeStateVector(sections)))) + ')', decodedTotal === 5 && U.sameAs(U.readUpdate(twoSections), Y.decodeUpdate(twoSections), Y) === null && !Y.decodeStateVector(Y.encodeStateVector(sections)).has(idOfA), { decodedTotal, sv: Array.from(Y.decodeStateVector(Y.encodeStateVector(sections))) });
+  await refusedBy('an edit that writes under one client in two separate parts of the update is refused', await version(A, A.d1, twoSections, { nonces: [NONCE1] }), null, /two separate parts/);
   // KNOWN GAP, recorded so it is not forgotten: an author whose edit skips ahead of its own earlier clocks (an unsent edit in between)
   // still verifies here, and Yjs then holds that edit back as pending for ever. Keeping each author's clocks continuous is for the
   // store that holds the events, which sees the whole ancestry; this check sees one edit.

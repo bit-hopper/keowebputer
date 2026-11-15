@@ -100,7 +100,9 @@
     }
   }
 
-  // bytes -> { structs: [ { client, clock, length, kind: 'item' | 'gc' | 'skip', ref } ], deletes: { client: [ [clock, length], ... ] } }
+  // bytes -> { structs: [ { client, clock, length, kind: 'item' | 'gc' | 'skip', ref, section } ], deletes: { client: [ [clock, length], ... ] } }
+  // `section` counts the client sections of the update: Yjs decodes a client that has two sections as both but APPLIES only the last
+  // (its map is overwritten), so a caller that cares must refuse an update where one client has structs in two sections.
   // Throws on anything it does not understand, and on bytes left over at the end. `bytes` should be a Uint8Array that owns its buffer:
   // Yjs reads a byte string straight out of the underlying buffer, so on a view it can read past the end of the view (tested: it then
   // fails one read later), and both readers must be given the same bytes and nothing around them.
@@ -110,7 +112,7 @@
     for (c = 0; c < nClients; c++) {
       nStructs = r.varUint(); client = r.varUint(); clock = r.varUint();
       for (k = 0; k < nStructs; k++) {
-        var info = r.byte(), st = { client: client, clock: clock, length: 0, kind: 'item', ref: undefined };
+        var info = r.byte(), st = { client: client, clock: clock, length: 0, kind: 'item', ref: undefined, section: c };
         if (info === 10) { st.kind = 'skip'; st.length = r.varUint(); }
         else if ((info & 31) !== 0) {
           var cantCopyParent = (info & 192) === 0;

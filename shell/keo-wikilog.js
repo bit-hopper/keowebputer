@@ -40,7 +40,9 @@
 // refused: the caller keeps it and asks again when the missing piece arrives.
 //
 // NOT DONE HERE (later steps of the same track): the signed writer list that decides who may write (the caller passes `ctx.writers`),
-// where events are kept, how they travel, and a check that one author's client clocks continue where its earlier events stopped.
+// how events travel, and the check that one author's clocks continue where its earlier edits stopped, which needs the whole ancestry
+// and so belongs to the store that holds the events (keo-wikistore.js). What this file does check is what one edit shows by itself:
+// its changes under each client form one unbroken run, returned as `ranges`.
 (function (root, factory) {
   var node = typeof module === 'object' && module.exports;
   var api = factory(node ? require('./keo-did.js') : root.keoDid, node ? require('./keo-yupdate.js') : root.keoYUpdate, node ? require('./keo-yjs.js') : root.keoYjs);
@@ -167,9 +169,21 @@
       try { theirs = Y.decodeUpdate(update); } catch (x) { return fail('the edit is not an update Yjs reads'); }
       var differ = yu.sameAs(read, theirs, Y);
       if (differ) return fail('the edit is read differently by two readers (' + differ + ')');
+      // `ranges`: for each client id the edit writes under, the run of clock numbers it fills, { start, end } (end is one past the last).
+      // The run must be one unbroken stretch in one section of the update: a Skip inside it, a hole between two structs, or a second
+      // section for the same client are all refused (Yjs applies only the last of two sections, and holds back what sits behind a hole).
+      var ranges = {}, sectionOf = {};
       for (var s = 0; s < read.structs.length; s++) {
-        if (!mine[read.structs[s].client]) return fail('the edit writes with client id ' + read.structs[s].client + ', which is not one of this author\'s');
-        if (read.structs[s].ref === yu.CONTENT.DOC) return fail('the edit holds a sub-document, which a wiki page does not');
+        var st = read.structs[s];
+        if (!mine[st.client]) return fail('the edit writes with client id ' + st.client + ', which is not one of this author\'s');
+        if (st.ref === yu.CONTENT.DOC) return fail('the edit holds a sub-document, which a wiki page does not');
+        if (st.kind === 'skip') return fail('the edit has a gap in the changes it writes under client id ' + st.client);
+        if (sectionOf[st.client] === undefined) sectionOf[st.client] = st.section;
+        else if (sectionOf[st.client] !== st.section) return fail('the edit writes under client id ' + st.client + ' in two separate parts');
+        var run = ranges[st.client];
+        if (!run) ranges[st.client] = { start: st.clock, end: st.clock + st.length };
+        else if (st.clock !== run.end) return fail('the changes under client id ' + st.client + ' are not one unbroken run');
+        else run.end += st.length;
       }
 
       // 5. the parents and the right to write
@@ -178,7 +192,7 @@
       var writers = await ctx.writers(e.objId, e.parents);
       if (writers === null || writers === undefined) return pending('who may write this page is not known yet', { writers: true });
       if (!Array.isArray(writers) || writers.indexOf(did) < 0) return fail('the author may not write this page (as of the versions this edit follows)');
-      return { ok: true, cid: await versionId(e), did: did, deviceId: e.author.deviceId, clients: e.clients.map(function (c) { return c.id; }), structs: read.structs.length };
+      return { ok: true, cid: await versionId(e), did: did, deviceId: e.author.deviceId, clients: e.clients.map(function (c) { return c.id; }), structs: read.structs.length, ranges: ranges };
     } catch (x) {
       return fail('the edit could not be checked');
     }
