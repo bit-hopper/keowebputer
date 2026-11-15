@@ -439,5 +439,16 @@ async function makeAssertion(privateKey, challengeBytes, type) {
   })());
   ok('listedKeys of nothing is an empty list, not a crash', kd.listedKeys(null).length === 0 && kd.listedKeys({}).length === 0 && kd.listedKeys({ inception: good.inception, events: [null, {}, { event: null }] }).length === 1);
 
+  // compareLogs: how a shown log relates to the one kept for the same identity (the one rule behind "pin the longest log")
+  const cmp = (kept, shown) => kd.compareLogs(kept, shown);
+  ok('compareLogs: nothing kept is "new"', cmp(null, logOf([])).status === 'new' && cmp(undefined, logOf([s1])).status === 'new');
+  ok('compareLogs: the same events are "same", whoever signed them', cmp(logOf([s1]), logOf([s1])).status === 'same' && cmp(logOf([s1]), { inception: good.inception, events: [{ event: s1.event, sigs: { authority: [] } }] }).status === 'same');
+  ok('compareLogs: a log that holds the kept events and more is "extended"', cmp(logOf([]), logOf([s1])).status === 'extended' && cmp(logOf([s1]), logOf([s1, sRmB])).status === 'extended');
+  ok('compareLogs: a log that is a prefix of the kept one is "shorter", also when the longer one is a removal', cmp(logOf([s1, sRmB]), logOf([s1])).status === 'shorter' && cmp(logOf([s1]), logOf([])).status === 'shorter');
+  const f1 = cmp(logOf([s1]), logOf([sDw])), f2 = cmp(logOf([s1, sRmB]), logOf([s1, sRmA]));
+  ok('compareLogs: two logs that disagree about an event both hold are a "fork" at that place, however long each is', f1.status === 'fork' && f1.at === 1 && f2.status === 'fork' && f2.at === 2 && cmp(logOf([s1]), logOf([sDw, sRmDev])).status === 'fork');
+  ok('compareLogs: a fork is a fork even when the shown log is shorter than the kept one', cmp(logOf([s1, sRmB]), logOf([sDw])).status === 'fork');
+  ok('compareLogs: a shown log with no events is the inception alone', cmp(logOf([]), {}).status === 'same' && cmp(logOf([]), null).status === 'same' && cmp(logOf([s1]), {}).status === 'shorter');
+
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error(e); process.exit(1); });

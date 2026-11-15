@@ -299,7 +299,8 @@
   function gotProof(c, m) {
     if (c.peerOk || c.held) return violation(c, 'a second proof');
     c.held = [];
-    hello.verifyProof(m, { role: c.role === 'offerer' ? 'answer' : 'offer', fps: c.fps, audience: location.origin }).then(function (v) {
+    // `pin` is the log book (keo-wiki.js): a proof that shows an older log of the identity than this device has seen is refused.
+    hello.verifyProof(m, { role: c.role === 'offerer' ? 'answer' : 'offer', fps: c.fps, audience: location.origin, pin: function (did, log) { return window.keoWiki.pin(did, log); } }).then(function (v) {
       if (c.state === 'closed') return;
       if (!v.ok) return closeConn(c, v.error);
       if (c.expect && v.did !== c.expect) return closeConn(c, 'The device that connected is not the one this connection was made for: it proved a different identity.');

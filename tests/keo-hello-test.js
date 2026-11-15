@@ -497,5 +497,63 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   introThrows('the reader refuses an identity that is not a DID', () => hello.introFromText('keointro1.' + kd.b64u(enc.encode(JSON.stringify({ v: 1, did: '<script>' })))), /names no identity/);
   introThrows('the reader refuses a text far too long', () => hello.introFromText('keointro1.' + 'A'.repeat(9000)), /too long/);
 
+  // ================================================================ the log book: a shown log that is older than the one already seen is refused
+  // The book is the real one (keo-wikistore.js offerLog over an in-memory disk), given to the verifiers as `pin`. Without a pin a log is checked
+  // on its own, so a device that was removed can show the log from before its removal and verify: that is what the tests above say in so many
+  // words (the "NOT refused" checks), and what the pin closes for a verifier that has seen the newer log.
+  const Store = require(path.join(__dirname, '..', 'shell', 'keo-wikistore.js'));
+  async function newBook() {
+    const store = Store.create({ backend: Store.memoryBackend(), key: await subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']), did: 'did:keo:' + 'r'.repeat(52) + ':' + 'R'.repeat(43) });
+    const asked = [];
+    return { store, asked, pin: (did, log) => { asked.push({ did, log }); return store.offerLog(did, log); } };
+  }
+  const seen = async (bk, did) => { const l = await bk.store.logOf(did); return l ? l.events.length : null; };
+  const NEWER = /newer version of that identity/;
+  const bkA = await newBook();
+  const pA = await verify(await proofMsg(A, 'offer', FPS), 'offer', { pin: bkA.pin });
+  ok('a first proof is accepted with a book, and its log is kept', pA.ok === true && pA.did === A.did && await seen(bkA, A.did) === 0, pA);
+  ok('the book was asked with the DID and the log the proof carried', bkA.asked.length === 1 && bkA.asked[0].did === A.did && kd.canonicalJson(bkA.asked[0].log.inception) === kd.canonicalJson(A.inception) && Array.isArray(bkA.asked[0].log.events) && bkA.asked[0].log.events.length === 0);
+  ok('the same log again is accepted ("same")', (await verify(await proofMsg(A, 'offer', FPS), 'offer', { pin: bkA.pin })).ok === true && await seen(bkA, A.did) === 0);
+  const pA2 = await verify(await proofMsg(A2, 'offer', FPS), 'offer', { pin: bkA.pin });
+  ok('a proof with a LONGER log that extends the kept one is accepted and the book now holds the longer log', pA2.ok === true && await seen(bkA, A.did) === 1, pA2);
+  await refused('a proof that carries the shorter log, from before the addition, is now refused', proofMsg(A, 'offer', FPS), 'offer', { pin: bkA.pin }, NEWER);
+  await refused('and so is the passkey-signed certificate of that same device on the shorter log', proofMsg(Asign, 'offer', FPS), 'offer', { pin: bkA.pin }, NEWER);
+  ok('refusing it left the book as it was', await seen(bkA, A.did) === 1);
+
+  // the case the pin exists for: a removed device shows the log from before it was removed
+  const bkR = await newBook();
+  await refused('a proof that carries the removal is refused as before (the device is removed)...', proofMsg(Agone, 'offer', FPS), 'offer', { pin: bkR.pin }, /removed from the identity/);
+  ok('...and the book learned the longer log from it, although the proof was refused', await seen(bkR, A.did) === 1);
+  await refused('the same removed device, shown with the log from BEFORE its removal (inception-kind certificate), is now refused', proofMsg(A, 'offer', FPS), 'offer', { pin: bkR.pin }, NEWER);
+  await refused('and with its passkey-signed certificate', proofMsg(Asign, 'offer', FPS), 'offer', { pin: bkR.pin }, NEWER);
+  ok('(control) with no book the same two proofs are still accepted: the protection is the book, nothing else', (await verify(await proofMsg(A, 'offer', FPS), 'offer')).ok === true && (await verify(await proofMsg(Asign, 'offer', FPS), 'offer')).ok === true);
+  const A2afterA = Object.assign({}, A2, { events: (await withEvent(A2, await kd.removeDeviceEvent(lastEvent(A2), await devIdOf(A)), [signAs(A)])).events });
+  const bkS = await newBook();
+  ok('another device of the same identity, which was not removed, shows the log that removed the first one: accepted, and the longer log is kept', (await verify(await proofMsg(A2afterA, 'offer', FPS), 'offer', { pin: bkS.pin })).ok === true && await seen(bkS, A.did) === 2);
+  await refused('after that the removed device, shown with the log from before its removal, is refused', proofMsg(A, 'offer', FPS), 'offer', { pin: bkS.pin }, NEWER);
+  ok('a different identity is not held to this identity\'s log', (await verify(await proofMsg(B, 'answer', FPS), 'answer', { pin: bkR.pin })).ok === true && await seen(bkR, B.did) === 0);
+
+  // two logs that disagree
+  const bkF = await newBook();
+  await verify(await proofMsg(A2, 'offer', FPS), 'offer', { pin: bkF.pin });
+  await refused('a log that disagrees with the kept one about an event both hold is refused, whatever its length', proofMsg(Agone, 'offer', FPS), 'offer', { pin: bkF.pin }, /disagrees with what this device has already seen/);
+  ok('the book kept the first log and wrote the disagreement down', await seen(bkF, A.did) === 1 && (await bkF.store.alerts()).some((a) => a.kind === 'log-fork' && a.did === A.did && a.at === 1));
+
+  // the same rule for a dial request and for a card
+  await dRefused('a dial request on the older log is refused with the book', dialMsg(A), { pin: bkA.pin }, NEWER);
+  await dRefused('and one from the removed device with a passkey-signed certificate on the older log', dialMsg(Asign), { pin: bkR.pin }, NEWER);
+  ok('a dial request on the newer log is accepted with the book', (await dverify(await dialMsg(A2), { pin: bkA.pin })).ok === true);
+  await cRefused('a card on the older log is refused with the book', cardMsg(A, { seq: 5 }), { pin: bkA.pin }, NEWER);
+  await cRefused('and a card that disagrees with the kept log', cardMsg(Agone, { seq: 5 }), { pin: bkF.pin }, /disagrees with what this device has already seen/);
+  ok('a card on the newer log is accepted with the book, under the proven DID', (await cverify(await cardMsg(A2, { seq: 5 }), { pin: bkA.pin, did: A.did })).ok === true);
+
+  // a book that cannot answer, or answers with something odd, never lets a proof through
+  const odd = async (name, pin, re) => { const r = await verify(await proofMsg(A, 'offer', FPS), 'offer', { pin }); ok(name, r.ok === false && re.test(r.error), r); };
+  await odd('a book that throws (nobody is signed in, say) refuses the proof, with the ordinary "could not be checked"', async () => { throw new Error('Sign in to use wiki pages.'); }, /could not be checked/);
+  await odd('a book that answers "refused" refuses the proof', async () => ({ status: 'refused', error: 'x' }), /could not be checked against what this device already knows/);
+  await odd('a book that answers something unknown refuses the proof', async () => ({ status: 'maybe' }), /could not be checked against what this device already knows/);
+  await odd('a book that answers nothing refuses the proof', async () => undefined, /could not be checked against what this device already knows/);
+  ok('a log that does not verify never reaches the book', await (async () => { const bk = await newBook(); await verify(await proofMsg(A2, 'offer', FPS, { edit: (h) => { h.events = JSON.parse(JSON.stringify(h.events)); h.events[0].event.add.key.rpId = 'evil.test'; } }), 'offer', { pin: bk.pin }); return bk.asked.length === 0; })());
+
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('FATAL', e); process.exit(2); });

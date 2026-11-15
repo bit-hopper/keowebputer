@@ -213,8 +213,9 @@
     // A device the log has since removed is refused whatever vouches for it. A passkey-signed certificate is never checked against the
     // device list, and a removed key's certificates already fail on the key lookup below; neither would stop a device that was removed
     // while a certificate for it still had hours to run. (An inception-kind certificate is checked against the INCEPTION's device list,
-    // which a later removal does not change.) Only a proof that carries the log with the removal in it is stopped here: a verifier shown
-    // an older log still sees the device listed, and pinning the longest log seen per identity is what closes that (design note, D-2).
+    // which a later removal does not change.) Only a proof that carries the log with the removal in it is stopped HERE: a verifier shown
+    // an older log still sees the device listed. What closes that is the log book (`pin` in signerError), which has refused the older log
+    // before this runs, for a verifier that has seen the newer one.
     var gone = kd.canonicalJson(plainJwk(dj));
     if ((state.revokedDevices || []).some(function (d) { return kd.canonicalJson(plainJwk(d.jwk)) === gone; })) return 'the device has been removed from the identity';
     var key = state.authority.keys.filter(function (k) { return k.id === cert.authorityKeyId; })[0];
@@ -241,7 +242,8 @@
   }
 
   // Checks a proof received over the channel: msg = { hello, sig }. opts: { role (the role the SENDER must have), fps (what THIS
-  // side negotiated: it must equal what the sender signed), now, audience (the origin the certificate must be for) }.
+  // side negotiated: it must equal what the sender signed), now, audience (the origin the certificate must be for), pin (the log book:
+  // see signerError; give it whenever someone is signed in) }.
   // Resolves { ok, error } or { ok, did, name }.
   async function verifyProof(msg, opts) {
     opts = opts || {};
@@ -255,7 +257,7 @@
       if (!(t > now - MAX_AGE_MS)) return fail('The other side\'s proof is too old.');
       if (t > now + SKEW_MS) return fail('The other side\'s proof is dated in the future (check the clock).');
       if (h.name !== undefined && (typeof h.name !== 'string' || h.name.length > MAX_NAME)) return fail('The other side sent a bad name.');
-      var who = await signerError(msg, h, now, opts.audience);
+      var who = await signerError(msg, h, now, opts.audience, opts.pin);
       if (who.error) return fail(who.error);
       return { ok: true, did: h.did, name: h.name || null };
     } catch (e) {
@@ -266,10 +268,25 @@
   // The part every signed statement shares: the identity (its log verifies and names this DID), the device key (vouched for by that
   // identity, see certError) and the signature of that device key over the statement as it was sent. Resolves { did } or { error }.
   // It checks nothing about what the statement SAYS: the caller does that first (purpose, role, time, who it is for).
-  async function signerError(msg, h, now, audience) {
+  //
+  // `pin(did, log)` is the LOG BOOK (keo-wikistore.js offerLog, through keo-wiki.js): it keeps the longest verified log this device has seen
+  // for each identity and answers { status } with 'new', 'same', 'extended' (the shown log is longer, so it is kept now), 'shorter' or 'fork'.
+  // Without it a removed device could show the log from BEFORE its removal and still verify: a log carries nothing that says it is the newest.
+  // With it a shorter log is refused, and so is one that disagrees with what is kept (the first one seen stays; the book also keeps the
+  // disagreement to show). It runs once the log verifies and BEFORE the device's certificate is looked at, so that a newer log is learned even
+  // from a proof that is refused for another reason. Any answer other than the three that accept is refused, and so is a `pin` that throws.
+  // Not given: the log is checked on its own, as before (callers that have no signed-in session, and the node tests).
+  async function signerError(msg, h, now, audience, pin) {
     var v = await kd.verifyLog({ inception: h.inception, sigs: h.inceptionSigs, events: h.events });
     if (!v.ok) return { error: 'The identity does not verify: ' + v.error };
     if (v.did !== h.did) return { error: 'The identity does not match its proof.' };
+    if (pin) {
+      var r = await pin(h.did, { inception: h.inception, sigs: h.inceptionSigs, events: h.events || [] });
+      var status = r && r.status;
+      if (status === 'shorter') return { error: 'This device has already seen a newer version of that identity (a device may have been removed since), so an older copy is not trusted.' };
+      if (status === 'fork') return { error: 'That identity\'s history disagrees with what this device has already seen of it, so it is not trusted.' };
+      if (status !== 'new' && status !== 'same' && status !== 'extended') return { error: 'That identity could not be checked against what this device already knows of it.' };
+    }
     var ce = await certError(h.cert, v.state, h.inception, h.did, now, audience, h.events);
     if (ce) return { error: 'The other side\'s device is not vouched for: ' + ce + '.' };
     var devKey = await subtle.importKey('jwk', plainJwk(h.cert.devicePubKeyJwk), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
@@ -291,7 +308,7 @@
     if (proof.events && proof.events.length) h.events = proof.events;
     return h;
   }
-  // msg = { hello, sig }. opts: { to (the DID this side is), c (the hash of the code that came with it), now, audience }.
+  // msg = { hello, sig }. opts: { to (the DID this side is), c (the hash of the code that came with it), now, audience, pin (see signerError) }.
   // Resolves { ok, error } or { ok, did, nonce, time }. The nonce is returned, not remembered: the caller keeps the ones it has seen.
   async function verifyDial(msg, opts) {
     opts = opts || {};
@@ -305,7 +322,7 @@
       var t = Date.parse(h.time);
       if (!(t > now - DIAL_AGE_MS)) return fail('That dial request is too old.');
       if (t > now + SKEW_MS) return fail('That dial request is dated in the future (check the clock).');
-      var who = await signerError(msg, h, now, opts.audience);
+      var who = await signerError(msg, h, now, opts.audience, opts.pin);
       if (who.error) return fail(who.error);
       return { ok: true, did: h.did, nonce: h.nonce, time: t };
     } catch (e) {
@@ -365,7 +382,7 @@
   // The id the identity's log gives a device key (keo-identity.js): the hash of the key in its canonical form.
   async function deviceIdOf(jwk) { return kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson(plainJwk(jwk))))); }
   // msg = { hello, sig }. opts: { did (the identity the card must be from, when the caller knows it: a card learned over a connection that
-  // proved a DID), now, audience }. Resolves { ok, error } or { ok, did, deviceId, helpers, seq, time }.
+  // proved a DID), now, audience, pin (see signerError) }. Resolves { ok, error } or { ok, did, deviceId, helpers, seq, time }.
   async function verifyCard(msg, opts) {
     opts = opts || {};
     var now = opts.now || Date.now(), h = msg && msg.hello;
@@ -386,7 +403,7 @@
       // A version number far ahead of the card's own date would be kept as the newest and hide every later real card, whoever signed it (a
       // device with a wrong counter, or a friend doing it on purpose): the number may run ahead of the date only by what a clock may be off.
       if (h.seq > Math.floor(t / 1000) + SKEW_MS / 1000) return fail('That card has a version number that is ahead of its date.');
-      var who = await signerError(msg, h, now, opts.audience);
+      var who = await signerError(msg, h, now, opts.audience, opts.pin);
       if (who.error) return fail(who.error);
       return { ok: true, did: h.did, deviceId: await deviceIdOf(h.cert.devicePubKeyJwk), helpers: h.helpers.map(plainHelper), seq: h.seq, time: t };
     } catch (e) {

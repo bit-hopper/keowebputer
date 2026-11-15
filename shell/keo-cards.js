@@ -50,7 +50,8 @@
     counts[h.id] = (counts[h.id] || 0) + 1;
     if (counts[h.id] > MAX_CARDS_PER_CONNECTION) throw new Error('too many cards');
     var did = h.peer.did;
-    return hello.verifyCard({ hello: m.hello, sig: m.sig }, { did: did, audience: location.origin }).then(function (v) {
+    // `pin`: the log book. The card comes over a connection that proved this DID, so its log is pinned like the proof's was.
+    return hello.verifyCard({ hello: m.hello, sig: m.sig }, { did: did, audience: location.origin, pin: function (d, log) { return window.keoWiki.pin(d, log); } }).then(function (v) {
       if (!v.ok) { notes[h.id] = 'dropped a card: ' + v.error; return; }
       return contacts.setCard(did, v).then(function () { notes[h.id] = 'kept a card (version ' + v.seq + ')'; });
     }).catch(function (e) { notes[h.id] = 'could not keep a card: ' + (e && e.message || e); });
@@ -74,7 +75,8 @@
   function importText(text) {
     var msg;
     try { msg = hello.cardFromText(text); } catch (e) { return Promise.reject(e); }
-    return hello.verifyCard(msg, { audience: location.origin }).then(function (v) {
+    // `pin`: the log book, for friends only (a pasted text can come from anyone: keo-wiki.js pinFriend)
+    return hello.verifyCard(msg, { audience: location.origin, pin: function (did, log) { return window.keoWiki.pinFriend(did, log); } }).then(function (v) {
       if (!v.ok) throw new Error(v.error);
       return contacts.ensure().then(function () {
         if (!contacts.isAdded(v.did)) return { did: v.did, deviceId: v.deviceId, added: false, changed: false };

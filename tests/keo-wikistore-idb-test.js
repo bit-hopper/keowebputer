@@ -45,7 +45,7 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
 
 // ---- what node makes and the page is given ------------------------------------------------------------------------------------------
 async function fixtures() {
-  const A = await F.makePerson(), B = await F.makePerson(), C = await F.makePerson(), D = await F.makePerson();
+  const A = await F.makePerson(), B = await F.makePerson(), C = await F.makePerson(), D = await F.makePerson(), E = await F.makePerson();
   const wa = await F.writer(A, A.d1), wb = await F.writer(B, B.d1);
   const e1 = await wa.publish((d) => d.getText('body').insert(0, 'hello')), c1 = await F.cidOf(e1);
   const e2 = await wa.publish((d) => d.getText('body').insert(5, ' world'), [c1]), c2 = await F.cidOf(e2);
@@ -69,8 +69,8 @@ async function fixtures() {
   const lone = await (await F.writer(B, B.d1, undefined, 'page-lone')).publish((d) => d.getText('body').insert(0, 'lone'), []);
   const u = (env) => kd.unb64u(env.event.payload.update);
   return {
-    dids: { A: A.did, B: B.did, C: C.did, D: D.did },
-    logs: { A: olderA, B: B.snapshot(), C: C.snapshot(), D: D.snapshot() }, longerA,
+    dids: { A: A.did, B: B.did, C: C.did, D: D.did, E: E.did },
+    logs: { A: olderA, B: B.snapshot(), C: C.snapshot(), D: D.snapshot(), E: E.snapshot() }, longerA,
     e1, e2, b1, b2, ahead, t1, t2, c1, c2, bc1, bc2, long: long.envs, race: race.envs, lone,
     expectMain: F.textOf(Y.mergeUpdates([u(e1), u(e2), u(b1), u(b2)])), expectLong: long.text
   };
@@ -202,6 +202,25 @@ async function fixtures() {
     const leaked = await page.evaluate((n) => window.__t.scan(n), needles);
     check('nothing readable on disk: not the text, the page name, the kinds of alert, nor any author\'s identity (the owner\'s DID is in the key by design)', leaked.length === 0, leaked);
 
+    // ---- 3b. the log book as the connection code uses it: pin (keo-hello.js verifiers get it as `pin`) and pinFriend (for what anyone can send)
+    phase = '3b log book entry points';
+    const S3b = await page.evaluate(async (d) => {
+      const s = window.keoWiki.store(), me = (await window.keoIdentity.current()).did, out = {};
+      out.older = (await window.keoWiki.pin(d.dids.A, d.logs.A)).status;                  // the book holds A's longer log since step 2
+      out.same = (await window.keoWiki.pin(d.dids.A, d.longerA)).status;
+      out.own = !!(await s.logOf(me));
+      out.stranger = await window.keoWiki.pinFriend(d.dids.E, d.logs.E);
+      out.strangerKept = !!(await s.logOf(d.dids.E));
+      await window.keoContacts.ensure(); await window.keoContacts.add(d.dids.E, 'Eve');
+      out.friend = (await window.keoWiki.pinFriend(d.dids.E, d.logs.E)).status;
+      out.friendKept = !!(await s.logOf(d.dids.E));
+      await window.keoContacts.remove(d.dids.E);
+      return out;
+    }, data);
+    check('pin: an older log of an identity is "shorter", the kept one is "same", and the signed-in identity\'s own log is now in the book', S3b.older === 'shorter' && S3b.same === 'same' && S3b.own === true, S3b);
+    check('pinFriend keeps nothing for an identity that is not a friend, and answers "new" so that a verifier does not refuse it for that', S3b.stranger.status === 'new' && S3b.stranger.kept === false && S3b.strangerKept === false, S3b);
+    check('pinFriend keeps the log of a friend', S3b.friend === 'new' && S3b.friendKept === true, S3b);
+
     phase = '4 reload';
     // ---- 4. a reload: a new page load, the session comes back, the records are opened again --------------------------------------------
     await page.reload();
@@ -256,9 +275,13 @@ async function fixtures() {
     const S7a = await page.evaluate(async () => {
       const old = window.keoWiki.store(); await window.keoIdentity.signOut();
       const out = { oldRefuses: await old.heads('page-one').then(() => 'read', (e) => e.message), newRefuses: (() => { try { window.keoWiki.store(); return 'given'; } catch (e) { return e.message; } })() };
-      out.rows = (await window.__t.rows()).length; return out;
+      out.rows = (await window.__t.rows()).length;
+      out.pinSignedOut = (() => { try { window.keoWiki.pin('did:keo:x', {}); return 'no error'; } catch (e) { return e.message; } })();
+      out.pinFriendSignedOut = await window.keoWiki.pinFriend('did:keo:x', {}).then(() => 'resolved', (e) => e.message);
+      return out;
     });
     check('after sign-out the old store refuses to run and no new one is given', /closed/.test(S7a.oldRefuses) && /Sign in/.test(S7a.newRefuses), S7a);
+    check('signed out, the log book answers neither pin nor pinFriend (a verifier then refuses: nothing is accepted for want of a book)', /Sign in/.test(S7a.pinSignedOut) && /Sign in/.test(S7a.pinFriendSignedOut), S7a);
     check('signing out deletes nothing', S7a.rows > 300, S7a);
     await page.evaluate((d) => window.keoIdentity.signIn({ did: d }), did);
     const S7b = await page.evaluate(async (d) => {

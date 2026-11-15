@@ -102,6 +102,29 @@
     if (c) draining = Promise.all([draining, c.store.close().catch(function () {})]).then(function () {});
     return draining;
   }
+  // THE LOG BOOK AS THE CONNECTION CODE USES IT (keo-hello.js `pin`): the longest verified identity log this device has seen for each
+  // identity, kept in the store (keo-wikistore.js offerLog), so that a proof, a dial request or a card that shows an OLDER log of an
+  // identity is refused: a device that was removed from an identity cannot connect by showing the log from before its removal.
+  // pin(did, log) offers the log a verifier has just checked and answers what the book made of it ({ status }: new, same, extended, shorter,
+  // fork). The signed-in identity's OWN log is offered first, so that it sits in the book beside the others (an edit by one of this
+  // identity's own devices is checked against it) and a log shown for this very identity is compared with it. Throws when nobody is signed
+  // in, which a verifier takes as "could not be checked": nothing is accepted for want of a book.
+  // Not for the world: nothing here is behind a bridge op.
+  function pin(did, log) {
+    var s = store();
+    return window.keoIdentity.deviceProof().then(function (p) {
+      return s.offerLog(p.did, { inception: p.inception, sigs: p.sigs, events: p.events });
+    }).then(function () { return s.offerLog(did, log); });
+  }
+  // The same for what ANYONE can send (a dial request on the local network, a card pasted as text): a log is kept only for an identity
+  // the person has added as a friend. For any other identity the answer is "new" and nothing is kept, so a stranger cannot fill the book
+  // with identities they made (the callers turn a stranger away anyway, for not being a friend). A connection the person made themselves
+  // uses pin, so that the first connection to someone already pins their log.
+  function pinFriend(did, log) {
+    return window.keoContacts.ensure().then(function () {
+      return window.keoContacts.isAdded(did) ? pin(did, log) : { status: 'new', kept: false };
+    });
+  }
   // Removes every record of an identity from this device. Needs no key.
   function purge(did) {
     var p = prefix(did);
@@ -109,5 +132,5 @@
     return draining.then(function () { return run('readwrite', function (st) { st['delete'](IDBKeyRange.bound(p, p + MAXCH)); }); });
   }
 
-  window.keoWiki = { store: store, setWriters: setWriters, reset: reset, purge: purge, backend: backend };
+  window.keoWiki = { store: store, setWriters: setWriters, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
 })();

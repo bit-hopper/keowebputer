@@ -114,6 +114,10 @@ async function device(label, name) {
     check('both sides become ready, each having verified the other\'s proof over the channel', !!readyA && !!readyB, { A: await events(A.frame), B: await events(B.frame) });
     check('A learns B\'s verified DID and the name B chose to show', readyA && readyA.peer.did === B.did && readyA.peer.name === 'Jun', readyA);
     check('B learns A\'s verified DID and the name A chose to show', readyB && readyB.peer.did === A.did && readyB.peer.name === 'Maya', readyB);
+    // The log book (keo-wiki.js pin): the proof's log was offered to it, and the signed-in identity's own log sits in it beside the other's.
+    const booked = (d, other) => d.page.evaluate(async (o) => { const s = window.keoWiki.store(), theirs = await s.logOf(o.them), mine = await s.logOf(o.me); return { theirs: !!theirs && Array.isArray(theirs.events) && theirs.inception.state !== undefined, mine: !!mine && Array.isArray(mine.events) }; }, { them: other.did, me: d.did });
+    const bookA = await booked(A, B), bookB = await booked(B, A);
+    check('each side\'s log book holds the other identity\'s log, learned from its proof, and its own', bookA.theirs && bookA.mine && bookB.theirs && bookB.mine, { A: bookA, B: bookB });
     check('the channel was "open" (peer unproven) before it was "ready"', (await events(A.frame)).filter((e) => e.id === cA && e.type === 'state').map((e) => e.state).join(',') === 'invited,connecting,open,ready', (await events(A.frame)).filter((e) => e.id === cA).map((e) => e.state));
     console.log('INFO ready after ' + (Date.now() - t0) + ' ms from the first invitation');
     check('p2p.list shows the ready connection with the peer\'s DID', (await call(A.frame, 'p2p.list')).r.some((c) => c.id === cA && c.state === 'ready' && c.peer.did === B.did));

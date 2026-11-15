@@ -412,9 +412,28 @@
     return { ok: true, did: inc.did, state: st, seq: lastSeq };
   }
 
+  // How a log that has just been shown compares with the one already kept for the same identity: the one rule for "pin the longest log"
+  // (keo-wikistore.js keeps the log book, keo-hello.js refuses a proof by it). Both logs must already verify against the same DID, so they
+  // share one inception and only the events are compared; an event is compared by what it says, not by who signed it. `kept` is null when
+  // nothing is kept. Returns { status } with
+  //   'new'       nothing is kept
+  //   'same'      the same events
+  //   'extended'  the shown log holds every event the kept one does, and more
+  //   'shorter'   the kept log holds every event the shown one does, and more: an older copy, which cannot undo what the newer one says
+  //   'fork'      the two disagree about an event both hold; `at` is its place (1 is the first event after the inception)
+  // Not for logs that have not been verified: the caller does that first.
+  function compareLogs(kept, shown) {
+    if (!kept) return { status: 'new' };
+    var a = kept.events || [], b = (shown && shown.events) || [], common = Math.min(a.length, b.length);
+    for (var i = 0; i < common; i++) {
+      if (canonicalJson(a[i].event) !== canonicalJson(b[i].event)) return { status: 'fork', at: i + 1 };
+    }
+    return { status: b.length > a.length ? 'extended' : b.length === a.length ? 'same' : 'shorter' };
+  }
+
   return {
     addAuthorityEvent: addAuthorityEvent, addDeviceEvent: addDeviceEvent, removeAuthorityEvent: removeAuthorityEvent, removeDeviceEvent: removeDeviceEvent,
-    verifyLog: verifyLog, listedKeys: listedKeys, isPublicEcJwk: isPublicEcJwk,
+    verifyLog: verifyLog, compareLogs: compareLogs, listedKeys: listedKeys, isPublicEcJwk: isPublicEcJwk,
     verifySignature: verifySignature, rawMessage: rawMessage, RAW_SCHEME: RAW_SCHEME, PURPOSES: PURPOSES, KEY_KINDS: KEY_KINDS,
     b64u: b64u, unb64u: unb64u, z32encode: z32encode, z32decode: z32decode,
     canonicalJson: canonicalJson, sha256: sha256, eventHash: eventHash,

@@ -104,15 +104,13 @@
       var kept = await pinnedLog(did);
       async function pin() { await write('log', await logKey(did), clean); logs.set(did, clean); }
       if (!kept) { await pin(); return { status: 'new', seq: clean.events.length }; }
-      var common = Math.min(kept.events.length, clean.events.length);
-      for (var i = 0; i < common; i++) {
-        if (kd.canonicalJson(kept.events[i].event) !== kd.canonicalJson(clean.events[i].event)) {
-          await alert({ kind: 'log-fork', did: did, at: i + 1 });
-          return { status: 'fork', at: i + 1, error: 'that identity log disagrees with the one already kept about event ' + (i + 1) + '; the first one seen is kept' };
-        }
+      var cmp = kd.compareLogs(kept, clean);
+      if (cmp.status === 'fork') {
+        await alert({ kind: 'log-fork', did: did, at: cmp.at });
+        return { status: 'fork', at: cmp.at, error: 'that identity log disagrees with the one already kept about event ' + cmp.at + '; the first one seen is kept' };
       }
-      if (clean.events.length > kept.events.length) { await pin(); return { status: 'extended', seq: clean.events.length }; }
-      return { status: clean.events.length === kept.events.length ? 'same' : 'shorter', seq: kept.events.length };
+      if (cmp.status === 'extended') { await pin(); return { status: 'extended', seq: clean.events.length }; }
+      return { status: cmp.status, seq: kept.events.length };
     }
     async function offerLog(did, log) {
       return serial(async function () {

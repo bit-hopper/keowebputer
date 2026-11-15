@@ -148,7 +148,8 @@
       var msg = JSON.parse(dec.decode(kd.unb64u(b64)));
       if (!msg || msg.t !== 'dial' || typeof msg.code !== 'string' || msg.code.length > 1024) return NO;
       var c = kd.b64u(await kd.sha256(enc.encode(msg.code)));
-      var v = await hello.verifyDial({ hello: msg.hello, sig: msg.sig }, { to: s.did, c: c, audience: location.origin });
+      // `pin`: the log book, for friends only (anyone on the network can send this request: keo-wiki.js pinFriend)
+      var v = await hello.verifyDial({ hello: msg.hello, sig: msg.sig }, { to: s.did, c: c, audience: location.origin, pin: function (did, log) { return window.keoWiki.pinFriend(did, log); } });
       if (!v.ok) return NO;
       // The nonce is remembered only for a request that verified, so junk cannot fill the list.
       Object.keys(nonces).forEach(function (k) { if (t - nonces[k] > NONCE_KEEP_MS) { delete nonces[k]; nonceCount--; } });
