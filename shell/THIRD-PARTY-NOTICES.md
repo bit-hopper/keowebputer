@@ -38,3 +38,12 @@ is kept at its top.
 
 A QR code decoder (Apache-2.0), installed as a dev dependency so `tests/keo-qr-test.js` and `tests/keo-intro-test.js` can read back the codes
 that keo draws and so prove they are readable. It is not copied into the package and nothing in keo calls it.
+
+## `keo-yjs.js` (a built copy of Yjs, with lib0)
+
+Yjs 13.6.31 (MIT licence, Kevin Jahns and others) and lib0 0.2.117, the small library it is built on (MIT licence, Kevin Jahns), bundled into
+one plain script by `extension/vendor-yjs.js` with esbuild 0.28.1 (iife, minified, global `keoYjs`). The code is unchanged apart from being bundled;
+the full licence text of both libraries is at the top of the file and must stay there. It is used to read and to put together the updates a shared
+wiki page is made of (`keo-wikilog.js`, `keo-yupdate.js`). To refresh the copy, run `node extension/vendor-yjs.js --yjs <the yjs package folder>
+--esbuild <the esbuild package folder>`; nothing in a package build needs either. The file is not listed in the package build yet: nothing in the
+shell page loads it until the wiki pages' storage and exchange exist, and the tests load it straight from `shell/`.

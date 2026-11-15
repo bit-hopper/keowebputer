@@ -86,6 +86,7 @@ npm run test:hello                                   # no browser: the short con
 npm run test:callsdp                                 # no browser: what a call description from the peer must look like
 npm run test:fingerprint                             # no browser: the eight words that stand for a DID, and for a request to add a device
 npm run test:enrollcode                               # no browser: the text carried between two devices when an identity is added to another
+npm run test:wikilog                                  # no browser: the signed version event of a shared wiki page, and the reading of its edits
 npm run test:devcycle                                  # no browser: the kernel round (extension/dev-cycle.js) against throwaway repositories: only the named files are committed, a pushed or real commit is never amended
 npm run test:worldtext                               # no browser: the text that is searchable in a saved world, and the search
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator

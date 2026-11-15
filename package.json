@@ -18,7 +18,8 @@
     "refresh-kernel": "node extension/refresh-kernel.js",
     "dev-cycle": "node extension/dev-cycle.js",
     "test:qr": "node tests/keo-qr-test.js",
-    "test:sha256": "node tests/keo-sha256-test.js"
+    "test:sha256": "node tests/keo-sha256-test.js",
+    "test:wikilog": "node tests/keo-wikilog-test.js"
   },
   "devDependencies": {
     "jsqr": "1.4.0",
