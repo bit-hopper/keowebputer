@@ -149,7 +149,7 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
     let cert = { v: 1, did: id.did, devicePubKeyJwk: deviceJwk, issuedAt: new Date(now).toISOString(), exp: new Date(now + 12 * 3600e3).toISOString(), aud: AUD, scope: ['world:read', 'world:write', 'sign'], authorityKeyId: key.id };
     if (mode === 'log') cert = Object.assign({ via: 'log' }, cert, { assertion: newSig });
     else { const a = await assertion(pair.privateKey, await kd.eventHash(cert)); cert = Object.assign({}, cert, { assertion: { authenticatorData: a.authenticatorData, clientDataJSON: a.clientDataJSON, signature: a.signature } }); }
-    return { did: id.did, inception: id.inception, sigs: id.sigs, events, cert, device };
+    return { did: id.did, inception: id.inception, sigs: id.sigs, events, cert, device, pair, keyId: key.id };
   }
   // A proof message as it crosses the channel (JSON in, JSON out). `edit(hello)` changes the hello AFTER it is built and BEFORE it is
   // signed (a cheater signing something bad); `after(msg)` changes it after signing (tampering on the way).
@@ -221,6 +221,42 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await refused('the same for a log-kind certificate', proofMsg(A2, 'offer', FPS, { now: Date.now() + 2 * DAY, edit: stretch(2 * DAY + 12 * 3600e3, 2 * DAY) }), 'offer', { now: Date.now() + 2 * DAY }, /first session has run out/);
   ok('the first session still verifies a few hours after the device was listed', (await verify(await proofMsg(A, 'offer', FPS, { now: Date.now() + 5 * 3600e3 }), 'offer', { now: Date.now() + 5 * 3600e3 })).ok === true);
   ok('a sign-in certificate (the passkey signs it) verifies two days after the identity was made', (await verify(await proofMsg(await makeIdentity('signin', { now: Date.now() + 2 * DAY }), 'offer', FPS, { now: Date.now() + 2 * DAY }), 'offer', { now: Date.now() + 2 * DAY })).ok === true);
+
+  // ---- a device or a key the log has since removed (D-1). The removal has to reach every kind of delegation: the passkey-signed one is
+  // ---- never checked against the device list, and the inception-kind one is checked against the INCEPTION's list, which a removal does
+  // ---- not change. A proof that carries the log with the removal in it is refused; one that carries an older log is not (see D-2).
+  const lastEvent = (id) => (id.events && id.events.length ? id.events[id.events.length - 1].event : id.inception);
+  const devIdOf = async (id) => kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson(plain(id.cert.devicePubKeyJwk)))));
+  // `id` with `event` appended to its log, signed by `signers` ([{ keyId, pair }]) as WebAuthn assertions over H(event)
+  const withEvent = async (id, event, signers) => {
+    const H = await kd.eventHash(event);
+    return Object.assign({}, id, { events: (id.events || []).concat([{ event, sigs: { authority: await Promise.all(signers.map(async (s) => Object.assign({ keyId: s.keyId }, await assertion(s.pair.privateKey, H)))) } }]) });
+  };
+  const signAs = (id) => ({ keyId: id.keyId, pair: id.authPair });
+  const signinCertFor = async (id) => {
+    const now = Date.now();
+    const cert = { v: 1, did: id.did, devicePubKeyJwk: id.cert.devicePubKeyJwk, issuedAt: new Date(now).toISOString(), exp: new Date(now + 12 * 3600e3).toISOString(), aud: AUD, scope: ['world:read', 'world:write', 'sign'], authorityKeyId: id.keyId };
+    return Object.assign({}, cert, { assertion: await assertion(id.authPair.privateKey, await kd.eventHash(cert)) });
+  };
+  // the same device as A, but with a certificate its passkey signed (what keo-identity.js makes at every sign-in)
+  const Asign = Object.assign({}, A, { cert: await signinCertFor(A) });
+  ok('(control) the passkey-signed certificate of a device the inception lists verifies before any removal', (await verify(await proofMsg(Asign, 'offer', FPS), 'offer')).ok === true);
+  const Agone = await withEvent(A, await kd.removeDeviceEvent(lastEvent(A), await devIdOf(A)), [signAs(A)]);
+  const AsignGone = Object.assign({}, Agone, { cert: Asign.cert });
+  await refused('a device the log removed is refused: an inception-kind certificate', proofMsg(Agone, 'offer', FPS), 'offer', {}, /removed from the identity/);
+  await refused('and the passkey-signed certificate of the same device, which no device list ever checked', proofMsg(AsignGone, 'offer', FPS), 'offer', {}, /removed from the identity/);
+  ok('a proof that still carries the older log (before the removal) is NOT refused: only pinning the longest log seen (D-2) closes that', (await verify(await proofMsg(Asign, 'offer', FPS), 'offer')).ok === true && (await verify(await proofMsg(A, 'offer', FPS), 'offer')).ok === true);
+  const A2gone = await withEvent(A2, await kd.removeDeviceEvent(lastEvent(A2), await devIdOf(A2)), [signAs(A)]);
+  await refused('a device a later event listed is refused once another event removes it: a log-kind certificate', proofMsg(A2gone, 'offer', FPS), 'offer', {}, /removed from the identity/);
+  await refused('a removal nobody signed makes the whole identity fail, not the device alone', proofMsg(await withEvent(A, await kd.removeDeviceEvent(lastEvent(A), await devIdOf(A)), []), 'offer', FPS), 'offer', {}, /identity does not verify/);
+  const A3key = A3.events[0].event.add.key.id;
+  await refused('a removed authority key takes its certificates with it: the sign-in certificate of the passkey that was removed', proofMsg(await withEvent(A3, await kd.removeAuthorityEvent(lastEvent(A3), A3key), [signAs(A)]), 'offer', FPS), 'offer', {}, /authority key/);
+  const A3x = await withEvent(A3, await kd.removeAuthorityEvent(lastEvent(A3), A.keyId), [{ keyId: A3key, pair: A3.pair }]);
+  await refused('the first passkey removed by the one added later: its inception-kind certificate is refused', proofMsg(Object.assign({}, A, { events: A3x.events }), 'offer', FPS), 'offer', {}, /authority key/);
+  await refused('and its passkey-signed certificate', proofMsg(Object.assign({}, Asign, { events: A3x.events }), 'offer', FPS), 'offer', {}, /authority key/);
+  const vA3x = await verify(await proofMsg(A3x, 'offer', FPS), 'offer');
+  ok('while the passkey that stayed still verifies, under the same DID', vA3x.ok === true && vA3x.did === A.did, vA3x);
+  ok('a device removed by one event does not take the identity\'s other devices with it (A2 verifies on the log that removed only A\'s own device)', (await verify(await proofMsg(Object.assign({}, A2, { events: (await withEvent(A2, await kd.removeDeviceEvent(lastEvent(A2), await devIdOf(A)), [signAs(A)])).events }), 'offer', FPS), 'offer')).ok === true);
 
   // ---- an identity whose only authority is a phone (raw signatures, kind 'phone'); software stands in for the phone
   const phoneSig = async (pair, purpose, h) => ({ scheme: 'p256-raw', signature: kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, Buffer.concat([Buffer.from('keo/authority/v1'), Buffer.from([0]), Buffer.from(purpose), Buffer.from([0]), Buffer.from(h)])))) });
@@ -297,6 +333,9 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await dRefused('an expired delegation is refused', dialMsg(await makeIdentity('signin', { now: Date.now() - 20e3, ttl: 5e3 })), {}, /expired/);
   await dRefused('an inception that was edited fails', dialMsg(A, { edit: (h) => { h.inception = JSON.parse(JSON.stringify(h.inception)); h.inception.time = '2020-01-01T00:00:00.000Z'; } }), {}, /identity|vouched|could not/);
   await dRefused('a certificate made for another identity is refused', dialMsg(A, { edit: (h) => { h.cert = B.cert; } }), {}, /not for this identity/);
+  await dRefused('a dial request from a device the log removed is refused too', dialMsg(Agone), {}, /removed from the identity/);
+  await dRefused('and from a removed device with a passkey-signed certificate', dialMsg(AsignGone), {}, /removed from the identity/);
+  ok('(control) the same device\'s dial request still verifies on the older log, which the identity\'s own devices cannot tell is old', (await dverify(await dialMsg(Asign))).ok === true);
   await dRefused('a dial request with no identity at all is refused without throwing', dialMsg(A, { edit: (h) => { delete h.inception; delete h.inceptionSigs; delete h.cert; } }), {}, /identity|could not be checked/);
   await dRefused('events grafted onto another identity are refused', dialMsg(B, { to: A.did, edit: (h) => { h.events = A2.events; } }), { to: A.did }, /identity does not verify/);
   await dRefused('the added passkey\'s device without the events is refused', dialMsg(Object.assign({}, A2, { events: [] })), {}, /authority key/);

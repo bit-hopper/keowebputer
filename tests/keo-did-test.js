@@ -189,7 +189,7 @@ async function makeAssertion(privateKey, challengeBytes, type) {
   const phoneSign = async (keyId, pair, purpose, h) => ({ keyId, scheme: 'p256-raw', signature: kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, rawMsg(purpose, h)))) });
   const mkPhone = async () => { const m = await mkKey('phone'); m.entry.kind = 'phone'; delete m.entry.rpId; return m; };
   ok('rawMessage is the label, a zero, the purpose, a zero, then the hash', Buffer.from(kd.rawMessage('session', H)).equals(rawMsg('session', H)));
-  ok('the four purposes are the ones the log and the certificate use', kd.PURPOSES.join() === 'inception,add-authority,add-device,session');
+  ok('the six purposes are the ones the log and the certificate use (the first four unchanged, the two removals after them)', kd.PURPOSES.join() === 'inception,add-authority,add-device,session,remove-authority,remove-device');
 
   // an identity whose ONLY authority is a phone (allowed: a lost phone is then a lost identity unless a second way back exists)
   const ph = await mkPhone();
@@ -280,6 +280,164 @@ async function makeAssertion(privateKey, challengeBytes, type) {
   ok('an identity that needs a passkey AND a phone verifies with both', (await kd.verifyInception(mixed)).ok === true);
   const onlyOne = JSON.parse(JSON.stringify(mixed)); onlyOne.sigs.authority.pop();
   ok('and not with the passkey alone', (await kd.verifyInception(onlyOne)).ok === false);
+
+  // ---- removal: remove-authority and remove-device (D-1). Everything below is built from the pieces above, so a removal is held to the
+  // same signing rules as an addition: a threshold of EXISTING keys, none of them the key being removed.
+  const A = as(keyId, authPair), B = as(k2.entry.id, k2.pair), C = as(k3.entry.id, k3.pair);
+  const sign = (e, signers) => signEvent(e, signers, null);
+  const check = async (name, log, expectOk, at, errRe) => {
+    const x = await kd.verifyLog(log);
+    ok(name, expectOk ? x.ok === true : (x.ok === false && (at === undefined || x.failedAt === at) && (!errRe || errRe.test(x.error))), JSON.stringify(x));
+    return x;
+  };
+  const devX = { id: 'device-x', jwk: k3.entry.jwk, addedAt: new Date().toISOString() };
+
+  // one key removes another; e1 added key B and the device dev2 together
+  const eRmB = await kd.removeAuthorityEvent(e1, k2.entry.id);
+  const sRmB = await sign(eRmB, [A]);
+  ok('a remove-authority event is typed, numbered and chained, and names only the key', eRmB.type === 'remove-authority' && eRmB.seq === 2 && eRmB.prev === kd.b64u(await kd.eventHash(e1)) && eRmB.remove.keyId === k2.entry.id && !('deviceId' in eRmB.remove) && eRmB.add === undefined);
+  r = await kd.verifyLog(logOf([s1, sRmB]), did);
+  ok('the key that stays removes the other: one key left, the DID unchanged', r.ok === true && r.did === did && r.seq === 2 && r.state.authority.keys.length === 1 && r.state.authority.keys[0].id === keyId, JSON.stringify(r));
+  ok('the removed key is on the revoked list; its device is not touched, because the event did not name it (and not listed twice)', r.ok && r.state.revoked.length === 1 && r.state.revoked[0] === k2.entry.id && r.state.devices.length === 1 && r.state.devices[0].id === dev2.id && r.state.revokedDevices.length === 0, JSON.stringify(r.state));
+  r = await kd.verifyLog(logOf([s1]));
+  ok('a log with no removal has an empty revoked list and no removed devices', r.ok && r.state.revoked.length === 0 && r.state.revokedDevices.length === 0);
+  const rmLog = logOf([s1, sRmB]), rmBefore = JSON.stringify(rmLog);
+  await kd.verifyLog(rmLog);
+  ok('verifying a log with a removal does not change the log it was given', JSON.stringify(rmLog) === rmBefore);
+
+  await check('a key cannot be removed on its own say-so (the removed key is the only signer)', logOf([s1, await sign(eRmB, [B])]), false, 2, /only 0 of 1/);
+  await check('the first key cannot be removed by itself either (A signs the removal of A: nobody else signed)', logOf([s1, await sign(await kd.removeAuthorityEvent(e1, keyId), [A])]), false, 2, /only 0 of 1/);
+  await check('a removed key\'s signature beside a good one is ignored, not an error', logOf([s1, await sign(eRmB, [A, B])]), true);
+  await check('a removal with no signature at all is rejected', logOf([s1, await sign(eRmB, [])]), false, 2);
+  await check('a removal signed by a stranger is rejected', logOf([s1, await sign(eRmB, [as(keyId, stranger)])]), false, 2);
+
+  // the other direction: the key the identity began with is removed by the key that was added
+  const eRmA = await kd.removeAuthorityEvent(e1, keyId);
+  const sRmA = await sign(eRmA, [B]);
+  r = await kd.verifyLog(logOf([s1, sRmA]), did);
+  ok('the first key can be removed by a key added later; the DID still does not change', r.ok === true && r.state.authority.keys.length === 1 && r.state.authority.keys[0].id === k2.entry.id && r.state.revoked[0] === keyId && r.did === did, JSON.stringify(r));
+
+  // a removed key's later signatures count for nothing
+  const eAfterB = await kd.addDeviceEvent(eRmB, devX), eAfterA = await kd.addDeviceEvent(eRmA, devX);
+  await check('an event after the removal, signed by the key that stayed, verifies', logOf([s1, sRmB, await sign(eAfterB, [A])]), true);
+  await check('an event after the removal, signed only by the removed key, is rejected', logOf([s1, sRmB, await sign(eAfterB, [B])]), false, 3, /only 0 of 1/);
+  await check('the same holds when the removed key is the first one (signed by it: rejected)', logOf([s1, sRmA, await sign(eAfterA, [A])]), false, 3, /only 0 of 1/);
+  await check('and the key that stayed still signs (B after A was removed)', logOf([s1, sRmA, await sign(eAfterA, [B])]), true);
+
+  // the last key, and a threshold that must stay reachable
+  await check('the last authority key cannot be removed (the identity would not be able to sign again)', logOf([await sign(await kd.removeAuthorityEvent(good.inception, keyId), [A])]), false, 1, /last authority key/);
+  const eRmKb = await kd.removeAuthorityEvent(inc2, kb.entry.id);
+  await check('with two keys needed, removing one is refused before any signature is looked at', { inception: base2.inception, sigs: base2.sigs, events: [await sign(eRmKb, [as(keyId, authPair), as(kb.entry.id, kb.pair)])] }, false, 1, /would leave 1 authority keys, and 2 are needed/);
+  const log2 = (events) => ({ inception: base2.inception, sigs: base2.sigs, events: [both].concat(events) });
+  const eRmKc = await kd.removeAuthorityEvent(ec, kc.entry.id);
+  await check('with three keys and two needed, removing one needs the other two', log2([await sign(eRmKc, [as(keyId, authPair), as(kb.entry.id, kb.pair)])]), true);
+  await check('the key being removed does not make up the two (A and the removed key: one counts)', log2([await sign(eRmKc, [as(keyId, authPair), as(kc.entry.id, kc.pair)])]), false, 2, /only 1 of 2/);
+  await check('one key signing twice does not make up the two for a removal either', log2([await sign(eRmKc, [as(keyId, authPair), as(keyId, authPair)])]), false, 2, /only 1 of 2/);
+  r = await kd.verifyLog(log2([await sign(await kd.removeAuthorityEvent(ec, keyId), [as(kb.entry.id, kb.pair), as(kc.entry.id, kc.pair)])]));
+  ok('the key the identity began with can be removed by the other two', r.ok === true && r.state.authority.keys.length === 2 && r.state.authority.threshold === 2, JSON.stringify(r));
+
+  // a removed key never comes back, by id or by its public key under a new id
+  const eReB = await kd.addAuthorityEvent(eRmB, k2.entry), eReBnew = await kd.addAuthorityEvent(eRmB, Object.assign({}, k2.entry, { id: 'a-new-id-for-the-same-key' })), eAddC = await kd.addAuthorityEvent(eRmB, k3.entry);
+  await check('a removed key cannot be added again under its own id', logOf([s1, sRmB, await signEvent(eReB, [A], B)]), false, 3, /already has or revoked/);
+  await check('nor under a new id with the same public key', logOf([s1, sRmB, await signEvent(eReBnew, [A], as('a-new-id-for-the-same-key', k2.pair))]), false, 3, /removed/);
+  await check('(control) a different key is added after a removal without trouble', logOf([s1, sRmB, await signEvent(eAddC, [A], C)]), true);
+  const wr = async (revoked) => { const e = JSON.parse(JSON.stringify(inception)); e.state.revoked = revoked; const He = await kd.eventHash(e);
+    return { inception: e, sigs: { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, He)), authority: [Object.assign({ keyId }, await makeAssertion(authPair.privateKey, He))] } }; };
+  const prerevoked = await wr([k2.entry.id]);
+  await check('a key id the inception already lists as revoked cannot be added', { inception: prerevoked.inception, sigs: prerevoked.sigs, events: [await signEvent(await kd.addAuthorityEvent(prerevoked.inception, k2.entry), [A], B)] }, false, 1, /already has or revoked/);
+  await check('(control) the same addition on an inception that revokes nothing verifies', logOf([s1]), true);
+  ok('a revoked list that is not a list of ids is rejected at the inception', (await kd.verifyInception(await wr('x'))).ok === false && (await kd.verifyInception(await wr([1]))).ok === false && (await kd.verifyInception(await wr({}))).ok === false);
+  ok('a revoked list of ids, or none at all, is accepted', (await kd.verifyInception(prerevoked)).ok === true && (await kd.verifyInception(await wr(undefined))).ok === true);
+
+  // a key and its device together, in one event
+  const eRmBD = await kd.removeAuthorityEvent(e1, k2.entry.id, dev2.id);
+  r = await kd.verifyLog(logOf([s1, await sign(eRmBD, [A])]));
+  ok('removing a key with its device in one event takes out both, and both are on the removed lists', r.ok === true && r.state.authority.keys.length === 1 && r.state.devices.length === 0 && r.state.revoked[0] === k2.entry.id && r.state.revokedDevices.length === 1 && r.state.revokedDevices[0].id === dev2.id && r.state.revokedDevices[0].jwk.x === dev2.jwk.x, JSON.stringify(r));
+  await check('a device named by a key removal must be listed', logOf([s1, await sign(await kd.removeAuthorityEvent(e1, k2.entry.id, 'nobody'), [A])]), false, 2, /does not list exactly once/);
+
+  // a device on its own
+  const sDw = await sign(await kd.addDeviceEvent(good.inception, dev2), [A]);
+  const eRmDev = await kd.removeDeviceEvent(sDw.event, dev2.id), sRmDev = await sign(eRmDev, [A]);
+  ok('a remove-device event is typed, numbered, chained and names only the device', eRmDev.type === 'remove-device' && eRmDev.seq === 2 && eRmDev.prev === kd.b64u(await kd.eventHash(sDw.event)) && eRmDev.remove.deviceId === dev2.id && Object.keys(eRmDev.remove).length === 1);
+  r = await kd.verifyLog(logOf([sDw, sRmDev]), did);
+  ok('a device is removed: no devices left, the key untouched, the device on the removed list with its public key', r.ok === true && r.state.devices.length === 0 && r.state.authority.keys.length === 1 && r.state.revoked.length === 0 && r.state.revokedDevices.length === 1 && r.state.revokedDevices[0].jwk.x === dev2.jwk.x && r.seq === 2, JSON.stringify(r));
+  await check('a device removal needs the threshold of keys too (no signature: rejected)', logOf([sDw, await sign(eRmDev, [])]), false, 2);
+  await check('a device removal signed by a stranger is rejected', logOf([sDw, await sign(eRmDev, [as(keyId, stranger)])]), false, 2);
+  r = await kd.verifyLog(logOf([s1, sRmB, await sign(await kd.addDeviceEvent(eRmB, devX), [A])]));
+  ok('devices added before and after a removal each appear once (a stale device must not be added again)', r.ok === true && r.state.devices.length === 2 && r.state.devices[0].id === dev2.id && r.state.devices[1].id === 'device-x', JSON.stringify(r.state.devices));
+  const wdLog = await withDevices([devEntry]);
+  r = await kd.verifyLog({ inception: wdLog.inception, sigs: wdLog.sigs, events: [await sign(await kd.removeDeviceEvent(wdLog.inception, devEntry.id), [A])] });
+  ok('a device listed in the inception can be removed', r.ok === true && r.state.devices.length === 0 && r.state.revokedDevices.length === 1, JSON.stringify(r));
+  const dupLog = await withDevices([devEntry, devEntry]);
+  await check('a device id the inception lists twice cannot be removed (it is not clear which)', { inception: dupLog.inception, sigs: dupLog.sigs, events: [await sign(await kd.removeDeviceEvent(dupLog.inception, devEntry.id), [A])] }, false, 1, /does not list exactly once/);
+
+  // a removed device never comes back, by id or by its public key under a new id, even inside an add-authority event
+  const eReDev = await kd.addDeviceEvent(eRmDev, dev2), eReDevNew = await kd.addDeviceEvent(eRmDev, Object.assign({}, dev2, { id: 'new-id-same-device-key' })), eOther = await kd.addDeviceEvent(eRmDev, devX);
+  await check('a removed device cannot be added again under its own id', logOf([sDw, sRmDev, await sign(eReDev, [A])]), false, 3, /removed/);
+  await check('nor under a new id with the same public key', logOf([sDw, sRmDev, await sign(eReDevNew, [A])]), false, 3, /removed/);
+  await check('nor inside an add-authority event', logOf([sDw, sRmDev, await signEvent(await kd.addAuthorityEvent(eRmDev, k3.entry, dev2), [A], C)]), false, 3, /removed/);
+  await check('(control) another device is added after a removal without trouble', logOf([sDw, sRmDev, await sign(eOther, [A])]), true);
+
+  // removing what is not there, or the wrong kind of thing
+  await check('removing a key the identity does not have is rejected', logOf([s1, await sign(await kd.removeAuthorityEvent(e1, 'nobody'), [A])]), false, 2, /does not list exactly once/);
+  await check('removing a device the identity does not have is rejected', logOf([s1, await sign(await kd.removeDeviceEvent(e1, 'nobody'), [A])]), false, 2, /does not list exactly once/);
+  await check('a key id given as a device id removes nothing (the two lists are not mixed up)', logOf([s1, await sign(await kd.removeDeviceEvent(e1, k2.entry.id), [A])]), false, 2, /does not list exactly once/);
+  await check('removing the same key twice is rejected the second time', logOf([s1, sRmB, await sign(await kd.removeAuthorityEvent(eRmB, k2.entry.id), [A])]), false, 3, /does not list exactly once/);
+  await check('removing the same device twice is rejected the second time', logOf([sDw, sRmDev, await sign(await kd.removeDeviceEvent(eRmDev, dev2.id), [A])]), false, 3, /does not list exactly once/);
+
+  // what an event must look like
+  const resign = async (e, signers) => sign(e, signers || [A]);
+  await check('a removal with no `remove` member is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { remove: undefined }))]), false, 2, /does not say what it removes/);
+  await check('a `remove` member that is a list is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { remove: [k2.entry.id] }))]), false, 2, /does not say what it removes/);
+  await check('a `remove` member that is a string is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { remove: k2.entry.id }))]), false, 2, /does not say what it removes/);
+  await check('a remove-authority event with an extra member is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { remove: { keyId: k2.entry.id, note: 'x' } }))]), false, 2, /does not say what it removes/);
+  await check('a remove-device event that also names a key is rejected (what was signed must be what happens)', logOf([sDw, await resign(Object.assign({}, eRmDev, { remove: { deviceId: dev2.id, keyId: keyId } }))]), false, 2, /does not say what it removes/);
+  await check('a removal that also carries an `add` member is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { add: { device: devX } }))]), false, 2, /removes and adds/);
+  await check('a remove-authority event with no key id is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { remove: {} }))]), false, 2, /does not list exactly once/);
+  await check('a key id that is not a string is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { remove: { keyId: 7 } }))]), false, 2, /does not list exactly once/);
+
+  // the chain, and what was signed
+  await check('a removal with a wrong seq is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { seq: 3 }))]), false, 2, /seq/);
+  await check('a removal with a wrong prev is rejected', logOf([s1, await resign(Object.assign({}, eRmB, { prev: kd.b64u(crypto.getRandomValues(new Uint8Array(32))) }))]), false, 2, /prev/);
+  await check('changing the removal after signing is rejected (B signed for, the event now removes A)', logOf([s1, tamper(sRmB, (c) => { c.event.remove.keyId = keyId; })]), false, 2);
+  await check('swapping the removed device after signing is rejected', logOf([sDw, tamper(sRmDev, (c) => { c.event.remove.deviceId = 'device-x'; })]), false, 2);
+  await check('a remove-authority event cannot be relabelled as remove-device', logOf([sDw, { event: Object.assign({}, eRmDev, { type: 'remove-authority' }), sigs: sRmDev.sigs }]), false, 2);
+  await check('a second event built on the same previous event (a fork) is rejected', logOf([s1, sRmB, await sign(await kd.addDeviceEvent(e1, devX), [A])]), false, 3, /seq|prev/);
+  await check('an event of a kind nobody defined is still rejected', logOf([s1, await resign(Object.assign({}, eRmB, { type: 'remove-everything' }))]), false, 2, /not a known event/);
+
+  // a phone key signs a removal for the purpose named by the event type, and for no other
+  const eRmP2 = await kd.removeAuthorityEvent(eP2, ph2.entry.id), eRmP1 = await kd.removeAuthorityEvent(eP2, ph.entry.id);
+  const phoneRm = async (e, signerKey, signerPair, purpose) => ({ event: e, sigs: { authority: [await phoneSign(signerKey, signerPair, purpose, await kd.eventHash(e))] } });
+  r = await kd.verifyLog(logPhone([sP2, await phoneRm(eRmP2, ph.entry.id, ph.pair, 'remove-authority')]));
+  ok('a phone removes a second phone with a raw signature for the remove-authority purpose', r.ok === true && r.state.authority.keys.length === 1 && r.state.authority.keys[0].id === ph.entry.id && r.state.revoked[0] === ph2.entry.id, JSON.stringify(r));
+  for (const wrong of ['remove-device', 'add-authority', 'add-device', 'session', 'inception']) {
+    r = await kd.verifyLog(logPhone([sP2, await phoneRm(eRmP2, ph.entry.id, ph.pair, wrong)]));
+    ok('a phone signature made for the ' + wrong + ' purpose does not remove a key', r.ok === false && r.failedAt === 2, JSON.stringify(r));
+  }
+  r = await kd.verifyLog(logPhone([sP2, await phoneRm(eRmP2, ph2.entry.id, ph2.pair, 'remove-authority')]));
+  ok('the second phone cannot sign its own removal, with the right purpose', r.ok === false && r.failedAt === 2 && /only 0 of 1/.test(r.error), JSON.stringify(r));
+  const sRmP1 = await phoneRm(eRmP1, ph2.entry.id, ph2.pair, 'remove-authority');
+  r = await kd.verifyLog(logPhone([sP2, sRmP1]));
+  ok('and the second phone can remove the first (the key the identity began with)', r.ok === true && r.state.authority.keys.length === 1 && r.state.authority.keys[0].id === ph2.entry.id, JSON.stringify(r));
+  r = await kd.verifyLog(logPhone([sP2, sRmP1, await phoneRm(await kd.addDeviceEvent(eRmP1, devX), ph.entry.id, ph.pair, 'add-device')]));
+  ok('a phone that was removed can no longer sign an add-device event', r.ok === false && r.failedAt === 3, JSON.stringify(r));
+  const eRmPD = await kd.removeDeviceEvent(eD, dev2.id);
+  r = await kd.verifyLog(logPhone([sD, await phoneRm(eRmPD, ph.entry.id, ph.pair, 'remove-device')]));
+  ok('a phone removes a computer\'s device key with the remove-device purpose', r.ok === true && r.state.devices.length === 0 && r.state.revokedDevices.length === 1 && r.state.authority.keys.length === 1, JSON.stringify(r));
+  r = await kd.verifyLog(logPhone([sD, await phoneRm(eRmPD, ph.entry.id, ph.pair, 'add-device')]));
+  ok('an add-device signature cannot be replayed to remove the same device', r.ok === false && r.failedAt === 2, JSON.stringify(r));
+  r = await kd.verifyLog(logPhone([sD, await phoneRm(eRmPD, ph.entry.id, ph.pair, 'remove-authority')]));
+  ok('a remove-authority signature cannot be replayed to remove a device', r.ok === false && r.failedAt === 2, JSON.stringify(r));
+  r = await kd.verifyLog(logPhone([sD, { event: eRmPD, sigs: { authority: [Object.assign({ keyId: ph.entry.id }, await makeAssertion(ph.pair.privateKey, await kd.eventHash(eRmPD)))] } }]));
+  ok('a WebAuthn assertion cannot stand in for a phone key on a removal either', r.ok === false && r.failedAt === 2, JSON.stringify(r));
+
+  // listedKeys: the unchecked list for display, which must follow removals and must not trip over an event that adds no key
+  ok('listedKeys follows additions and removals, and does not trip over a device event', (() => {
+    const ids = (l) => kd.listedKeys(l).map((x) => x.id).join();
+    return ids(logOf([])) === keyId && ids(logOf([s1])) === keyId + ',' + k2.entry.id && ids(logOf([s1, sRmB])) === keyId && ids(logOf([s1, sRmA])) === k2.entry.id
+      && ids(logOf([sDw, sRmDev])) === keyId && ids(logOf([sDw])) === keyId;
+  })());
+  ok('listedKeys of nothing is an empty list, not a crash', kd.listedKeys(null).length === 0 && kd.listedKeys({}).length === 0 && kd.listedKeys({ inception: good.inception, events: [null, {}, { event: null }] }).length === 1);
 
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error(e); process.exit(1); });

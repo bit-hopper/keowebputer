@@ -210,6 +210,13 @@
     if (!Array.isArray(cert.scope) || cert.scope.indexOf('sign') < 0) return 'the delegation does not allow signing';
     var dj = cert.devicePubKeyJwk;
     if (!dj || dj.kty !== 'EC' || dj.crv !== 'P-256' || typeof dj.x !== 'string' || typeof dj.y !== 'string' || dj.d !== undefined) return 'the device key is malformed';
+    // A device the log has since removed is refused whatever vouches for it. A passkey-signed certificate is never checked against the
+    // device list, and a removed key's certificates already fail on the key lookup below; neither would stop a device that was removed
+    // while a certificate for it still had hours to run. (An inception-kind certificate is checked against the INCEPTION's device list,
+    // which a later removal does not change.) Only a proof that carries the log with the removal in it is stopped here: a verifier shown
+    // an older log still sees the device listed, and pinning the longest log seen per identity is what closes that (design note, D-2).
+    var gone = kd.canonicalJson(plainJwk(dj));
+    if ((state.revokedDevices || []).some(function (d) { return kd.canonicalJson(plainJwk(d.jwk)) === gone; })) return 'the device has been removed from the identity';
     var key = state.authority.keys.filter(function (k) { return k.id === cert.authorityKeyId; })[0];
     if (!key) return 'the delegation names an authority key the identity does not have';
     if (cert.via === 'inception' || cert.via === 'log') {

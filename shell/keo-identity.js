@@ -74,7 +74,7 @@
   // The authority keys after every event, WITHOUT checking anything: for display only. Whatever decides a signature goes through
   // verifyLog, which does check.
   function keysOf(rec) {
-    return rec.inception.state.authority.keys.concat((rec.events || []).map(function (x) { return x.event.add.key; }));
+    return kd.listedKeys(logOf(rec));      // follows removals too, and skips events that add no key (add-device, remove-device)
   }
   function summary(rec) {
     var next = rec.inception.state.next, keys = keysOf(rec), rpIds = {};

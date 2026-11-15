@@ -157,7 +157,7 @@
   //
   // This is what a phone-app implementer must reproduce byte for byte; rawMessage below and the phone tests in tests/keo-did-test.js are the reference.
   var RAW_SCHEME = 'p256-raw';
-  var PURPOSES = ['inception', 'add-authority', 'add-device', 'session'];
+  var PURPOSES = ['inception', 'add-authority', 'add-device', 'session', 'remove-authority', 'remove-device'];
   var KEY_KINDS = ['platform', 'security-key', 'phone'];
   function rawMessage(purpose, hashBytes) {
     var label = enc.encode('keo/authority/v1'), p = enc.encode(purpose), h = bytesOf(hashBytes);
@@ -218,6 +218,10 @@
       if (!devOk) return Promise.resolve(fail('state.devices is malformed'));
     }
     if (auth.keys.some(keyEntryError)) return Promise.resolve(fail('state.authority has a malformed key'));
+    // revoked is the list of key ids that may never be added (verifyLog fills it as keys are removed), so it must be a list of ids
+    if (st.revoked !== undefined && !(Array.isArray(st.revoked) && st.revoked.every(function (id) { return typeof id === 'string'; }))) {
+      return Promise.resolve(fail('state.revoked is malformed'));
+    }
     var dkBytes;
     try { dkBytes = z32decode(disc.key); } catch (err) { return Promise.resolve(fail('discovery key is not z-base-32')); }
     if (dkBytes.length !== 32 || z32encode(dkBytes) !== disc.key) return Promise.resolve(fail('discovery key is not 32 bytes'));
@@ -276,9 +280,57 @@
     });
   }
 
+  // ---- the log after the inception: removing a key or a device ---------------------------------------------------
+  // The two events that end what the add events began. Signed like the add events, by as many EXISTING authority keys as the
+  // current threshold, with one difference: the key being removed is not one of the signers (it does not count, so a key can never
+  // vote for its own removal). Both sign H(e) as an assertion, or as a raw message for a phone key with the purpose set to the type.
+  //
+  //   { v: 1, type: 'remove-authority', seq: n, prev, time, remove: { keyId, deviceId? } }   deviceId: the device that belongs to that key,
+  //                                                                                           removed in the same event (one approval, not two)
+  //   { v: 1, type: 'remove-device',    seq: n, prev, time, remove: { deviceId } }
+  //   sigs: { authority: [ { keyId, ...signature } ] }
+  //
+  // What the verifier enforces (and verifyLog's tests pin down): the thing removed must be listed exactly once; the last authority key,
+  // and any removal that would leave fewer keys than the threshold, are refused (an identity must stay able to sign); a removed key or
+  // device is never listed again, whether it comes back under its old id or a new id with the same public key; a removed key's later
+  // signatures count for nothing; `remove` carries exactly the members named above and the event carries no `add`.
+  // What it does NOT do: a verifier shown only an older, shorter log still sees the removed key in it. Pinning the longest log seen for
+  // an identity is the caller's job (design note, D-2), as is deciding between two logs that fork.
+  function removeAuthorityEvent(prevEvent, keyId, deviceId, time) {
+    return eventHash(prevEvent).then(function (h) {
+      var remove = { keyId: keyId };
+      if (deviceId) remove.deviceId = deviceId;
+      return { v: 1, type: 'remove-authority', seq: prevEvent.seq + 1, prev: b64u(h), time: time || new Date().toISOString(), remove: remove };
+    });
+  }
+  function removeDeviceEvent(prevEvent, deviceId, time) {
+    return eventHash(prevEvent).then(function (h) {
+      return { v: 1, type: 'remove-device', seq: prevEvent.seq + 1, prev: b64u(h), time: time || new Date().toISOString(), remove: { deviceId: deviceId } };
+    });
+  }
+
+  // The authority keys after every event, WITHOUT checking anything (no signature, no chain): for showing a person how many keys an
+  // identity lists. Whatever decides a signature goes through verifyLog, which does check.
+  function listedKeys(log) {
+    var keys = ((log && log.inception && log.inception.state && log.inception.state.authority && log.inception.state.authority.keys) || []).slice();
+    ((log && log.events) || []).forEach(function (x) {
+      var e = x && x.event;
+      if (!e) return;
+      if (e.type === 'add-authority' && e.add && e.add.key) keys.push(e.add.key);
+      if (e.type === 'remove-authority' && e.remove) keys = keys.filter(function (k) { return k.id !== e.remove.keyId; });
+    });
+    return keys;
+  }
+
+  var EVENT_TYPES = ['add-authority', 'add-device', 'remove-authority', 'remove-device'];
+  // Two P-256 public keys are the same key when x and y are (kty and crv are fixed by isPublicEcJwk).
+  function sameKey(a, b) { return !!a && !!b && a.x === b.x && a.y === b.y; }
+
   // `log` is { inception, sigs, events: [ { event, sigs } ] }. Verifies the inception, then each event in order, and
   // resolves to { ok, did, state, error?, failedAt? } where `state` is the authority and device lists after the last event
-  // (the inception's `state` with the additions folded in). A caller that was GIVEN a DID passes it as `expectDid`.
+  // (the inception's `state` with the additions folded in and the removals taken out). `state.revoked` lists the ids of the keys
+  // that were removed and `state.revokedDevices` the { id, jwk } of the devices that were, so a caller can refuse a certificate for a
+  // device the log has since removed. A caller that was GIVEN a DID passes it as `expectDid`.
   async function verifyLog(log, expectDid) {
     function fail(msg, at) { return { ok: false, error: msg, failedAt: at }; }
     var inc = await verifyInception(log);
@@ -286,28 +338,54 @@
     if (expectDid && inc.did !== expectDid) return fail('the log is for ' + inc.did + ', not ' + expectDid, 0);
     var st = JSON.parse(JSON.stringify(log.inception.state));
     st.devices = st.devices || [];
+    st.revoked = st.revoked || [];
+    st.revokedDevices = [];
+    var goneKeys = [];                // { id, jwk } of every key removed so far: a key may not come back under a new id
     var last = log.inception, lastSeq = 0, events = log.events || [];
     if (!Array.isArray(events)) return fail('events is not a list', 1);
     for (var i = 0; i < events.length; i++) {
       var e = events[i] && events[i].event, sigs = events[i] && events[i].sigs, at = i + 1;
       if (!e || !sigs) return fail('event ' + at + ' has no signatures', at);
-      if (e.v !== 1 || (e.type !== 'add-authority' && e.type !== 'add-device')) return fail('event ' + at + ' is not a known event', at);
+      if (e.v !== 1 || EVENT_TYPES.indexOf(e.type) < 0) return fail('event ' + at + ' is not a known event', at);
       if (e.seq !== lastSeq + 1) return fail('event ' + at + ' does not follow the last event (seq)', at);
       var lastHash = b64u(await eventHash(last));
       if (e.prev !== lastHash) return fail('event ' + at + ' does not point at the last event (prev)', at);
-      var addAuth = e.type === 'add-authority';
-      var key = addAuth ? e.add && e.add.key : null, dev = e.add && e.add.device;
-      if (addAuth) {
-        if (keyEntryError(key)) return fail('event ' + at + ' adds a malformed key', at);
-        if (st.authority.keys.some(function (k) { return k.id === key.id; }) || (st.revoked || []).indexOf(key.id) >= 0) return fail('event ' + at + ' adds a key the identity already has or revoked', at);
-      } else if (!dev) return fail('event ' + at + ' adds no device', at);
-      if (dev !== undefined && (!dev || typeof dev.id !== 'string' || !isPublicEcJwk(dev.jwk))) return fail('event ' + at + ' adds a malformed device', at);
-      if (dev && st.devices.some(function (d) { return d.id === dev.id; })) return fail('event ' + at + ' adds a device the identity already has', at);
+      var addAuth = e.type === 'add-authority', removeAuth = e.type === 'remove-authority', removing = removeAuth || e.type === 'remove-device';
+      // (set explicitly: a bare `var dev` would keep the value of the previous event, and a removal would push that device again)
+      var key = null, dev = undefined, goneKey = null, goneDev = null;
+      if (removing) {
+        var rm = e.remove, allowed = removeAuth ? ['keyId', 'deviceId'] : ['deviceId'];
+        if (e.add !== undefined) return fail('event ' + at + ' removes and adds in one event', at);
+        if (!rm || typeof rm !== 'object' || Array.isArray(rm) || Object.keys(rm).some(function (m) { return allowed.indexOf(m) < 0; })) return fail('event ' + at + ' does not say what it removes', at);
+        if (removeAuth) {
+          var ks = typeof rm.keyId === 'string' ? st.authority.keys.filter(function (k) { return k.id === rm.keyId; }) : [];
+          if (ks.length !== 1) return fail('event ' + at + ' removes a key the identity does not list exactly once', at);
+          goneKey = ks[0];
+          var left = st.authority.keys.length - 1;
+          if (left < 1) return fail('event ' + at + ' removes the identity\'s last authority key', at);
+          if (left < st.authority.threshold) return fail('event ' + at + ' would leave ' + left + ' authority keys, and ' + st.authority.threshold + ' are needed to sign', at);
+        }
+        if (!removeAuth || rm.deviceId !== undefined) {
+          var ds = typeof rm.deviceId === 'string' ? st.devices.filter(function (d) { return d.id === rm.deviceId; }) : [];
+          if (ds.length !== 1) return fail('event ' + at + ' removes a device the identity does not list exactly once', at);
+          goneDev = ds[0];
+        }
+      } else {
+        key = addAuth ? e.add && e.add.key : null; dev = e.add && e.add.device;
+        if (addAuth) {
+          if (keyEntryError(key)) return fail('event ' + at + ' adds a malformed key', at);
+          if (st.authority.keys.some(function (k) { return k.id === key.id; }) || st.revoked.indexOf(key.id) >= 0) return fail('event ' + at + ' adds a key the identity already has or revoked', at);
+          if (goneKeys.some(function (g) { return sameKey(g.jwk, key.jwk); })) return fail('event ' + at + ' adds a key the identity removed', at);
+        } else if (!dev) return fail('event ' + at + ' adds no device', at);
+        if (dev !== undefined && (!dev || typeof dev.id !== 'string' || !isPublicEcJwk(dev.jwk))) return fail('event ' + at + ' adds a malformed device', at);
+        if (dev && st.devices.some(function (d) { return d.id === dev.id; })) return fail('event ' + at + ' adds a device the identity already has', at);
+        if (dev && st.revokedDevices.some(function (d) { return d.id === dev.id || sameKey(d.jwk, dev.jwk); })) return fail('event ' + at + ' adds a device the identity removed', at);
+      }
       var H = await eventHash(e);
-      // the existing keys: distinct, each listed before this event, as many as the threshold
+      // the existing keys: distinct, each listed before this event, as many as the threshold; the key being removed does not count
       var seen = {}, good = 0, list = sigs.authority || [];
       for (var j = 0; j < list.length; j++) {
-        var a = list[j], k = st.authority.keys.filter(function (x) { return x.id === (a && a.keyId); })[0];
+        var a = list[j], k = st.authority.keys.filter(function (x) { return x.id === (a && a.keyId) && x !== goneKey; })[0];
         if (!k || seen[a.keyId]) continue;
         seen[a.keyId] = true;
         if (await verifySignature(a, k, H, e.type)) good++;
@@ -320,13 +398,23 @@
         st.authority.keys.push(key);
       }
       if (dev) st.devices.push(dev);
+      if (goneKey) {
+        st.authority.keys = st.authority.keys.filter(function (x) { return x !== goneKey; });
+        st.revoked.push(goneKey.id);
+        goneKeys.push({ id: goneKey.id, jwk: goneKey.jwk });
+      }
+      if (goneDev) {
+        st.devices = st.devices.filter(function (x) { return x !== goneDev; });
+        st.revokedDevices.push({ id: goneDev.id, jwk: goneDev.jwk });
+      }
       last = e; lastSeq = e.seq;
     }
     return { ok: true, did: inc.did, state: st, seq: lastSeq };
   }
 
   return {
-    addAuthorityEvent: addAuthorityEvent, addDeviceEvent: addDeviceEvent, verifyLog: verifyLog, isPublicEcJwk: isPublicEcJwk,
+    addAuthorityEvent: addAuthorityEvent, addDeviceEvent: addDeviceEvent, removeAuthorityEvent: removeAuthorityEvent, removeDeviceEvent: removeDeviceEvent,
+    verifyLog: verifyLog, listedKeys: listedKeys, isPublicEcJwk: isPublicEcJwk,
     verifySignature: verifySignature, rawMessage: rawMessage, RAW_SCHEME: RAW_SCHEME, PURPOSES: PURPOSES, KEY_KINDS: KEY_KINDS,
     b64u: b64u, unb64u: unb64u, z32encode: z32encode, z32decode: z32decode,
     canonicalJson: canonicalJson, sha256: sha256, eventHash: eventHash,
