@@ -24,7 +24,9 @@
 //                       An edit that is only waiting for a parent, a log or the writer list is kept as pending and checked again, by
 //                       itself, whenever something arrives that could settle it.
 //   heads, versions, state   what a page's history looks like and the Yjs state at a set of versions (default: the current heads).
-// Not here: checkpoints and dropping old events, private pages, how events travel, the IndexedDB backend, wiring into the shell.
+//   close()             for a session that ended: operations that have not started are refused from then on (see serial()).
+// Not here: checkpoints and dropping old events, private pages, how events travel. The IndexedDB backend and the store's lifetime in the
+// shell (made for the signed-in identity, closed when the session ends, its records deleted when the identity is removed) are keo-wiki.js.
 (function (root, factory) {
   var node = typeof module === 'object' && module.exports;
   var api = factory(node ? require('./keo-did.js') : root.keoDid, node ? require('./keo-wikilog.js') : root.keoWikiLog, node ? require('./keo-yjs.js') : root.keoYjs);
@@ -55,9 +57,14 @@
   function create(o) {
     var backend = o.backend, key = o.key, owner = o.did, now = o.now || function () { return new Date().toISOString(); };
     var Y = o.Y || Yjs;
-    var pages = new Map(), logs = new Map(), chain = Promise.resolve();
+    var pages = new Map(), logs = new Map(), chain = Promise.resolve(), closed = false;
     // Operations run one after another: two adds that both read the same page state could each accept an edit the other makes impossible.
-    function serial(fn) { var p = chain.then(fn); chain = p.catch(function () {}); return p; }
+    // After close() an operation that has not started refuses to; the one that is running finishes (it was begun while the session was).
+    function serial(fn) {
+      var p = chain.then(function () { if (closed) throw new Error('The wiki store is closed (the session ended).'); return fn(); });
+      chain = p.catch(function () {});
+      return p;
+    }
 
     async function pageKey(objId) { return kd.b64u(await kd.sha256(enc.encode('keo-wiki-page\u0000' + objId))); }
     async function logKey(did) { return kd.b64u(await kd.sha256(enc.encode('keo-wiki-log\u0000' + did))); }
@@ -275,7 +282,11 @@
         });
       },
       // forgets what is held in memory, so the next call reads the (sealed) records again: for tests and for a session that ended
-      unload: function () { return serial(async function () { pages.clear(); logs.clear(); }); }
+      unload: function () { return serial(async function () { pages.clear(); logs.clear(); }); },
+      // For a session that ended: every operation that has not started yet is refused from now on, and what is held in memory is dropped once
+      // the one that is running has finished. Resolves then, which is when nothing of this store can still be written (the caller removing
+      // an identity waits for it before it deletes the records, so a late write cannot bring them back). It cannot be undone: open a new store.
+      close: function () { closed = true; return chain.then(function () { pages.clear(); logs.clear(); }); }
     };
     return api;
   }

@@ -81,7 +81,7 @@
       }).then(function (yes) {
         if (!yes) throw new Error('Not removed: it was not confirmed.');
         return window.keoIdentity.remove({ did: did });
-      }).then(function () { return window.keoWorlds.purge(did); }).then(function () { return window.keoChatLog.purge(did); }).then(function () { return window.keoLibrary.purge(did); }).then(function () { return window.keoContacts.purge(did); }).then(function () {
+      }).then(function () { return window.keoWorlds.purge(did); }).then(function () { return window.keoChatLog.purge(did); }).then(function () { return window.keoLibrary.purge(did); }).then(function () { return window.keoContacts.purge(did); }).then(function () { return window.keoWiki.purge(did); }).then(function () {
         return window.keoIdentity.current();
       }).then(function (s) {
         if (!s || s.did !== did) return true;
@@ -274,7 +274,7 @@
   // Connections, a call under way (closing its connection ends it and stops the camera and microphone) and messages nobody has taken
   // yet belong to the identity that was signed in. However its session ends (sign-out, expiry, removal), they go with it: the
   // connections were proven with that identity's device key, and the next one to sign in must not inherit them.
-  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoCards.reset(); window.keoIntro.reset(); window.keoLan.reset(); window.keoPoint.reset(); window.keoPhone.reset(); window.keoEnroll.reset(); window.keoTransfer.reset(); window.keoLibrary.reset(); window.keoContacts.clear(); });
+  window.keoIdentity.onEnd(function () { window.keoP2p.closeAll(); window.keoDm.clear(); window.keoFriend.reset(); window.keoCards.reset(); window.keoIntro.reset(); window.keoLan.reset(); window.keoPoint.reset(); window.keoPhone.reset(); window.keoEnroll.reset(); window.keoTransfer.reset(); window.keoLibrary.reset(); window.keoContacts.clear(); window.keoWiki.reset(); });
 
   window.addEventListener('message', function (ev) {
     var m = ev.data;

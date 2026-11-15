@@ -13,62 +13,7 @@ let passed = 0;
 const ok = (name, cond, extra) => { if (!cond) { console.error('FAIL ' + name + (extra !== undefined ? ' ' + (typeof extra === 'string' ? extra : JSON.stringify(extra)).slice(0, 600) : '')); process.exitCode = 1; } else { passed++; console.log('ok   ' + name); } };
 const rejects = async (p) => { try { await p; return null; } catch (e) { return e.message; } };
 
-// ---- people, as in keo-wikilog-test.js
-function rawToDer(raw) {
-  const int = (b) => { let i = 0; while (i < b.length - 1 && b[i] === 0) i++; b = b.slice(i); if (b[0] & 0x80) b = Buffer.concat([Buffer.from([0]), b]); return Buffer.concat([Buffer.from([0x02, b.length]), b]); };
-  const body = Buffer.concat([int(Buffer.from(raw.slice(0, 32))), int(Buffer.from(raw.slice(32)))]);
-  return Buffer.concat([Buffer.from([0x30, body.length]), body]);
-}
-async function assertion(privateKey, challengeBytes) {
-  const authenticatorData = crypto.getRandomValues(new Uint8Array(37));
-  const clientDataJSON = enc.encode(JSON.stringify({ type: 'webauthn.get', challenge: kd.b64u(challengeBytes), origin: 'chrome-extension://test' }));
-  const input = Buffer.concat([Buffer.from(authenticatorData), Buffer.from(await kd.sha256(clientDataJSON))]);
-  const raw = new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privateKey, input));
-  return { authenticatorData: kd.b64u(authenticatorData), clientDataJSON: kd.b64u(clientDataJSON), signature: kd.b64u(rawToDer(raw)) };
-}
-const plain = (j) => ({ kty: j.kty, crv: j.crv, x: j.x, y: j.y });
-const newPair = () => subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-async function makeDevice() { const pair = await newPair(), jwk = plain(await subtle.exportKey('jwk', pair.publicKey)); return { pair, jwk, id: kd.b64u(await kd.sha256(enc.encode(kd.canonicalJson(jwk)))) }; }
-async function makePerson() {
-  const authPair = await newPair(), disc = await kd.ed25519FromSeed(crypto.getRandomValues(new Uint8Array(32)));
-  const keyId = kd.b64u(crypto.getRandomValues(new Uint8Array(16))), t0 = new Date().toISOString(), d1 = await makeDevice();
-  const inception = { v: 1, type: 'inception', seq: 0, prev: null, time: t0, state: {
-    authority: { threshold: 1, keys: [{ id: keyId, jwk: plain(await subtle.exportKey('jwk', authPair.publicKey)), rpId: 'testid', kind: 'platform', addedAt: t0 }] },
-    next: null, recovery: { guardians: [], threshold: 2, delayDays: 3 }, discovery: { key: disc.publicZ32, version: 1 }, services: [], claims: { handles: [] }, revoked: [],
-    devices: [{ id: d1.id, jwk: d1.jwk, addedAt: t0 }] } };
-  const H = await kd.eventHash(inception);
-  const p = { authPair, keyId, d1, did: kd.didFor(disc.publicZ32, kd.b64u(H)),
-    log: { inception, sigs: { discovery: kd.b64u(await subtle.sign({ name: 'Ed25519' }, disc.privateKey, H)), authority: [Object.assign({ keyId }, await assertion(authPair.privateKey, H))] }, events: [] } };
-  const last = () => (p.log.events.length ? p.log.events[p.log.events.length - 1].event : p.log.inception);
-  const push = async (e, sigsFrom) => { const entry = { event: e, sigs: { authority: [Object.assign({ keyId }, await assertion(authPair.privateKey, await kd.eventHash(e)))] } }; (sigsFrom || p.log.events).push(entry); return entry; };
-  p.addDevice = async () => { const d = await makeDevice(); await push(await kd.addDeviceEvent(last(), { id: d.id, jwk: d.jwk, addedAt: new Date().toISOString() })); return d; };
-  p.removeDevice = async (d) => { await push(await kd.removeDeviceEvent(last(), d.id)); return p.log.events.length; };
-  p.snapshot = () => JSON.parse(JSON.stringify(p.log));
-  p.point = () => W.logPoint(p.log);
-  p.signer = (dev) => async (bytes) => kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, dev.pair.privateKey, bytes)));
-  return p;
-}
-const OBJ = 'page-one';
-let nonceCounter = 0;
-// One device's way of writing a page: its Yjs document under its derived client id, and a function that signs what changed.
-async function writer(person, dev, nonce, objId) {
-  nonce = nonce || ('nonce-w' + (++nonceCounter).toString().padStart(4, '0') + 'xx');
-  const doc = new Y.Doc(); doc.clientID = await W.clientIdFor(dev.id, objId || OBJ, nonce);
-  const w = { person, dev, doc, nonce, objId: objId || OBJ };
-  // `parents`: the cids this edit follows. `fn` edits the document; the delta since the last publish is what is sent.
-  w.publish = async (fn, parents, o) => {
-    o = o || {};
-    const sv = Y.encodeStateVector(doc); fn(doc);
-    const update = Y.encodeStateAsUpdate(doc, sv);
-    const ev = await W.buildVersion({ objId: w.objId, parents: parents || [], author: { did: person.did, deviceId: dev.id }, authorLog: o.point || await person.point(), nonces: [w.nonce], update, created: o.created });
-    return W.seal(ev, person.signer(dev));
-  };
-  w.apply = (update) => Y.applyUpdate(doc, update);
-  w.text = () => doc.getText('body').toString();
-  return w;
-}
-const cidOf = (env) => W.versionId(env.event);
-const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); return d.getText('body').toString(); };
+const { OBJ, assertion, plain, makeDevice, makePerson, writer, cidOf, textOf } = require(path.join(__dirname, 'wiki-fixtures.js'));
 
 async function makeStore(people, o) {
   o = o || {};
@@ -337,6 +282,31 @@ const feedLogs = async (store, people) => { for (const p of people) await store.
   // ================================================================ purge
   await S1.store.purge();
   ok('removing the store\'s contents leaves nothing on disk and nothing in memory', (await Promise.all(['page', 'version', 'pending', 'log', 'meta'].map((k) => S1.backend.ids(k)))).every((l) => l.length === 0) && (await S1.store.heads(OBJ)).length === 0 && (await S1.store.logOf(A.did)) === null);
+
+  // ================================================================ close (a session that ended)
+  // A backend whose write of a version waits for a gate, so that one add is RUNNING while the store is closed and another has not started.
+  const mem = S.memoryBackend(); let release, started = false; const gate = new Promise((r) => { release = r; });
+  const slow = { get: mem.get, del: mem.del, ids: mem.ids, put: async (k, id, rec) => { if (k === 'version') { started = true; await gate; } return mem.put(k, id, rec); } };
+  const CL = await makeStore(people, { backend: slow }); await feedLogs(CL.store, people);
+  const clw = await writer(A, A.d1);
+  const c1 = await clw.publish((d) => d.getText('body').insert(0, 'one'));
+  const c2 = await clw.publish((d) => d.getText('body').insert(3, ' two'), [await cidOf(c1)]);
+  const running = CL.store.add(c1);
+  for (let i = 0; i < 200 && !started; i++) await new Promise((r) => setTimeout(r, 5));         // the add is now inside its write, waiting at the gate
+  ok('setup: the first add is running, held inside its write of the version', started === true);
+  const queuedMsg = rejects(CL.store.add(c2));
+  const closing = CL.store.close(); let closeDone = false; closing.then(() => { closeDone = true; });
+  await new Promise((r) => setTimeout(r, 30));
+  ok('close does not finish while an operation is still running', closeDone === false && (await mem.ids('version')).length === 0);
+  release();
+  const ran = await running; await closing;
+  ok('the operation that was running finishes and its edit is kept', ran.status === 'accepted' && (await mem.ids('version')).length === 1, ran);
+  ok('the one that had not started is refused, and writes nothing', /closed/.test(await queuedMsg || '') && (await mem.ids('version')).length === 1);
+  const afterClose = await Promise.all([rejects(CL.store.heads(OBJ)), rejects(CL.store.add(c2)), rejects(CL.store.offerLog(A.did, A.snapshot())), rejects(CL.store.alerts()), rejects(CL.store.purge()), rejects(CL.store.state(OBJ))]);
+  ok('after close every kind of operation refuses to run', afterClose.every((m) => /closed/.test(m || '')), afterClose);
+  ok('closing a second time is harmless', (await CL.store.close()) === undefined);
+  const reopened = S.create({ backend: mem, key: CL.key, did: CL.did, writers: async () => people.map((p) => p.did) });
+  ok('a new store over the same disk and key reads what the closed one kept', JSON.stringify(await reopened.heads(OBJ)) === JSON.stringify([ran.cid]));
 
   // ================================================================ never throws on garbage
   const G = await makeStore(people); await feedLogs(G.store, people);
