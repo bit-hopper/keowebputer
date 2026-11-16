@@ -497,10 +497,12 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   introThrows('the reader refuses an identity that is not a DID', () => hello.introFromText('keointro1.' + kd.b64u(enc.encode(JSON.stringify({ v: 1, did: '<script>' })))), /names no identity/);
   introThrows('the reader refuses a text far too long', () => hello.introFromText('keointro1.' + 'A'.repeat(9000)), /too long/);
 
-  // ================================================================ the log book: a shown log that is older than the one already seen is refused
+  // ================================================================ the log book: a shown log that is older than the one already seen
   // The book is the real one (keo-wikistore.js offerLog over an in-memory disk), given to the verifiers as `pin`. Without a pin a log is checked
   // on its own, so a device that was removed can show the log from before its removal and verify: that is what the tests above say in so many
-  // words (the "NOT refused" checks), and what the pin closes for a verifier that has seen the newer log.
+  // words (the "NOT refused" checks), and what the pin closes for a verifier that has seen the newer log. A shown log that is only an OLDER copy
+  // is not refused for that: the device is checked against the NEWER log the book keeps. A device the newer log removed (or whose passkey it
+  // removed) is refused there; a device that has only missed a later event gets in, and the result says `behind`.
   const Store = require(path.join(__dirname, '..', 'shell', 'keo-wikistore.js'));
   async function newBook() {
     const store = Store.create({ backend: Store.memoryBackend(), key: await subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']), did: 'did:keo:' + 'r'.repeat(52) + ':' + 'R'.repeat(43) });
@@ -508,29 +510,43 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
     return { store, asked, pin: (did, log) => { asked.push({ did, log }); return store.offerLog(did, log); } };
   }
   const seen = async (bk, did) => { const l = await bk.store.logOf(did); return l ? l.events.length : null; };
-  const NEWER = /newer version of that identity/;
+  const NOKEPT = /could not use it to check this one/;
+  const REMOVED = /removed from the identity/;
   const bkA = await newBook();
   const pA = await verify(await proofMsg(A, 'offer', FPS), 'offer', { pin: bkA.pin });
-  ok('a first proof is accepted with a book, and its log is kept', pA.ok === true && pA.did === A.did && await seen(bkA, A.did) === 0, pA);
+  ok('a first proof is accepted with a book, and its log is kept; a result that is not behind has no "behind" member', pA.ok === true && pA.did === A.did && await seen(bkA, A.did) === 0 && !('behind' in pA), pA);
   ok('the book was asked with the DID and the log the proof carried', bkA.asked.length === 1 && bkA.asked[0].did === A.did && kd.canonicalJson(bkA.asked[0].log.inception) === kd.canonicalJson(A.inception) && Array.isArray(bkA.asked[0].log.events) && bkA.asked[0].log.events.length === 0);
   ok('the same log again is accepted ("same")', (await verify(await proofMsg(A, 'offer', FPS), 'offer', { pin: bkA.pin })).ok === true && await seen(bkA, A.did) === 0);
   const pA2 = await verify(await proofMsg(A2, 'offer', FPS), 'offer', { pin: bkA.pin });
   ok('a proof with a LONGER log that extends the kept one is accepted and the book now holds the longer log', pA2.ok === true && await seen(bkA, A.did) === 1, pA2);
-  await refused('a proof that carries the shorter log, from before the addition, is now refused', proofMsg(A, 'offer', FPS), 'offer', { pin: bkA.pin }, NEWER);
-  await refused('and so is the passkey-signed certificate of that same device on the shorter log', proofMsg(Asign, 'offer', FPS), 'offer', { pin: bkA.pin }, NEWER);
-  ok('refusing it left the book as it was', await seen(bkA, A.did) === 1);
+  const pBehind = await verify(await proofMsg(A, 'offer', FPS), 'offer', { pin: bkA.pin });
+  ok('a proof that carries the shorter log, from before the addition, is accepted while the device is still listed in the newer log, and says it is behind', pBehind.ok === true && pBehind.did === A.did && pBehind.behind === true, pBehind);
+  const pBehindSign = await verify(await proofMsg(Asign, 'offer', FPS), 'offer', { pin: bkA.pin });
+  ok('and so is the passkey-signed certificate of that same device on the shorter log', pBehindSign.ok === true && pBehindSign.behind === true, pBehindSign);
+  ok('accepting it left the book as it was: the shorter log is not taken', await seen(bkA, A.did) === 1);
 
   // the case the pin exists for: a removed device shows the log from before it was removed
   const bkR = await newBook();
   await refused('a proof that carries the removal is refused as before (the device is removed)...', proofMsg(Agone, 'offer', FPS), 'offer', { pin: bkR.pin }, /removed from the identity/);
   ok('...and the book learned the longer log from it, although the proof was refused', await seen(bkR, A.did) === 1);
-  await refused('the same removed device, shown with the log from BEFORE its removal (inception-kind certificate), is now refused', proofMsg(A, 'offer', FPS), 'offer', { pin: bkR.pin }, NEWER);
-  await refused('and with its passkey-signed certificate', proofMsg(Asign, 'offer', FPS), 'offer', { pin: bkR.pin }, NEWER);
+  await refused('the same removed device, shown with the log from BEFORE its removal (inception-kind certificate), is now refused, as removed', proofMsg(A, 'offer', FPS), 'offer', { pin: bkR.pin }, REMOVED);
+  await refused('and with its passkey-signed certificate', proofMsg(Asign, 'offer', FPS), 'offer', { pin: bkR.pin }, REMOVED);
   ok('(control) with no book the same two proofs are still accepted: the protection is the book, nothing else', (await verify(await proofMsg(A, 'offer', FPS), 'offer')).ok === true && (await verify(await proofMsg(Asign, 'offer', FPS), 'offer')).ok === true);
   const A2afterA = Object.assign({}, A2, { events: (await withEvent(A2, await kd.removeDeviceEvent(lastEvent(A2), await devIdOf(A)), [signAs(A)])).events });
   const bkS = await newBook();
   ok('another device of the same identity, which was not removed, shows the log that removed the first one: accepted, and the longer log is kept', (await verify(await proofMsg(A2afterA, 'offer', FPS), 'offer', { pin: bkS.pin })).ok === true && await seen(bkS, A.did) === 2);
-  await refused('after that the removed device, shown with the log from before its removal, is refused', proofMsg(A, 'offer', FPS), 'offer', { pin: bkS.pin }, NEWER);
+  await refused('after that the removed device, shown with the log from before its removal, is refused', proofMsg(A, 'offer', FPS), 'offer', { pin: bkS.pin }, REMOVED);
+  // what the newer log removed is not only a device: a passkey it removed takes the certificates made with it
+  const bkK = await newBook();
+  ok('a log that removed the first passkey (the one added later signed the removal) is kept', (await verify(await proofMsg(A3x, 'offer', FPS), 'offer', { pin: bkK.pin })).ok === true && await seen(bkK, A.did) === 2);
+  await refused('a device whose proof shows the older log, with an inception-kind certificate made by the removed passkey, is refused', proofMsg(A, 'offer', FPS), 'offer', { pin: bkK.pin }, /authority key/);
+  await refused('and so is its passkey-signed certificate', proofMsg(Asign, 'offer', FPS), 'offer', { pin: bkK.pin }, /authority key/);
+  const bkL = await newBook();
+  await verify(await proofMsg(A2gone, 'offer', FPS), 'offer', { pin: bkL.pin });
+  await refused('a device that a LATER event added and a still later event removed, shown with the log from when it was listed, is refused as removed', proofMsg(A2, 'offer', FPS), 'offer', { pin: bkL.pin }, REMOVED);
+  const pLate = await verify(await proofMsg(Object.assign({}, A2, { events: [] }), 'offer', FPS), 'offer', { pin: bkA.pin });
+  ok('the kept log is what counts: a device a later event added, shown with a copy that does not have that event yet, is accepted (and behind) because the kept log lists it (without a book the same proof is refused: "does not know the added passkey")', pLate.ok === true && pLate.behind === true, pLate);
+  await refused('being behind is no way in for a passkey that only a different log lists: a device on the added passkey (A3), shown with no events, against a kept log that has another passkey (A2)', proofMsg(Object.assign({}, A3, { events: [] }), 'offer', FPS), 'offer', { pin: bkA.pin }, /authority key/);
   ok('a different identity is not held to this identity\'s log', (await verify(await proofMsg(B, 'answer', FPS), 'answer', { pin: bkR.pin })).ok === true && await seen(bkR, B.did) === 0);
 
   // two logs that disagree
@@ -540,10 +556,13 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   ok('the book kept the first log and wrote the disagreement down', await seen(bkF, A.did) === 1 && (await bkF.store.alerts()).some((a) => a.kind === 'log-fork' && a.did === A.did && a.at === 1));
 
   // the same rule for a dial request and for a card
-  await dRefused('a dial request on the older log is refused with the book', dialMsg(A), { pin: bkA.pin }, NEWER);
-  await dRefused('and one from the removed device with a passkey-signed certificate on the older log', dialMsg(Asign), { pin: bkR.pin }, NEWER);
+  const dBehind = await dverify(await dialMsg(A), { pin: bkA.pin });
+  ok('a dial request on the older log is accepted with the book while the device is still listed, and says it is behind', dBehind.ok === true && dBehind.behind === true && dBehind.did === A.did, dBehind);
+  await dRefused('and one from the removed device with a passkey-signed certificate on the older log is refused, as removed', dialMsg(Asign), { pin: bkR.pin }, REMOVED);
   ok('a dial request on the newer log is accepted with the book', (await dverify(await dialMsg(A2), { pin: bkA.pin })).ok === true);
-  await cRefused('a card on the older log is refused with the book', cardMsg(A, { seq: 5 }), { pin: bkA.pin }, NEWER);
+  const cBehind = await cverify(await cardMsg(A, { seq: 5 }), { pin: bkA.pin });
+  ok('a card on the older log is accepted with the book while the device is still listed, and says it is behind', cBehind.ok === true && cBehind.behind === true && cBehind.did === A.did, cBehind);
+  await cRefused('a card from the removed device on the older log is refused, as removed', cardMsg(Asign, { seq: 5 }), { pin: bkR.pin }, REMOVED);
   await cRefused('and a card that disagrees with the kept log', cardMsg(Agone, { seq: 5 }), { pin: bkF.pin }, /disagrees with what this device has already seen/);
   ok('a card on the newer log is accepted with the book, under the proven DID', (await cverify(await cardMsg(A2, { seq: 5 }), { pin: bkA.pin, did: A.did })).ok === true);
 
@@ -553,6 +572,9 @@ ok('the tag depends on the invitation\'s credentials and fingerprint', tag !== a
   await odd('a book that answers "refused" refuses the proof', async () => ({ status: 'refused', error: 'x' }), /could not be checked against what this device already knows/);
   await odd('a book that answers something unknown refuses the proof', async () => ({ status: 'maybe' }), /could not be checked against what this device already knows/);
   await odd('a book that answers nothing refuses the proof', async () => undefined, /could not be checked against what this device already knows/);
+  await odd('a book that says "shorter" and does not hand back the kept log refuses the proof (nothing to check the device against)', async () => ({ status: 'shorter' }), NOKEPT);
+  await odd('and so does one whose kept log is not a log that verifies', async () => ({ status: 'shorter', kept: { inception: A.inception, sigs: A.sigs, events: [{ event: { v: 1, type: 'add-device', seq: 1 }, sigs: {} }] } }), NOKEPT);
+  await odd('and one whose kept log is another identity\'s', async () => ({ status: 'shorter', kept: { inception: B.inception, sigs: B.sigs, events: [] } }), NOKEPT);
   ok('a log that does not verify never reaches the book', await (async () => { const bk = await newBook(); await verify(await proofMsg(A2, 'offer', FPS, { edit: (h) => { h.events = JSON.parse(JSON.stringify(h.events)); h.events[0].event.add.key.rpId = 'evil.test'; } }), 'offer', { pin: bk.pin }); return bk.asked.length === 0; })());
 
   console.log(passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));

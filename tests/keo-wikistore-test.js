@@ -89,6 +89,10 @@ const feedLogs = async (store, people) => { for (const p of people) await store.
   const withRemoval = A.snapshot();
   ok('the log that adds the removal extends it again', (await L.store.offerLog(A.did, withRemoval)).status === 'extended' && (await L.store.logOf(A.did)).events.length === 2);
   ok('and the older copy, offered after that, is still refused as shorter', (await L.store.offerLog(A.did, longer)).status === 'shorter' && (await L.store.logOf(A.did)).events.length === 2);
+  const rsKept = await L.store.offerLog(A.did, longer), rsSame = await L.store.offerLog(A.did, withRemoval);
+  ok('an answer of "shorter" hands back the log that is kept, with all its events (a verifier checks the device against it)', rsKept.status === 'shorter' && !!rsKept.kept && rsKept.kept.events.length === 2 && kd.canonicalJson(rsKept.kept.inception) === kd.canonicalJson(withRemoval.inception) && kd.canonicalJson(rsKept.kept.events[1].event) === kd.canonicalJson(withRemoval.events[1].event), rsKept.status);
+  const rsNew = await (await makeStore([A])).store.offerLog(A.did, A.snapshot());
+  ok('and no other answer carries one', rsSame.status === 'same' && !('kept' in rsSame) && rsNew.status === 'new' && !('kept' in rsNew));
   ok('a log that does not verify is refused and nothing is kept for it', (await L.store.offerLog(B.did, { inception: B.log.inception, sigs: Object.assign({}, B.log.sigs, { discovery: 'AAAA' }), events: [] })).status === 'refused' && (await L.store.logOf(B.did)) === null);
   ok('a log offered under another identity\'s DID is refused', (await L.store.offerLog(B.did, A.snapshot())).status === 'refused');
   // a fork: two different second events that both extend the same first

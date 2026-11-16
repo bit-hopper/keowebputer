@@ -259,39 +259,51 @@
       if (h.name !== undefined && (typeof h.name !== 'string' || h.name.length > MAX_NAME)) return fail('The other side sent a bad name.');
       var who = await signerError(msg, h, now, opts.audience, opts.pin);
       if (who.error) return fail(who.error);
-      return { ok: true, did: h.did, name: h.name || null };
+      return withBehind({ ok: true, did: h.did, name: h.name || null }, who);
     } catch (e) {
       return fail('The other side\'s proof could not be checked.');
     }
   }
 
   // The part every signed statement shares: the identity (its log verifies and names this DID), the device key (vouched for by that
-  // identity, see certError) and the signature of that device key over the statement as it was sent. Resolves { did } or { error }.
+  // identity, see certError) and the signature of that device key over the statement as it was sent. Resolves { did } (with `behind: true`
+  // when the log it showed was an older copy, see below) or { error }.
   // It checks nothing about what the statement SAYS: the caller does that first (purpose, role, time, who it is for).
   //
   // `pin(did, log)` is the LOG BOOK (keo-wikistore.js offerLog, through keo-wiki.js): it keeps the longest verified log this device has seen
-  // for each identity and answers { status } with 'new', 'same', 'extended' (the shown log is longer, so it is kept now), 'shorter' or 'fork'.
+  // for each identity and answers { status } with 'new', 'same', 'extended' (the shown log is longer, so it is kept now), 'shorter' (with
+  // the log that is kept, as `kept`) or 'fork'.
   // Without it a removed device could show the log from BEFORE its removal and still verify: a log carries nothing that says it is the newest.
-  // With it a shorter log is refused, and so is one that disagrees with what is kept (the first one seen stays; the book also keeps the
-  // disagreement to show). It runs once the log verifies and BEFORE the device's certificate is looked at, so that a newer log is learned even
-  // from a proof that is refused for another reason. Any answer other than the three that accept is refused, and so is a `pin` that throws.
+  // With it a log that disagrees with what is kept is refused (the first one seen stays; the book also keeps the disagreement to show), and a
+  // SHORTER one is not taken as the identity's present state: the device is checked against the kept, newer log instead, so a device the newer
+  // log removed is refused as removed while an honest one that has only missed a later event gets in (the result then says `behind: true`).
+  // It runs once the log verifies and BEFORE the device's certificate is looked at, so that a newer log is learned even from a proof that is
+  // refused for another reason. Any answer other than those is refused, and so is a `pin` that throws or a kept log that does not verify.
   // Not given: the log is checked on its own, as before (callers that have no signed-in session, and the node tests).
+  function withBehind(result, who) { if (who.behind) result.behind = true; return result; }
   async function signerError(msg, h, now, audience, pin) {
     var v = await kd.verifyLog({ inception: h.inception, sigs: h.inceptionSigs, events: h.events });
     if (!v.ok) return { error: 'The identity does not verify: ' + v.error };
     if (v.did !== h.did) return { error: 'The identity does not match its proof.' };
+    var state = v.state, events = h.events, behind = false;
     if (pin) {
       var r = await pin(h.did, { inception: h.inception, sigs: h.inceptionSigs, events: h.events || [] });
       var status = r && r.status;
-      if (status === 'shorter') return { error: 'This device has already seen a newer version of that identity (a device may have been removed since), so an older copy is not trusted.' };
-      if (status === 'fork') return { error: 'That identity\'s history disagrees with what this device has already seen of it, so it is not trusted.' };
-      if (status !== 'new' && status !== 'same' && status !== 'extended') return { error: 'That identity could not be checked against what this device already knows of it.' };
+      if (status === 'shorter') {
+        // The shown log is an OLDER copy of the one this device keeps. That alone is no reason to refuse the device (an honest device that has
+        // only missed a later event shows one too), but nothing it shows may be taken as the identity's present state: the device is checked
+        // against the kept, newer log, which names every key and device removed since. A removed device is refused there, as removed.
+        var kv = r.kept && await kd.verifyLog(r.kept, h.did);
+        if (!kv || !kv.ok) return { error: 'This device has already seen a newer version of that identity and could not use it to check this one, so an older copy is not trusted.' };
+        state = kv.state; events = r.kept.events; behind = true;
+      } else if (status === 'fork') return { error: 'That identity\'s history disagrees with what this device has already seen of it, so it is not trusted.' };
+      else if (status !== 'new' && status !== 'same' && status !== 'extended') return { error: 'That identity could not be checked against what this device already knows of it.' };
     }
-    var ce = await certError(h.cert, v.state, h.inception, h.did, now, audience, h.events);
+    var ce = await certError(h.cert, state, h.inception, h.did, now, audience, events);
     if (ce) return { error: 'The other side\'s device is not vouched for: ' + ce + '.' };
     var devKey = await subtle.importKey('jwk', plainJwk(h.cert.devicePubKeyJwk), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
     if (!(await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, devKey, kd.unb64u(msg.sig), signedBytes(h)))) return { error: 'The other side\'s signature does not match.' };
-    return { did: h.did };
+    return behind ? { did: h.did, behind: true } : { did: h.did };
   }
 
   // ---- the dial request ---------------------------------------------------------------------------------------------------
@@ -324,7 +336,7 @@
       if (t > now + SKEW_MS) return fail('That dial request is dated in the future (check the clock).');
       var who = await signerError(msg, h, now, opts.audience, opts.pin);
       if (who.error) return fail(who.error);
-      return { ok: true, did: h.did, nonce: h.nonce, time: t };
+      return withBehind({ ok: true, did: h.did, nonce: h.nonce, time: t }, who);
     } catch (e) {
       return fail('That dial request could not be checked.');
     }
@@ -405,7 +417,7 @@
       if (h.seq > Math.floor(t / 1000) + SKEW_MS / 1000) return fail('That card has a version number that is ahead of its date.');
       var who = await signerError(msg, h, now, opts.audience, opts.pin);
       if (who.error) return fail(who.error);
-      return { ok: true, did: h.did, deviceId: await deviceIdOf(h.cert.devicePubKeyJwk), helpers: h.helpers.map(plainHelper), seq: h.seq, time: t };
+      return withBehind({ ok: true, did: h.did, deviceId: await deviceIdOf(h.cert.devicePubKeyJwk), helpers: h.helpers.map(plainHelper), seq: h.seq, time: t }, who);
     } catch (e) {
       return fail('That card could not be checked.');
     }

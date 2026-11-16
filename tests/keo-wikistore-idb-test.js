@@ -206,7 +206,8 @@ async function fixtures() {
     phase = '3b log book entry points';
     const S3b = await page.evaluate(async (d) => {
       const s = window.keoWiki.store(), me = (await window.keoIdentity.current()).did, out = {};
-      out.older = (await window.keoWiki.pin(d.dids.A, d.logs.A)).status;                  // the book holds A's longer log since step 2
+      const older = await window.keoWiki.pin(d.dids.A, d.logs.A);                         // the book holds A's longer log since step 2
+      out.older = older.status; out.keptEvents = older.kept && older.kept.events.length;
       out.same = (await window.keoWiki.pin(d.dids.A, d.longerA)).status;
       out.own = !!(await s.logOf(me));
       out.stranger = await window.keoWiki.pinFriend(d.dids.E, d.logs.E);
@@ -217,7 +218,7 @@ async function fixtures() {
       await window.keoContacts.remove(d.dids.E);
       return out;
     }, data);
-    check('pin: an older log of an identity is "shorter", the kept one is "same", and the signed-in identity\'s own log is now in the book', S3b.older === 'shorter' && S3b.same === 'same' && S3b.own === true, S3b);
+    check('pin: an older log of an identity is "shorter" and comes back with the kept log, the kept one is "same", and the signed-in identity\'s own log is now in the book', S3b.older === 'shorter' && S3b.keptEvents === 1 && S3b.same === 'same' && S3b.own === true, S3b);
     check('pinFriend keeps nothing for an identity that is not a friend, and answers "new" so that a verifier does not refuse it for that', S3b.stranger.status === 'new' && S3b.stranger.kept === false && S3b.strangerKept === false, S3b);
     check('pinFriend keeps the log of a friend', S3b.friend === 'new' && S3b.friendKept === true, S3b);
 

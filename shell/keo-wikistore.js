@@ -110,6 +110,9 @@
         return { status: 'fork', at: cmp.at, error: 'that identity log disagrees with the one already kept about event ' + cmp.at + '; the first one seen is kept' };
       }
       if (cmp.status === 'extended') { await pin(); return { status: 'extended', seq: clean.events.length }; }
+      // A shorter log is not taken, but the one that is kept is handed back with the answer: a verifier that was shown the older copy checks the
+      // device against this one, which names everything removed since. The caller must not change it.
+      if (cmp.status === 'shorter') return { status: 'shorter', seq: kept.events.length, kept: kept };
       return { status: cmp.status, seq: kept.events.length };
     }
     async function offerLog(did, log) {
