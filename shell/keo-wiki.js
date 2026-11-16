@@ -15,9 +15,9 @@
 // (a removed identity's key is gone), and first waits for the closed store to finish so that a write already under way cannot bring
 // records back after they were deleted.
 //
-// WHO MAY WRITE A PAGE is not decided here. Until setWriters() is given a function (the signed writer list, W-5) the store is told that
-// the writers of every page are unknown, so an edit waits as pending and nothing is accepted. That is on purpose: an edit is accepted only
-// when someone has said who may write the page.
+// WHO MAY WRITE A PAGE is not decided here, and nothing here can say it: the store reads it out of the history it holds (a page's owner is
+// in the page's id, and the owner's signed changes of the writer list are events in the page's history, keo-wikilog.js). There is no
+// setting a caller could use to grant a right the owner did not sign.
 (function () {
   'use strict';
   var DB_NAME = 'keo-wiki', STORE = 'records', SEP = '\u0000', MAXCH = '￿';
@@ -80,25 +80,20 @@
 
   var cur = null;                 // { did, key, store } for the signed-in identity
   var draining = Promise.resolve();
-  var writersFn = null;
 
   function store() {
     var s = window.keoIdentity && window.keoIdentity.sessionWorldKey();
     if (!s) throw new Error('Sign in to use wiki pages.');
     if (cur && (cur.did !== s.did || cur.key !== s.key)) reset();
     if (!cur) {
-      cur = { did: s.did, key: s.key, store: window.keoWikiStore.create({ backend: backend(s.did), key: s.key, did: s.did,
-        writers: function (objId, parents) { return writersFn ? writersFn(objId, parents) : null; } }) };
+      cur = { did: s.did, key: s.key, store: window.keoWikiStore.create({ backend: backend(s.did), key: s.key, did: s.did }) };
     }
     return cur.store;
   }
-  // For the code that knows who may write a page (the signed writer list, W-5): fn(objId, parents) -> the DIDs, or null when not known yet.
-  // It lasts until the session ends. Not for the world.
-  function setWriters(fn) { if (fn !== null && typeof fn !== 'function') throw new Error('Writers must be a function.'); writersFn = fn; }
   // The session ended: nothing of the identity stays in memory, and the store starts nothing more.
   function reset() {
     var c = cur;
-    cur = null; writersFn = null;
+    cur = null;
     if (c) draining = Promise.all([draining, c.store.close().catch(function () {})]).then(function () {});
     return draining;
   }
@@ -132,5 +127,5 @@
     return draining.then(function () { return run('readwrite', function (st) { st['delete'](IDBKeyRange.bound(p, p + MAXCH)); }); });
   }
 
-  window.keoWiki = { store: store, setWriters: setWriters, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
+  window.keoWiki = { store: store, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
 })();

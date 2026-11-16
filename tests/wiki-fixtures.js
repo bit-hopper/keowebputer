@@ -43,13 +43,17 @@ async function makePerson() {
   p.signer = (dev) => async (bytes) => kd.b64u(new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, dev.pair.privateKey, bytes)));
   return p;
 }
-const OBJ = 'page-one';
+// A page is named by its owner and a name. `pageOf(person)` is the page of that name that person owns; a writer who is not its owner
+// can write it only once the owner has signed them in (policy below).
+const pageOf = (person, name) => W.pageId(person.did, name || 'page-one');
 let nonceCounter = 0;
-// One device's way of writing a page: its Yjs document under its derived client id, and a function that signs what changed.
+// One device's way of writing a page: its Yjs document under its derived client id, and a function that signs what changed. The page
+// is `objId`, by default the page of that name the writer's own identity owns.
 async function writer(person, dev, nonce, objId) {
   nonce = nonce || ('nonce-w' + (++nonceCounter).toString().padStart(4, '0') + 'xx');
-  const doc = new Y.Doc(); doc.clientID = await W.clientIdFor(dev.id, objId || OBJ, nonce);
-  const w = { person, dev, doc, nonce, objId: objId || OBJ };
+  objId = objId || pageOf(person);
+  const doc = new Y.Doc(); doc.clientID = await W.clientIdFor(dev.id, objId, nonce);
+  const w = { person, dev, doc, nonce, objId: objId };
   // `parents`: the cids this edit follows. `fn` edits the document; the delta since the last publish is what is sent.
   w.publish = async (fn, parents, o) => {
     o = o || {};
@@ -62,7 +66,15 @@ async function writer(person, dev, nonce, objId) {
   w.text = () => doc.getText('body').toString();
   return w;
 }
+// A signed change of a page's writer list, made by `person`'s device `dev` (the page's owner, or someone pretending to be, in a test of
+// the refusal): `change` is { op: 'add-writer' | 'remove-writer', did }, `parents` the versions the owner's device holds as the heads.
+// `o`: { objId (default: the person's own page), point (a point of the person's log), created }.
+async function policy(person, dev, change, parents, o) {
+  o = o || {};
+  const ev = W.buildPolicy({ objId: o.objId || pageOf(person), parents: parents || [], author: { did: person.did, deviceId: dev.id }, authorLog: o.point || await person.point(), change, created: o.created });
+  return W.seal(ev, person.signer(dev));
+}
 const cidOf = (env) => W.versionId(env.event);
 const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); return d.getText('body').toString(); };
 
-module.exports = { OBJ, rawToDer, assertion, plain, newPair, makeDevice, makePerson, writer, cidOf, textOf };
+module.exports = { pageOf, rawToDer, assertion, plain, newPair, makeDevice, makePerson, writer, policy, cidOf, textOf };

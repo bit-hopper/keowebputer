@@ -64,7 +64,7 @@ function makeCtx(people, o) {
     Y: o.Y };
   return ctx;
 }
-const OBJ = 'page-one';
+let OBJ = 'page-one';              // becomes A's page once A exists: a page is named by its owner and a name
 const NONCE1 = 'nonce-aaaa1', NONCE2 = 'nonce-bbbb2';
 
 // A Yjs document that edits under a device's derived client id; `edit` returns the update of only what the function changed.
@@ -101,6 +101,7 @@ const resigned = async (person, dev, env, f) => { const c = clone(env); f(c.even
   // ================================================================ a first accepted edit, and what it returns
   const A = await makePerson(), B = await makePerson(), C = await makePerson();
   const people = [A, B, C];
+  OBJ = W.pageId(A.did, 'page-one');
   const ctx = makeCtx(people);
   const docA = await peerDoc(A.d1, NONCE1);
   const u1 = edit(docA, (d) => d.getText('body').insert(0, 'hello'));
@@ -119,7 +120,7 @@ const resigned = async (person, dev, env, f) => { const c = clone(env); f(c.even
   // ================================================================ what cannot be changed after signing
   const refusedBy = async (name, env, c, re) => { const r = await W.verifyVersion(env, c || ctx); ok(name, r.ok === false && !r.pending && (!re || re.test(r.error)), r); };
   await refusedBy('changing the update after signing is refused', tamper(e1, (c) => { c.event.payload.update = kd.b64u(edit(docA, (d) => d.getText('body').insert(5, '!'))); }), null, /signature/);
-  await refusedBy('changing the page after signing is refused', tamper(e1, (c) => { c.event.objId = 'page-two'; }), null, /signature|client id/);
+  await refusedBy('changing the page after signing is refused', tamper(e1, (c) => { c.event.objId = W.pageId(A.did, 'page-two'); }), null, /signature|client id/);
   await refusedBy('changing the parents after signing is refused', tamper(e1, (c) => { c.event.parents = ['a'.repeat(43)]; }), null, /signature/);
   await refusedBy('changing the date after signing is refused', tamper(e1, (c) => { c.event.created = '2001-01-01T00:00:00.000Z'; }), null, /signature/);
   await refusedBy('changing the attachments after signing is refused', tamper(e1, (c) => { c.event.payload.attachments = ['x'.repeat(30)]; }), null, /signature/);
@@ -443,7 +444,97 @@ const resigned = async (person, dev, env, f) => { const c = clone(env); f(c.even
   await refusedBy('but not one built on the version that removed it', bOnP2, pol, /may not write/);
   const cOnP1 = await version(C, C.d1, edit(await peerDoc(C.d1, NONCE1), (d) => d.getText('body').insert(0, 'c')), { parents: [p1.cid] });
   await refusedBy('and a person who was never on the list is refused on any version', cOnP1, pol, /may not write/);
-  ok('a writer list that is not a list is refused, never trusted', (await W.verifyVersion(pB, makeCtx(people, { writers: async () => 'everyone' }))).ok === false);
+  // The receiver must HOLD the parent, or the edit only waits for it and never reaches the list (an earlier version of this check
+  // used an empty receiver and so could not fail for the reason it names: found by breaking the rule and seeing no test notice).
+  const oddList = makeCtx(people, { writers: async () => 'everyone' }); oddList.store.set(rp0.cid, p0);
+  const rOdd = await W.verifyVersion(pB, oddList);
+  ok('a writer list that is not a list is refused, never trusted (the parent is held, so it is the list that is judged)', rOdd.ok === false && !rOdd.pending && /may not write/.test(rOdd.error), rOdd);
+
+  // ================================================================ the page's id: its owner and a name
+  ok('a page id is the owner\'s DID, a slash and a name, and reads back', (() => { const id = W.pageId(A.did, 'notes'), p = W.parsePageId(id); return id === A.did + '/notes' && p.owner === A.did && p.name === 'notes'; })());
+  ok('a name may hold slashes, spaces and any letters (it is not interpreted)', W.parsePageId(W.pageId(A.did, 'a/b c é 日本')).name === 'a/b c é 日本');
+  ok('a name of exactly the longest size is a page, one more is not', !!W.parsePageId(A.did + '/' + 'n'.repeat(W.MAX_NAME)) && W.parsePageId(A.did + '/' + 'n'.repeat(W.MAX_NAME + 1)) === null);
+  const DID_LEN = A.did.length;              // 104: the owner's part of a page id has exactly the length of a DID, so the shape of what stands there is the check
+  const notPages = ['x'.repeat(DID_LEN) + '/notes', A.did.slice(0, DID_LEN - 1) + '!/notes', A.did + '/', A.did + 'x', A.did + '/a\u0000b', A.did + '/a\nb', A.did + '/a\u007fb', 'page-one', 'notes/' + A.did, A.did.slice(0, 50) + '/x', '/' + A.did, '', null, 5, undefined, {}];
+  ok('an empty name, a missing slash, a control character in a name, an owner that is not a DID and things that are not text are all not pages', notPages.every((x) => W.parsePageId(x) === null), notPages.filter((x) => W.parsePageId(x) !== null));
+  ok('pageId refuses what parsePageId would', (() => { try { W.pageId(A.did, ''); return false; } catch (e) { return true; } })() && (() => { try { W.pageId('someone', 'x'); return false; } catch (e) { return true; } })());
+  ok('two owners\' pages with the same name are two pages: another id, and another client id for the same device', W.pageId(A.did, 'notes') !== W.pageId(B.did, 'notes') && await W.clientIdFor('d', W.pageId(A.did, 'notes'), 'nonce-123456') !== await W.clientIdFor('d', W.pageId(B.did, 'notes'), 'nonce-123456'));
+  const noList = makeCtx(people, { writers: async () => [] }), nullList = makeCtx(people, { writers: async () => null });
+  ok('the page\'s owner may always write, whatever a list says, and never waits for one', (await W.verifyVersion(e1, noList)).ok === true && (await W.verifyVersion(e1, nullList)).ok === true);
+  let askedList = 0;
+  const countList = makeCtx(people, { writers: async () => { askedList++; return [A.did, B.did]; } });
+  await W.verifyVersion(e1, countList);
+  ok('the list is not even asked about the owner', askedList === 0);
+  await W.verifyVersion(await version(B, B.d1, edit(await peerDoc(B.d1, NONCE1), (d) => d.getText('body').insert(0, 'b'))), countList);
+  ok('but it is asked about anyone else', askedList === 1);
+
+  // ================================================================ a change of the writer list
+  const policyOf = async (person, dev, change, o) => { o = o || {}; return W.seal(W.buildPolicy({ objId: o.objId || OBJ, parents: o.parents || [], author: { did: person.did, deviceId: dev.id }, authorLog: o.point || await person.point(), change, created: o.created }), person.signer(dev)); };
+  const refusedPolicy = async (name, env, c, re) => { const r = await W.verifyPolicy(env, c || ctx); ok(name, r.ok === false && !r.pending && (!re || re.test(r.error)), r); };
+  const addB = await policyOf(A, A.d1, { op: 'add-writer', did: B.did });
+  const rAddB = await W.verifyPolicy(addB, ctx);
+  ok('the owner\'s signed change of the list verifies, names what it changes, and writes no text', rAddB.ok === true && rAddB.policy.op === 'add-writer' && rAddB.policy.did === B.did && Object.keys(rAddB.ranges).length === 0 && rAddB.did === A.did, rAddB);
+  ok('its id is the SHA-256 of the canonical event, as for an edit, and the same change signed again keeps it', rAddB.cid === kd.b64u(nodeCrypto.createHash('sha256').update(kd.canonicalJson(addB.event)).digest()) && rAddB.cid === await W.versionId((await policyOf(A, A.d1, { op: 'add-writer', did: B.did }, { created: addB.event.created })).event));
+  await refusedPolicy('a change signed by someone who is not the page\'s owner is refused', await policyOf(B, B.d1, { op: 'add-writer', did: C.did }), null, /only the page's owner/);
+  await refusedPolicy('so is a person making themselves a writer', await policyOf(B, B.d1, { op: 'add-writer', did: B.did }), null, /only the page's owner/);
+  await refusedPolicy('a change that names the owner is refused: the owner is always a writer and cannot be removed', await policyOf(A, A.d1, { op: 'remove-writer', did: A.did }), null, /owner/);
+  await refusedPolicy('changing who is added after signing is refused', tamper(addB, (c) => { c.event.change.did = C.did; }), null, /signature/);
+  await refusedPolicy('changing the operation after signing is refused', tamper(addB, (c) => { c.event.change.op = 'remove-writer'; }), null, /signature/);
+  await refusedPolicy('changing the page after signing is refused', tamper(addB, (c) => { c.event.objId = W.pageId(A.did, 'page-two'); }), null, /signature/);
+  await refusedPolicy('changing the parents after signing is refused', tamper(addB, (c) => { c.event.parents = ['a'.repeat(43)]; }), null, /signature/);
+  await refusedPolicy('a signature of a key that is not the owner\'s device is refused', await W.seal(addB.event, A.signer(strangerDev)), null, /signature/);
+  await refusedPolicy('a change signed by another of the owner\'s devices than the one it names is refused', await W.seal(addB.event, A.signer(A2)), null, /signature/);
+  await refusedPolicy('a change by a device the owner\'s log lists only later is refused', await policyOf(A, A2, { op: 'add-writer', did: B.did }, { point: pt0 }), null, /not listed/);
+  await refusedPolicy('a change by a device that the owner\'s log had already removed at the point it claims is refused', await policyOf(A, A2, { op: 'add-writer', did: B.did }, { point: ptAtRemoval }), null, /not listed/);
+  ok('but a change a device made while it was listed stays valid after it was removed', (await W.verifyPolicy(await policyOf(A, A2, { op: 'add-writer', did: B.did }, { point: pt1 }), ctx)).ok === true);
+  const rPendP = await W.verifyPolicy(await policyOf(A, A.d1, { op: 'remove-writer', did: B.did }, { parents: ['q'.repeat(43)] }), ctx);
+  ok('a change that follows a version that has not arrived waits for it', rPendP.pending === true && rPendP.waitFor.parents[0] === 'q'.repeat(43), rPendP);
+  const rPendL = await W.verifyPolicy(addB, makeCtx([B, C]));
+  ok('and one whose owner\'s log is not known here waits for the log', rPendL.pending === true && rPendL.waitFor.log === A.did, rPendL);
+  await refusedPolicy('an operation that is not add-writer or remove-writer is refused', await resigned(A, A.d1, addB, (e) => { e.change.op = 'make-owner'; }), null, /does not name an identity/);
+  await refusedPolicy('a change that names something that is not an identity is refused', await resigned(A, A.d1, addB, (e) => { e.change.did = 'everyone'; }), null, /does not name an identity/);
+  await refusedPolicy('a change with an extra member is refused', await resigned(A, A.d1, addB, (e) => { e.change.role = 'admin'; }), null, /does not name an identity/);
+  await refusedPolicy('an event with an extra member is refused', await resigned(A, A.d1, addB, (e) => { e.extra = 1; }), null, /not a change of who may write/);
+  await refusedPolicy('an edit is not a change of the list', e1, null, /not a change of who may write/);
+  const addAsEdit = await W.verifyVersion(addB, ctx);
+  ok('and a change of the list is not an edit: the two cannot be taken for each other', addAsEdit.ok === false && /not a wiki version/.test(addAsEdit.error), addAsEdit);
+  let hostileP = true, changedP = 0;
+  for (let i = 0; i < 200; i++) {
+    const c = clone(addB), keys = ['objId', 'parents', 'author', 'authorLog', 'change', 'created'], k = keys[rint(keys.length)];
+    c.event[k] = [null, 0, 'x', [], {}, -1, 1e99, true][rint(8)];
+    if (kd.canonicalJson(c.event[k]) === kd.canonicalJson(addB.event[k])) continue;
+    changedP++;
+    try { const r = await W.verifyPolicy(c, ctx); if (r.ok) hostileP = false; } catch (e) { hostileP = false; }
+  }
+  ok('200 changes with one member replaced by junk: none accepted and none throws (' + changedP + ' really changed)', hostileP && changedP > 150, changedP);
+  let junkP = true;
+  for (const j of [null, undefined, 0, 'x', [], {}, { event: null, sig: 'a' }, { event: {}, sig: 1 }, { event: addB.event }, { sig: 'a' }]) { try { if ((await W.verifyPolicy(j, ctx)).ok) junkP = false; } catch (e) { junkP = false; } }
+  ok('nothing that is not a signed change is accepted and nothing makes the check throw', junkP);
+
+  // ================================================================ the rule: who may write as of a set of list changes
+  // Records made by hand ({ event: { change }, pol }), so the rule is tested without signatures: pol is the list changes in a change's own
+  // history, itself included, which is what the store keeps.
+  const O = A.did, X = B.did, Z = C.did;
+  const rec = (op, did, pol) => ({ event: { change: { op, did } }, pol });
+  const book = {
+    a1: rec('add-writer', X, ['a1']), r1: rec('remove-writer', X, ['a1', 'r1']), a2: rec('add-writer', X, ['a1', 'a2', 'r1']),                 // add, then remove, then add again
+    a1b: rec('add-writer', X, ['a1b']), r2: rec('remove-writer', X, ['a1', 'r2']), a3: rec('add-writer', X, ['a1', 'a1b', 'a3', 'r2']),         // a1b is concurrent with a1 and r2
+    rboth: rec('remove-writer', X, ['a1', 'a1b', 'rboth']), z1: rec('add-writer', Z, ['z1']), o1: rec('add-writer', O, ['o1']) };
+  const wf = (cids) => W.writersFrom(O, cids, (c) => book[c]);
+  const sameList = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  ok('with no list changes only the owner may write', sameList(wf([]), [O]));
+  ok('a person who was added may write', sameList(wf(['a1']), [O, X]));
+  ok('a person who was added and then removed may not', sameList(wf(['a1', 'r1']), [O]));
+  ok('a person added again after the removal was seen may write again', sameList(wf(['a1', 'r1', 'a2']), [O, X]));
+  ok('a removal and an add made at the same time, neither having seen the other: the removal wins', sameList(wf(['a1b', 'r2']), [O]) && sameList(wf(['a1', 'a1b', 'r2']), [O]));
+  ok('one more add that did see both brings the person back', sameList(wf(['a1', 'a1b', 'r2', 'a3']), [O, X]));
+  ok('one removal that saw two separate adds removes the person', sameList(wf(['a1', 'a1b', 'rboth']), [O]));
+  ok('an add that saw one removal but not another made at the same time does not bring the person back', sameList(wf(['a1', 'r1', 'r2', 'a2']), [O]) && sameList(wf(['a1', 'r1', 'a2']), [O, X]));
+  ok('everyone is listed once, the owner first and the others in a fixed order', sameList(wf(['a1', 'z1']), [O].concat([X, Z].sort())));
+  ok('the owner named by an add is not listed twice', sameList(wf(['o1']), [O]));
+  const base = ['a1', 'r1', 'a2', 'z1'], perms = (arr) => arr.length <= 1 ? [arr] : arr.flatMap((x, i) => perms(arr.slice(0, i).concat(arr.slice(i + 1))).map((p) => [x].concat(p)));
+  ok('whatever order the changes are handed over in, the answer is the same (all 24 orders)', new Set(perms(base).map((p) => JSON.stringify(wf(p)))).size === 1 && sameList(wf(base), [O].concat([X, Z].sort())));
+  ok('a change that is not known gives "not known yet", never a guess', wf(['a1', 'nope']) === null && W.writersFrom(O, ['x'], () => ({ event: { change: { op: 'add-writer', did: X } } })) === null);
 
   // ================================================================ shape, sizes, and never throwing
   await refusedBy('an update over the size limit is refused before it is decoded', await resigned(A, A.d1, e1, (e) => { e.payload.update = kd.b64u(new Uint8Array(W.MAX_UPDATE_BYTES + 3)); }), null, /larger than the limit/);

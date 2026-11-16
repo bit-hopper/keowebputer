@@ -46,17 +46,20 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => window.keo.call(
 // ---- what node makes and the page is given ------------------------------------------------------------------------------------------
 async function fixtures() {
   const A = await F.makePerson(), B = await F.makePerson(), C = await F.makePerson(), D = await F.makePerson(), E = await F.makePerson();
-  const wa = await F.writer(A, A.d1), wb = await F.writer(B, B.d1);
+  const P1 = F.pageOf(A, 'page-one'), PEQ = F.pageOf(D, 'page-eq'), PLONG = F.pageOf(A, 'page-long'), PC = F.pageOf(C, 'page-c');       // a page is named by its owner and a name
+  const wa = await F.writer(A, A.d1), wb = await F.writer(B, B.d1, undefined, P1);
   const e1 = await wa.publish((d) => d.getText('body').insert(0, 'hello')), c1 = await F.cidOf(e1);
   const e2 = await wa.publish((d) => d.getText('body').insert(5, ' world'), [c1]), c2 = await F.cidOf(e2);
-  const b1 = await wb.publish((d) => d.getText('body').insert(0, 'from B'), []), bc1 = await F.cidOf(b1);
+  const polB = await F.policy(A, A.d1, { op: 'add-writer', did: B.did }, [], { objId: P1 }), polBcid = await F.cidOf(polB);       // A signs B in, on a root of its own
+  const b1 = await wb.publish((d) => d.getText('body').insert(0, 'from B'), [polBcid]), bc1 = await F.cidOf(b1);
   const b2 = await wb.publish((d) => d.getText('body').insert(6, '!'), [bc1]), bc2 = await F.cidOf(b2);
-  const wc = await F.writer(C, C.d1);
+  const bNoList = await (await F.writer(B, B.d1, 'nonce-bnolist1', P1)).publish((d) => d.getText('body').insert(0, 'B, not signed in'), []);   // B's edit that does not follow the signing-in
+  const wc = await F.writer(C, C.d1, undefined, PC);
   await wc.publish((d) => d.getText('body').insert(0, 'x'));                                   // made, never sent: the next one skips ahead of it
   const ahead = await wc.publish((d) => d.getText('body').insert(1, 'y'), []);
   const same = 'nonce-q0001xx';
-  const t1 = await (await F.writer(D, D.d1, same, 'page-eq')).publish((d) => d.getText('body').insert(0, 'ONE'), []);
-  const t2 = await (await F.writer(D, D.d1, same, 'page-eq')).publish((d) => d.getText('body').insert(0, 'TWO'), []);     // same device, page and nonce: the same client id, other content
+  const t1 = await (await F.writer(D, D.d1, same, PEQ)).publish((d) => d.getText('body').insert(0, 'ONE'), []);
+  const t2 = await (await F.writer(D, D.d1, same, PEQ)).publish((d) => d.getText('body').insert(0, 'TWO'), []);     // same device, page and nonce: the same client id, other content
   const olderA = A.snapshot();
   await A.addDevice();
   const longerA = A.snapshot();
@@ -65,13 +68,13 @@ async function fixtures() {
     for (let i = 0; i < n; i++) { const env = await w.publish((d) => d.getText('body').insert(d.getText('body').length, word + i + ' '), parents); out.push(env); parents = [await F.cidOf(env)]; text += word + i + ' '; }
     return { envs: out, text };
   };
-  const long = await mk(A, A.d1, 'page-long', 300, 'w'), race = await mk(B, B.d1, 'page-race', 60, 'r');
-  const lone = await (await F.writer(B, B.d1, undefined, 'page-lone')).publish((d) => d.getText('body').insert(0, 'lone'), []);
+  const long = await mk(A, A.d1, PLONG, 300, 'w'), race = await mk(B, B.d1, F.pageOf(B, 'page-race'), 60, 'r');
   const u = (env) => kd.unb64u(env.event.payload.update);
   return {
     dids: { A: A.did, B: B.did, C: C.did, D: D.did, E: E.did },
     logs: { A: olderA, B: B.snapshot(), C: C.snapshot(), D: D.snapshot(), E: E.snapshot() }, longerA,
-    e1, e2, b1, b2, ahead, t1, t2, c1, c2, bc1, bc2, long: long.envs, race: race.envs, lone,
+    pages: { one: P1, eq: PEQ, long: PLONG, c: PC },
+    e1, e2, polB, polBcid, b1, b2, bNoList, ahead, t1, t2, c1, c2, bc1, bc2, long: long.envs, race: race.envs,
     expectMain: F.textOf(Y.mergeUpdates([u(e1), u(e2), u(b1), u(b2)])), expectLong: long.text
   };
 }
@@ -152,26 +155,25 @@ async function fixtures() {
     check('a signed-in identity was made', /^did:keo:/.test(did), did);
     const first = await page.evaluate((d) => {
       const s1 = window.keoWiki.store(), s2 = window.keoWiki.store();
-      return { same: s1 === s2, ops: ['add', 'offerLog', 'heads', 'state', 'versions', 'alerts', 'pending', 'recheck', 'close'].every((m) => typeof s1[m] === 'function') };
+      return { same: s1 === s2, ops: ['add', 'offerLog', 'heads', 'state', 'versions', 'writers', 'alerts', 'pending', 'recheck', 'close'].every((m) => typeof s1[m] === 'function'), noSetter: typeof window.keoWiki.setWriters === 'undefined' && typeof s1.setWriters === 'undefined' };
     }, did);
-    check('the shell gives one store per session, with the whole interface', first.same && first.ops, first);
+    check('the shell gives one store per session, with the whole interface, and nothing a caller can use to name who may write (that is read from the page\'s signed history)', first.same && first.ops && first.noSetter, first);
 
     const S2 = await page.evaluate(async (d) => {
       const s = window.keoWiki.store(), out = {};
       for (const n of ['A', 'B', 'C', 'D']) out['log' + n] = (await s.offerLog(d.dids[n], d.logs[n])).status;
-      const r = await s.add(d.e1);
-      out.noWriters = { status: r.status, heads: (await s.heads('page-one')).length, pending: (await s.pending('page-one')).length };
-      window.keoWiki.setWriters(async () => [d.dids.A, d.dids.B, d.dids.C, d.dids.D]);
-      out.recheck = (await s.recheck('page-one')).length;
-      out.afterRecheck = { heads: await s.heads('page-one'), pending: (await s.pending('page-one')).length };
+      const P = d.pages.one, r = await s.add(d.e1);
+      out.owner = { status: r.status, heads: await s.heads(P), writers: await s.writers(P) };
+      const rn = await s.add(d.bNoList); out.bNoList = { status: rn.status, error: rn.error };
       out.e2 = (await s.add(d.e2)).status;
       out.b2first = (await s.add(d.b2)).status;
-      const rb1 = await s.add(d.b1);
-      out.b1 = { status: rb1.status, also: rb1.alsoAccepted };
+      out.b1first = (await s.add(d.b1)).status;
+      const rp = await s.add(d.polB);
+      out.pol = { status: rp.status, also: rp.alsoAccepted };
       out.dup = (await s.add(d.e1)).status;
-      const heads = await s.heads('page-one'), st = await s.state('page-one'), doc = new window.keoYjs.Doc();
+      const heads = await s.heads(P), st = await s.state(P), doc = new window.keoYjs.Doc();
       window.keoYjs.applyUpdate(doc, st.update);
-      out.heads = heads.slice().sort(); out.text = doc.getText('body').toString(); out.versions = (await s.versions('page-one')).length;
+      out.heads = heads.slice().sort(); out.text = doc.getText('body').toString(); out.versions = (await s.versions(P)).length; out.writers = await s.writers(P);
       const ra = await s.add(d.ahead); out.ahead = { status: ra.status, error: ra.error };
       out.t1 = (await s.add(d.t1)).status;
       const rt = await s.add(d.t2); out.t2 = { status: rt.status, error: rt.error };
@@ -182,11 +184,11 @@ async function fixtures() {
       return out;
     }, data);
     check('every identity log offered was kept', ['logA', 'logB', 'logC', 'logD'].every((k) => S2[k] === 'new'), S2);
-    check('until someone says who may write a page, an edit waits as pending and nothing is accepted', S2.noWriters.status === 'pending' && S2.noWriters.heads === 0 && S2.noWriters.pending === 1, S2.noWriters);
-    check('once the writers are named, rechecking settles that waiting edit', S2.recheck === 1 && JSON.stringify(S2.afterRecheck.heads) === JSON.stringify([data.c1]) && S2.afterRecheck.pending === 0, S2);
-    check('the author\'s next edit is accepted; an edit that arrives before its parent waits and is settled when the parent comes; a repeat is a duplicate',
-      S2.e2 === 'accepted' && S2.b2first === 'pending' && S2.b1.status === 'accepted' && JSON.stringify(S2.b1.also) === JSON.stringify([data.bc2]) && S2.dup === 'duplicate', S2);
-    check('the page has the two heads and reads as both writers\' edits together (the text node computed from the same updates)', JSON.stringify(S2.heads) === JSON.stringify([data.c2, data.bc2].sort()) && S2.text === data.expectMain && S2.versions === 4, { heads: S2.heads, text: S2.text, want: data.expectMain });
+    check('the page\'s owner writes with no list set anywhere, and a person the owner has not signed in is refused', S2.owner.status === 'accepted' && JSON.stringify(S2.owner.heads) === JSON.stringify([data.c1]) && JSON.stringify(S2.owner.writers) === JSON.stringify([data.dids.A]) && S2.bNoList.status === 'refused' && /may not write/.test(S2.bNoList.error), S2);
+    check('the author\'s next edit is accepted; edits that arrive before what they follow wait, and the owner\'s signed list change settles both of them, in order; a repeat is a duplicate',
+      S2.e2 === 'accepted' && S2.b2first === 'pending' && S2.b1first === 'pending' && S2.pol.status === 'accepted' && JSON.stringify(S2.pol.also) === JSON.stringify([data.bc1, data.bc2]) && S2.dup === 'duplicate', S2);
+    check('the page says who may write it: the owner and the person the owner signed in', JSON.stringify(S2.writers) === JSON.stringify([data.dids.A, data.dids.B]), S2.writers);
+    check('the page has the two heads and reads as both writers\' edits together (the text node computed from the same updates)', JSON.stringify(S2.heads) === JSON.stringify([data.c2, data.bc2].sort()) && S2.text === data.expectMain && S2.versions === 5, { heads: S2.heads, text: S2.text, want: data.expectMain });
     check('an edit that skips ahead of its author\'s clock numbers is refused', S2.ahead.status === 'refused' && /skips ahead/.test(S2.ahead.error), S2.ahead);
     check('two different edits under one client id: the first stays, the second is refused, and both refusals are in the alerts', S2.t1 === 'accepted' && S2.t2.status === 'refused' && S2.alerts.join() === 'clock-ahead,equivocation', S2);
     check('a longer log extends the kept one, the same again changes nothing, an older one is "shorter"', S2.logExt === 'extended' && S2.logAgain === 'same' && S2.logShort === 'shorter', S2);
@@ -195,12 +197,12 @@ async function fixtures() {
     // ---- 3. what is on disk ----------------------------------------------------------------------------------------------------------
     const rows = await page.evaluate(() => window.__t.rows());
     const count = (k) => rows.filter((r) => r.kind === k).length;
-    check('every record is kept under the signed-in identity\'s DID, in the kinds the store uses, and the five accepted edits are five version records',
-      rows.length > 0 && rows.every((r) => r.did === did && ['page', 'version', 'pending', 'log', 'meta'].includes(r.kind)) && count('version') === 5 && count('log') === 4 && count('page') === 2 && count('meta') === 1 && count('pending') === 0, { n: rows.length, versions: count('version'), logs: count('log'), pages: count('page') });
+    check('every record is kept under the signed-in identity\'s DID, in the kinds the store uses, and the six accepted events (five on the main page, one on the other) are six version records',
+      rows.length > 0 && rows.every((r) => r.did === did && ['page', 'version', 'pending', 'log', 'meta'].includes(r.kind)) && count('version') === 6 && count('log') === 4 && count('page') === 2 && count('meta') === 1 && count('pending') === 0, { n: rows.length, versions: count('version'), logs: count('log'), pages: count('page') });
     check('every record is sealed: a 12-byte nonce and ciphertext as bytes', rows.every((r) => r.ivLen === 16 && r.bytes === true && r.ctLen > 16), rows.slice(0, 3));
-    const needles = ['hello', 'world', 'from B', 'page-one', 'page-eq', 'keo-wiki-version', 'equivocation', 'clock-ahead', data.dids.A, data.dids.B, data.dids.C, data.dids.D, kd.parseDid(data.dids.A).dk];
+    const needles = ['hello', 'world', 'from B', 'page-one', 'page-eq', 'keo-wiki-version', 'keo-wiki-policy', 'add-writer', 'equivocation', 'clock-ahead', data.dids.A, data.dids.B, data.dids.C, data.dids.D, kd.parseDid(data.dids.A).dk];
     const leaked = await page.evaluate((n) => window.__t.scan(n), needles);
-    check('nothing readable on disk: not the text, the page name, the kinds of alert, nor any author\'s identity (the owner\'s DID is in the key by design)', leaked.length === 0, leaked);
+    check('nothing readable on disk: not the text, the page name, the kinds of event or alert, the operation of a list change, nor any author\'s identity (the owner\'s DID is in the key by design)', leaked.length === 0, leaked);
 
     // ---- 3b. the log book as the connection code uses it: pin (keo-hello.js verifiers get it as `pin`) and pinFriend (for what anyone can send)
     phase = '3b log book entry points';
@@ -230,23 +232,23 @@ async function fixtures() {
     check('after a reload the session is back with no prompt', !!cur && cur.did === did, cur);
     const S4 = await page.evaluate(async (d) => {
       const s = window.keoWiki.store(), doc = new window.keoYjs.Doc(), t0 = performance.now();
-      const heads = await s.heads('page-one'); const st = await s.state('page-one'); window.keoYjs.applyUpdate(doc, st.update);
-      return { heads: heads.slice().sort(), text: doc.getText('body').toString(), alerts: (await s.alerts()).map((a) => a.kind).sort(), pending: (await s.pending('page-one')).length,
-        logA: (await s.logOf(d.dids.A)).events.length, ms: Math.round(performance.now() - t0), versions: (await s.versions('page-one')).length };
+      const P = d.pages.one, heads = await s.heads(P); const st = await s.state(P); window.keoYjs.applyUpdate(doc, st.update);
+      return { heads: heads.slice().sort(), text: doc.getText('body').toString(), alerts: (await s.alerts()).map((a) => a.kind).sort(), pending: (await s.pending(P)).length,
+        logA: (await s.logOf(d.dids.A)).events.length, ms: Math.round(performance.now() - t0), versions: (await s.versions(P)).length, writers: await s.writers(P) };
     }, data);
-    check('the reloaded page reads back the same heads, text, alerts and pinned logs from the sealed records (same session key, new page load)',
-      JSON.stringify(S4.heads) === JSON.stringify([data.c2, data.bc2].sort()) && S4.text === data.expectMain && S4.alerts.join() === 'clock-ahead,equivocation' && S4.pending === 0 && S4.logA === 1 && S4.versions === 4, S4);
+    check('the reloaded page reads back the same heads, text, alerts, pinned logs and list of writers from the sealed records (same session key, new page load)',
+      JSON.stringify(S4.heads) === JSON.stringify([data.c2, data.bc2].sort()) && S4.text === data.expectMain && S4.alerts.join() === 'clock-ahead,equivocation' && S4.pending === 0 && S4.logA === 1 && S4.versions === 5 && JSON.stringify(S4.writers) === JSON.stringify([data.dids.A, data.dids.B]), S4);
 
     phase = '5 long page';
     // ---- 5. a longer page: 300 edits one after another, then read cold ----------------------------------------------------------------
     const S5 = await page.evaluate(async (d) => {
-      const s = window.keoWiki.store(); window.keoWiki.setWriters(async () => [d.dids.A, d.dids.B]);
+      const s = window.keoWiki.store();
       const t0 = performance.now(); let bad = 0;
       for (const env of d.long) { const r = await s.add(env); if (r.status !== 'accepted') bad++; }
       const addMs = performance.now() - t0;
       await s.unload();
-      const t1 = performance.now(); const heads = await s.heads('page-long'); const t2 = performance.now();
-      const st = await s.state('page-long'); const t3 = performance.now();
+      const t1 = performance.now(); const heads = await s.heads(d.pages.long); const t2 = performance.now();
+      const st = await s.state(d.pages.long); const t3 = performance.now();
       const doc = new window.keoYjs.Doc(); window.keoYjs.applyUpdate(doc, st.update);
       return { bad, addMs: Math.round(addMs), perAdd: Math.round(addMs / d.long.length * 10) / 10, headsMs: Math.round(t2 - t1), stateMs: Math.round(t3 - t2), n: heads.length, text: doc.getText('body').toString() };
     }, data);
@@ -258,12 +260,12 @@ async function fixtures() {
     // ---- 6. a second identity on the same device, the same page name ------------------------------------------------------------------
     const S6 = await page.evaluate(async (d) => {
       const decoy = 'did:keo:decoy-one', key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-      const other = window.keoWikiStore.create({ backend: window.keoWiki.backend(decoy), key, did: decoy, writers: async () => [d.dids.A] });
-      const mine = window.keoWiki.store(), before = (await mine.heads('page-one')).length;
+      const other = window.keoWikiStore.create({ backend: window.keoWiki.backend(decoy), key, did: decoy });
+      const mine = window.keoWiki.store(), before = (await mine.heads(d.pages.one)).length;
       await other.offerLog(d.dids.A, d.logs.A);
       const r = await other.add(d.e1);
-      const readsMine = await window.keoWikiStore.create({ backend: window.keoWiki.backend((await window.keoIdentity.current()).did), key, did: decoy, writers: async () => [] }).heads('page-one').then(() => 'read', (e) => e.message);
-      const out = { added: r.status, theirs: await other.heads('page-one'), mineBefore: before, mineAfter: (await mine.heads('page-one')).length, readsMine };
+      const readsMine = await window.keoWikiStore.create({ backend: window.keoWiki.backend((await window.keoIdentity.current()).did), key, did: decoy }).heads(d.pages.one).then(() => 'read', (e) => e.message);
+      const out = { added: r.status, theirs: await other.heads(d.pages.one), mineBefore: before, mineAfter: (await mine.heads(d.pages.one)).length, readsMine };
       await window.keoWiki.purge(decoy);                                   // the made-up identity goes again: later steps look at every record
       out.decoyGone = (await window.__t.rows()).filter((x) => x.did === decoy).length === 0;
       return out;
@@ -273,27 +275,24 @@ async function fixtures() {
 
     phase = '7 sign-out and sign-in';
     // ---- 7. the session ends: the store stops, the records stay, the same session key opens them again -----------------------------------
-    const S7a = await page.evaluate(async () => {
+    const S7a = await page.evaluate(async (P) => {
       const old = window.keoWiki.store(); await window.keoIdentity.signOut();
-      const out = { oldRefuses: await old.heads('page-one').then(() => 'read', (e) => e.message), newRefuses: (() => { try { window.keoWiki.store(); return 'given'; } catch (e) { return e.message; } })() };
+      const out = { oldRefuses: await old.heads(P).then(() => 'read', (e) => e.message), newRefuses: (() => { try { window.keoWiki.store(); return 'given'; } catch (e) { return e.message; } })() };
       out.rows = (await window.__t.rows()).length;
       out.pinSignedOut = (() => { try { window.keoWiki.pin('did:keo:x', {}); return 'no error'; } catch (e) { return e.message; } })();
       out.pinFriendSignedOut = await window.keoWiki.pinFriend('did:keo:x', {}).then(() => 'resolved', (e) => e.message);
       return out;
-    });
+    }, data.pages.one);
     check('after sign-out the old store refuses to run and no new one is given', /closed/.test(S7a.oldRefuses) && /Sign in/.test(S7a.newRefuses), S7a);
     check('signed out, the log book answers neither pin nor pinFriend (a verifier then refuses: nothing is accepted for want of a book)', /Sign in/.test(S7a.pinSignedOut) && /Sign in/.test(S7a.pinFriendSignedOut), S7a);
     check('signing out deletes nothing', S7a.rows > 300, S7a);
     await page.evaluate((d) => window.keoIdentity.signIn({ did: d }), did);
     const S7b = await page.evaluate(async (d) => {
       const s = window.keoWiki.store();
-      const noWriters = (await s.add(d.lone)).status;             // the writer list of the earlier session must not have been carried over
-      window.keoWiki.setWriters(async () => [d.dids.A, d.dids.B]);
-      const doc = new window.keoYjs.Doc(); window.keoYjs.applyUpdate(doc, (await s.state('page-one')).update);
-      return { text: doc.getText('body').toString(), heads: (await s.heads('page-one')).length, noWriters };
+      const doc = new window.keoYjs.Doc(); window.keoYjs.applyUpdate(doc, (await s.state(d.pages.one)).update);
+      return { text: doc.getText('body').toString(), heads: (await s.heads(d.pages.one)).length, writers: await s.writers(d.pages.one) };
     }, data);
-    check('signing in again opens the same records (the key is the identity\'s, not the session\'s)', S7b.text === data.expectMain && S7b.heads === 2, S7b);
-    check('the writer list of the earlier session is not carried into the next one (an edit waits until it is given again)', S7b.noWriters === 'pending', S7b);
+    check('signing in again opens the same records (the key is the identity\'s, not the session\'s), and the list of who may write comes back with them because it is part of the history', S7b.text === data.expectMain && S7b.heads === 2 && JSON.stringify(S7b.writers) === JSON.stringify([data.dids.A, data.dids.B]), S7b);
 
     phase = '8 sign-out during work';
     // ---- 8. a session that ends in the middle of work, and the removal of what it kept ----------------------------------------------------
@@ -321,7 +320,6 @@ async function fixtures() {
     await page.evaluate((d) => window.keoIdentity.signIn({ did: d }), did);
     const S8b = await page.evaluate(async (d) => {
       const s = window.keoWiki.store(), who = (await window.keoIdentity.current()).did, td = new TextDecoder();
-      window.keoWiki.setWriters(async () => [d.dids.B]);
       await s.offerLog(d.dids.B, d.logs.B);
       const real = crypto.subtle.encrypt; let held = false, release; const gate = new Promise((r) => { release = r; });
       crypto.subtle.encrypt = function (alg, key, bytes) {
@@ -355,7 +353,7 @@ async function fixtures() {
     await keoCall(frame, 'world.go', { kind: 'enter' }).catch(() => {});
     frame = await waitForWorld(page, 'homestar');
     const S9a = await page.evaluate(async (d) => {
-      const s = window.keoWiki.store(); window.keoWiki.setWriters(async () => [d.dids.A]);
+      const s = window.keoWiki.store();
       await s.offerLog(d.dids.A, d.logs.A); const r = await s.add(d.e1);
       const decoy = window.keoWiki.backend('did:keo:decoy-two'); await decoy.put('version', 'v-1', { iv: 'AAAAAAAAAAAAAAAA', ct: new Uint8Array([1, 2, 3]) });
       const who = (await window.keoIdentity.current()).did, rows = await window.__t.rows();

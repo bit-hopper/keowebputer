@@ -21,9 +21,15 @@
 //                       started again under the same id) is refused. Two different edits that claim the same numbers are an
 //                       EQUIVOCATION: the one that arrives second is refused and the pair is kept as an alert (first seen wins; a
 //                       device that behaves honestly never does this, because it starts over under a fresh nonce).
-//                       An edit that is only waiting for a parent, a log or the writer list is kept as pending and checked again, by
-//                       itself, whenever something arrives that could settle it.
-//   heads, versions, state   what a page's history looks like and the Yjs state at a set of versions (default: the current heads).
+//                       An edit that is only waiting for a parent or a log is kept as pending and checked again, by itself, whenever
+//                       something arrives that could settle it.
+//                       The same call takes the owner's signed CHANGES OF THE WRITER LIST (keo-wikilog.js, the `keo-wiki-policy` event),
+//                       which sit in the page's history beside the edits. Who may write a page is worked out here, from the history an
+//                       edit follows: the owner (read out of the page's id) and whoever the owner's changes in that history name. Each
+//                       held event records which list changes it follows (`pol`), so the answer is a merge of small lists, not a walk.
+//   heads, versions, state   what a page's history looks like and the Yjs state at a set of versions (default: the current heads). The
+//                       heads include list changes: a new edit names them as parents, so that it follows the list as the author knew it.
+//   writers(objId, heads?)   who may write the page as of those versions (default: the current heads): the DIDs, the owner first.
 //   close()             for a session that ended: operations that have not started are refused from then on (see serial()).
 // Not here: checkpoints and dropping old events, private pages, how events travel. The IndexedDB backend and the store's lifetime in the
 // shell (made for the signed-in identity, closed when the session ends, its records deleted when the identity is removed) are keo-wiki.js.
@@ -52,8 +58,9 @@
     };
   }
 
-  // o: { backend, key (an AES-GCM CryptoKey), did (the identity whose store this is), writers(objId, parents) -> the DIDs that may write
-  //      that page as of those parents, or null when not known yet (it may return a promise), now? (a clock for the alerts), Y? (testing) }
+  // o: { backend, key (an AES-GCM CryptoKey), did (the identity whose store this is), now? (a clock for the alerts), Y? (testing) }
+  // There is no way to tell the store who may write a page: it reads that out of the history it holds (a page's owner, then the owner's
+  // signed changes), so nobody who can call it can grant a right the owner did not sign.
   function create(o) {
     var backend = o.backend, key = o.key, owner = o.did, now = o.now || function () { return new Date().toISOString(); };
     var Y = o.Y || Yjs;
@@ -151,9 +158,23 @@
       return {
         log: async function (did) { return pinnedLog(did); },
         versions: function (cid) { return page.versions.has(cid); },
-        writers: async function (objId, parents) { return o.writers ? o.writers(objId, parents) : null; },
+        writers: async function (objId, parents) { return writersAmong(page, objId, parents); },
         Y: o.Y
       };
+    }
+    // The list changes (their cids, sorted) in the history a set of versions follows, merged from what each held version recorded.
+    // A record written before list changes existed has no `pol`: it follows none.
+    function polAmong(page, parents) {
+      var set = new Set();
+      parents.forEach(function (p) { var v = page.versions.get(p); ((v && v.pol) || []).forEach(function (c) { set.add(c); }); });
+      return Array.from(set).sort();
+    }
+    // The DIDs that may write the page as of a set of versions, the owner first; null only if a list change is not held (it is, whenever
+    // the versions that follow it are).
+    function writersAmong(page, objId, parents) {
+      var pid = W.parsePageId(objId);
+      if (!pid) return null;
+      return W.writersFrom(pid.owner, polAmong(page, parents), function (cid) { var v = page.versions.get(cid); return v && { event: v.env.event, pol: v.pol || [] }; });
     }
     // The end of each client's clock numbers among a set of versions and everything they follow, from what each held version recorded.
     function endsAmong(page, parents) {
@@ -176,6 +197,7 @@
 
     // Runs the check of keo-wikilog.js and the clock check; returns { status, ... } without changing anything.
     async function judge(page, env) {
+      if (env && env.event && env.event.purpose === W.POLICY_PURPOSE) return judgePolicy(page, env);
       var r = await W.verifyVersion(env, ctxFor(page));
       if (r.ok) {
         var bad = clockProblem(page, env, r.ranges);
@@ -185,10 +207,25 @@
       if (r.pending) return { status: 'pending', waitFor: r.waitFor, error: r.error };
       return { status: 'refused', error: r.error };
     }
+    // A change of the writer list: checked by itself (keo-wikilog.js verifyPolicy), then against the two limits that keep what is held per
+    // page bounded. Nothing here depends on the clocks: a list change writes no text.
+    async function judgePolicy(page, env) {
+      var r = await W.verifyPolicy(env, ctxFor(page));
+      if (r.pending) return { status: 'pending', waitFor: r.waitFor, error: r.error };
+      if (!r.ok) return { status: 'refused', error: r.error };
+      var parents = env.event.parents;
+      if (polAmong(page, parents).length + 1 > W.MAX_POLICY_EVENTS) return { status: 'refused', cid: r.cid, error: 'this page has had as many changes of who may write it as this version allows (' + W.MAX_POLICY_EVENTS + ')' };
+      if (r.policy.op === 'add-writer') {
+        var now = writersAmong(page, page.objId, parents);
+        if (now && now.indexOf(r.policy.did) < 0 && now.length - 1 >= W.MAX_WRITERS) return { status: 'refused', cid: r.cid, error: 'the list of who may write this page is full (' + W.MAX_WRITERS + ' besides the owner)' };
+      }
+      return { status: 'accepted', cid: r.cid, result: r };
+    }
     async function accept(page, cid, env, r) {
-      var ends = endsAmong(page, env.event.parents);
+      var ends = endsAmong(page, env.event.parents), pol = polAmong(page, env.event.parents);
       Object.keys(r.ranges).forEach(function (c) { ends[c] = r.ranges[c].end; });
-      var v = { env: env, ranges: r.ranges, ends: ends };
+      if (r.policy) pol = pol.concat([cid]).sort();
+      var v = { env: env, ranges: r.ranges, ends: ends, pol: pol };
       await write('version', cid, v);          // the version first, then the list that names it: a crash between them leaves an unused record, never a list with a hole
       index(page, cid, v);
       page.pending.delete(cid);
@@ -260,7 +297,21 @@
       versions: function (objId) {
         return serial(async function () {
           var p = await loadPage(objId), get = getter(p), cl = W.closure(W.headsOf(Array.from(p.versions.keys()), get), get);
-          return cl.order.map(function (cid) { var e = get(cid).event; return { cid: cid, did: e.author.did, parents: e.parents, created: e.created }; });
+          return cl.order.map(function (cid) {
+            var e = get(cid).event, row = { cid: cid, kind: e.purpose === W.POLICY_PURPOSE ? 'policy' : 'edit', did: e.author.did, parents: e.parents, created: e.created };
+            if (row.kind === 'policy') row.change = e.change;
+            return row;
+          });
+        });
+      },
+      // who may write the page as of `heads` (default: the page's current heads): the DIDs, the owner first
+      writers: function (objId, heads) {
+        return serial(async function () {
+          if (!W.parsePageId(objId)) throw new Error('That is not the name of a page (its owner\'s identity, a slash and a name).');
+          var p = await loadPage(objId), get = getter(p);
+          var at = heads || W.headsOf(Array.from(p.versions.keys()), get);
+          if (W.closure(at, get).missing.length) throw new Error('That version is not held here.');
+          return writersAmong(p, objId, at);
         });
       },
       // the Yjs state at `heads` (default: the page's current heads): { update, cids }; apply `update` to a Y.Doc to read the page
@@ -269,7 +320,8 @@
           var p = await loadPage(objId), get = getter(p);
           var at = heads || W.headsOf(Array.from(p.versions.keys()), get), cl = W.closure(at, get);
           if (cl.missing.length) throw new Error('That version is not held here.');
-          var updates = cl.order.map(function (cid) { return kd.unb64u(get(cid).event.payload.update); });
+          // a list change carries no text: only edits give updates
+          var updates = cl.order.filter(function (cid) { return get(cid).event.purpose === W.PURPOSE; }).map(function (cid) { return kd.unb64u(get(cid).event.payload.update); });
           return { update: updates.length ? Y.mergeUpdates(updates) : Y.encodeStateAsUpdate(new Y.Doc()), cids: cl.order };
         });
       },
