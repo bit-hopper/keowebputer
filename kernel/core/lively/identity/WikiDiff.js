@@ -29,7 +29,7 @@ module('lively.identity.WikiDiff')
 
     lively.identity = lively.identity || {};
 
-    var TEXT_BLOCKS = { paragraph: 1, heading: 1, code_block: 1 };
+    var TEXT_BLOCKS = { paragraph: 1, heading: 1, code_block: 1, code_cell: 1 };
     var CONTAINERS = { bullet_list: 'ul', ordered_list: 'ol', check_list: 'ul', list_item: null, blockquote: null };
 
     // JSON.stringify with sorted keys -- the snapshot has been through a jsonb
@@ -50,15 +50,24 @@ module('lively.identity.WikiDiff')
       return node.content.map(inlineText).join('');
     }
 
+    // The text of a text block. A code cell keeps its source as its own text; a version saved before
+    // that has it in a `source` attribute and no children, and history holds both kinds, so a cell
+    // with no text reads the attribute (the same rule as codeCellSource in PostCardUtils.js and the
+    // server's CodeCellRender.js, which cannot load this file).
+    function blockText(node) {
+      if (node.type === 'code_cell' && !(node.content && node.content.length)) return (node.attrs && node.attrs.source) || '';
+      return (node.content || []).map(inlineText).join('');
+    }
+
     // ctx: { list: 'ul'|'ol'|null, depth: n, quote: bool }
     function flattenInto(node, ctx, out) {
       if (!node) return;
       if (TEXT_BLOCKS[node.type]) {
         var tag = node.type === 'heading' ? 'h' + ((node.attrs && node.attrs.level) || 1)
-                : node.type === 'code_block' ? 'pre' : 'p';
+                : node.type === 'code_block' || node.type === 'code_cell' ? 'pre' : 'p';
         out.push({
           kind: 'text', tag: tag, list: ctx.list, depth: ctx.depth, quote: ctx.quote,
-          text: (node.content || []).map(inlineText).join(''),
+          text: blockText(node),
           key: stable([ctx.list, ctx.depth, ctx.quote, node]),
           // checked state of a checklist item lives on the list_item, not the paragraph
           checked: ctx.checked,

@@ -1271,6 +1271,8 @@ module('lively.identity.WikiEditor')
             'Shift-Tab': sl.liftListItem(schema.nodes.list_item),
           }));
         }
+        // first of all: a key pressed in a code cell belongs to the cell, not to the list commands above or the hard break below
+        plugins.unshift(this._buildCodeCellPlugin(prosemirror));
 
         this.editorView = new prosemirror.view.EditorView(this._pmContainer, {
           state: prosemirror.state.EditorState.create({ schema: schema, plugins: plugins }),
@@ -1307,6 +1309,80 @@ module('lively.identity.WikiEditor')
         this._updateLinkPreview();
       },
 
+      // Keys and bracket matching inside a code cell. A language whose registry row names an `editing` helper (Scheme)
+      // gets its handleKeyDown and decorations (SchemeEditing.js); for every cell, whatever its language:
+      //  - Enter is a newline, never "split the list item this cell sits in" (a cell may be inside a list item) and never
+      //    a hard break node (a cell holds text only), so the key is taken here, before the list commands;
+      //  - Backspace in an EMPTY cell removes the cell: it is isolating, so Backspace never merges it into the block before,
+      //    and without this an empty cell could not be deleted from the keyboard (the atom it replaces could be selected).
+      // Tab is only taken by a language with an editing helper; elsewhere it still moves focus out of the editor.
+      _buildCodeCellPlugin: function (prosemirror) {
+        var Plugin = prosemirror.state.Plugin;
+        var PluginKey = prosemirror.state.PluginKey;
+        var TextSelection = prosemirror.state.TextSelection;
+        var postCardUtils = lively.identity.postCardUtils;
+
+        // null outside a cell, else { helper } (helper null when the cell's language has none)
+        function cellContext(state) {
+          var $from = state.selection.$from;
+          if ($from.parent.type.name !== 'code_cell') return null;
+          var def = postCardUtils.codeCellLanguage($from.parent.attrs.language);
+          return { helper: postCardUtils.codeCellGlobal(def.editing) };
+        }
+
+        return new Plugin({
+          key: new PluginKey('codeCellEditing'),
+          props: {
+            handleKeyDown: function (view, e) {
+              // Ctrl/Cmd+Home and +End with a cell as the first or last block of the page: the browser's own move goes to the
+              // start or end of the editor, which here is the cell's header or output, where no caret can be, and it did nothing
+              // (measured with a real click and then the key; with a paragraph at the edge it works). So this key is taken and the
+              // caret goes to the first or last place it can be; with Shift the selection grows from where it started.
+              if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'Home' || e.key === 'End')) {
+                var pageDoc = view.state.doc, toStart = e.key === 'Home';
+                var edgeBlock = toStart ? pageDoc.firstChild : pageDoc.lastChild;
+                if (edgeBlock && edgeBlock.type.name === 'code_cell') {
+                  var edgeSel = TextSelection.near(pageDoc.resolve(toStart ? 0 : pageDoc.content.size), toStart ? 1 : -1);
+                  var cur = view.state.selection;
+                  if (e.shiftKey && cur.$anchor.parent.inlineContent) edgeSel = TextSelection.create(pageDoc, cur.anchor, edgeSel.head);
+                  view.dispatch(view.state.tr.setSelection(edgeSel).scrollIntoView());
+                  return true;
+                }
+              }
+              var ctx = cellContext(view.state);
+              if (!ctx) return false;
+              if (ctx.helper && ctx.helper.handleKeyDown && ctx.helper.handleKeyDown(view, e, prosemirror)) return true;
+              // Select-all inside a cell selects the cell's code first (as in its textarea, and as code editors do); once the
+              // whole code is selected, the next one selects the whole page as usual.
+              if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'a' || e.key === 'A')) {
+                var as = view.state.selection;
+                var cellStart = as.$from.start(), cellEnd = as.$from.end();
+                if (!as.$from.sameParent(as.$to) || (as.from === cellStart && as.to === cellEnd)) return false;
+                view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, cellStart, cellEnd)));
+                return true;
+              }
+              var plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing;
+              if (plain && e.key === 'Enter') return prosemirror.commands.newlineInCode(view.state, view.dispatch);
+              if (plain && e.key === 'Backspace') {
+                var sel = view.state.selection;
+                if (!sel.empty || sel.$from.parent.content.size !== 0) return false;
+                var from = sel.$from.before(), to = sel.$from.after();
+                var tr = view.state.tr.delete(from, to);
+                // the caret goes to the end of the block before the removed cell (or into what follows, if none is before)
+                tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(from, tr.doc.content.size)), -1));
+                view.dispatch(tr.scrollIntoView());
+                return true;
+              }
+              return false;
+            },
+            decorations: function (state) {
+              var ctx = cellContext(state);
+              return ctx && ctx.helper && ctx.helper.decorations ? ctx.helper.decorations(state, prosemirror) : null;
+            },
+          },
+        });
+      },
+
       // Syntax-highlights code_block content via inline Decorations —
       // identical to PostCardEditor.js's.
       _buildHighlightPlugin: function (prosemirror) {
@@ -1316,22 +1392,41 @@ module('lively.identity.WikiEditor')
         var DecorationSet = prosemirror.view.DecorationSet;
         var key = new PluginKey('postcardHighlight');
 
-        function highlightCodeBlock(pos, text) {
+        // The token spans of one code block or cell, as offsets into its own text: { from, to, cls }. A code block is
+        // guessed at (highlightAuto); a cell is highlighted as its own language, and a language this build has no row
+        // for is left plain. Nodes are immutable, so a node that did not change since the last state has the same
+        // object: its spans are cached per node, and typing in one cell re-highlights that cell only, not every block.
+        // Returns [] when the highlighter's text does not match the node's (never mis-placed decorations).
+        var spanCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+        function tokenSpans(node) {
+          var cached = spanCache && spanCache.get(node);
+          if (cached) return cached;
+          var spans = computeSpans(node);
+          if (spanCache) spanCache.set(node, spans);
+          return spans;
+        }
+        function computeSpans(node) {
+          var text = node.textContent;
           var hljs = (typeof window !== 'undefined' && window.hljs) || null;
           if (!hljs || !text) return [];
           var result;
-          try { result = hljs.highlightAuto(text); } catch (e) { return []; }
+          try {
+            if (node.type.name === 'code_cell') {
+              var def = lively.identity.postCardUtils.codeCellLanguage(node.attrs.language);
+              if (!def.known) return [];
+              result = hljs.highlight(text, { language: def.hljsId });
+            } else {
+              result = hljs.highlightAuto(text);
+            }
+          } catch (e) { return []; }
           var container = document.createElement('div');
           container.innerHTML = result.value;
-          var decos = [];
+          var spans = [];
           var offset = 0;
           function walk(domNode, classes) {
             if (domNode.nodeType === 3) {
               var len = domNode.nodeValue.length;
-              if (classes.length) {
-                decos.push(Decoration.inline(pos + 1 + offset, pos + 1 + offset + len,
-                  { class: classes.join(' ') }));
-              }
+              if (classes.length) spans.push({ from: offset, to: offset + len, cls: classes.join(' ') });
               offset += len;
               return;
             }
@@ -1341,7 +1436,12 @@ module('lively.identity.WikiEditor')
             }
           }
           for (var i = 0; i < container.childNodes.length; i++) walk(container.childNodes[i], []);
-          return decos;
+          return offset === text.length ? spans : [];
+        }
+        function highlightCodeBlock(pos, node) {
+          return tokenSpans(node).map(function (s) {
+            return Decoration.inline(pos + 1 + s.from, pos + 1 + s.to, { class: s.cls });
+          });
         }
 
         return new Plugin({
@@ -1360,8 +1460,8 @@ module('lively.identity.WikiEditor')
         function computeDecorations(state) {
           var decos = [];
           state.doc.descendants(function (node, pos) {
-            if (node.type.name !== 'code_block') return;
-            decos = decos.concat(highlightCodeBlock(pos, node.textContent));
+            if (node.type.name !== 'code_block' && node.type.name !== 'code_cell') return;
+            decos = decos.concat(highlightCodeBlock(pos, node));
           });
           return DecorationSet.create(state.doc, decos);
         }
@@ -1637,32 +1737,31 @@ module('lively.identity.WikiEditor')
         };
       },
 
-      // Runnable Python cell (CodeEditorSpec.md §2.3). Modeled on
-      // _mathNodeView's commit()-on-blur/Escape pattern for writing edits
-      // back to node attrs, plus _embeddedPartNodeView's `destroyed`-guard
-      // discipline for callbacks that can outlive this NodeView (a Run
-      // request the user navigated away from mid-flight). `output` is never
-      // written to node.attrs -- it's plain closure state here, same
-      // lifetime as `dom` (see the schema comment for why: Yjs would
-      // broadcast it to every collaborator on every run, and it's never
-      // persisted anyway).
+      // Runnable code cell (CodeEditorSpec.md §2.3). The cell is a TEXT BLOCK: the code is the node's own content, which
+      // ProseMirror edits like any other text, so what two people type into one cell merges character by character. (It was an
+      // atom with a whole-source `source` attribute edited in a <textarea>, which is last-writer-wins: one of two concurrent
+      // edits was lost every time, and a collaborator saw typing only after a 600 ms debounce.) This view only adds the chrome
+      // around that content: the header (language badge, Run / Stop / Reset, status), the output pane and the help line are
+      // plain DOM that ProseMirror does not own (contentEditable=false, their mutations ignored), and `pre` is the content.
+      // `output` is never written to the document -- it is closure state here, same lifetime as `dom` (see the schema comment:
+      // Yjs would broadcast it to every collaborator on every run, and it is never persisted). `destroyed` guards callbacks
+      // that outlive the view (a Run the user navigated away from mid-flight), as in _embeddedPartNodeView.
       _codeCellNodeView: function (node, view, getPos) {
         var destroyed = false;
-        var focused = false;
-        var pendingCommitTimer = null;
 
         var postCardUtils = lively.identity.postCardUtils;
-        // The language's registry row (PostCardUtils.js). A language this build has no row for
-        // (`known` false) keeps its id and its editable source but gets no Run/Stop/Reset/status.
+        // The language's registry row (PostCardUtils.js). A language this build has no row for (`known` false) keeps its id
+        // and its editable source but gets no Run/Stop/Reset/status.
         var langDef = postCardUtils.codeCellLanguage(node.attrs.language);
         var language = langDef.id;
 
         var dom = document.createElement('div');
-        dom.className = 'lively-code-cell-node';
+        dom.className = 'lively-code-cell-node lively-code-cell-editing';
         dom.setAttribute('data-language', language);
 
         var header = document.createElement('div');
         header.className = 'lively-code-cell-header';
+        header.contentEditable = 'false';
         var badge = document.createElement('span');
         badge.className = 'lively-code-cell-badge';
         badge.textContent = langDef.label;
@@ -1694,98 +1793,33 @@ module('lively.identity.WikiEditor')
         }
         dom.appendChild(header);
 
-        var textarea = document.createElement('textarea');
-        textarea.className = 'lively-code-cell-source';
-        textarea.spellcheck = false;
-        textarea.value = node.attrs.source || '';
-        dom.appendChild(textarea);
-        // A language with an editing helper (Scheme: bracket matching, auto-close and Lisp
-        // indentation) gets it; the others keep the plain textarea.
-        var editingHelper = postCardUtils.codeCellGlobal(langDef.editing);
-        var editing = editingHelper ? editingHelper.attach(textarea) : null;
-
-        // Grow/shrink the source box with its content, between the stylesheet's min-height (72px) and
-        // MAX_H, beyond which it scrolls inside itself. Measures scrollHeight after collapsing the
-        // box, so the horizontal scrollbar (a long line) is allowed for via offsetHeight - clientHeight.
-        // The collapse would briefly shorten the page, which can clamp the window's scroll position,
-        // so the box's parent is pinned at its current height for the duration of the measure.
-        var MAX_H = 520;
-        var LINE_H = 13 * 1.55, PAD_Y = 28;
-        var lastAutosizeWidth = -1;
-        function autosize() {
-          if (destroyed) return;
-          var h;
-          if (textarea.isConnected && textarea.offsetHeight > 0) {
-            var holder = textarea.parentNode;
-            var holderH = holder.offsetHeight;
-            var prevScroll = textarea.scrollTop;
-            holder.style.minHeight = holderH + 'px';
-            textarea.style.height = 'auto';
-            h = textarea.scrollHeight + (textarea.offsetHeight - textarea.clientHeight);
-            holder.style.minHeight = '';
-            textarea.scrollTop = prevScroll;
-          } else {
-            // Not laid out yet (a NodeView's dom is detached until ProseMirror inserts it): estimate
-            // from the line count, and the ResizeObserver below corrects it once it is on screen.
-            h = Math.ceil(textarea.value.split('\n').length * LINE_H + PAD_Y);
-          }
-          var capped = h > MAX_H;
-          textarea.style.height = Math.min(h, MAX_H) + 'px';
-          textarea.style.overflowY = capped ? 'auto' : 'hidden';
-        }
-        autosize();
-        if (typeof ResizeObserver === 'function') {
-          // Width changes can add/remove the horizontal scrollbar (and the first layout after
-          // insertion arrives here too); height changes are our own and ignored.
-          var resizeObserver = new ResizeObserver(function () {
-            var w = textarea.offsetWidth;
-            if (w !== lastAutosizeWidth) { lastAutosizeWidth = w; autosize(); }
-          });
-          resizeObserver.observe(textarea);
-        }
+        // The code: ProseMirror renders the node's text in here and owns it. Its height follows its content (up to the
+        // stylesheet's max-height, beyond which it scrolls inside itself), so nothing here measures or resizes it.
+        var pre = document.createElement('pre');
+        pre.className = 'lively-code-cell-source';
+        pre.spellcheck = false;
+        pre.setAttribute('autocapitalize', 'off');
+        pre.setAttribute('autocorrect', 'off');
+        dom.appendChild(pre);
 
         var output = document.createElement('div');
         output.className = 'lively-code-cell-output lively-code-cell-output-empty';
+        output.contentEditable = 'false';
         output.textContent = langDef.known
           ? 'Run to see output.'
           : 'This page uses a runtime this build doesn\'t have, so this cell can\'t run.';
         dom.appendChild(output);
+        var help = null;
         if (langDef.known && langDef.help) {
-          var help = document.createElement('div');
+          help = document.createElement('div');
           help.className = 'lively-code-cell-help';
+          help.contentEditable = 'false';
           help.textContent = langDef.help;
           dom.appendChild(help);
         }
 
-        // Same pattern as _mathNodeView's commit(): re-reads getPos() at
-        // commit time rather than caching it, since positions shift under
-        // concurrent edits from other collaborators.
-        function commit() {
-          if (pendingCommitTimer) { clearTimeout(pendingCommitTimer); pendingCommitTimer = null; }
-          var value = textarea.value;
-          if (value === node.attrs.source) return;
-          var pos = typeof getPos === 'function' ? getPos() : null;
-          if (pos === null || pos === undefined) return;
-          view.dispatch(view.state.tr.setNodeMarkup(pos, null,
-            Object.assign({}, node.attrs, { source: value })));
-        }
-
-        // A multi-line cell risks real data loss on tab-close without this
-        // (unlike math's single-value input) -- debounce-commit while
-        // typing, on top of the blur/Escape commits below.
-        function scheduleCommit() {
-          if (pendingCommitTimer) clearTimeout(pendingCommitTimer);
-          pendingCommitTimer = setTimeout(commit, 600);
-        }
-
-        textarea.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-        textarea.addEventListener('focus', function () { focused = true; });
-        textarea.addEventListener('blur', function () { focused = false; commit(); });
-        textarea.addEventListener('input', function () { scheduleCommit(); autosize(); });
-        textarea.addEventListener('keydown', function (e) {
-          e.stopPropagation();
-          if (e.key === 'Escape') { e.preventDefault(); commit(); view.focus(); }
-        });
+        // What Run executes: the cell's text as it is right now (`node` is replaced by update() on every change).
+        function source() { return node.textContent; }
 
         function renderOutput(response, err) {
           output.innerHTML = '';
@@ -1844,7 +1878,7 @@ module('lively.identity.WikiEditor')
         var TRANSCRIPT_STATE_LABEL = { done: 'Ran just now', error: 'Error', stopped: 'Stopped', exit: 'Exited' };
         function runTranscriptCell() {
           transcriptOut.start();
-          postCardUtils.runCodeCell(textarea.value, {
+          postCardUtils.runCodeCell(source(), {
             onStatus: function (text) { if (!destroyed) setRunning(true, text); },
             onSegments: function (segments) { if (!destroyed) transcriptOut.append(segments); },
             onDraw: function (ops, turtle) { if (!destroyed) transcriptOut.draw(ops, turtle); },
@@ -1875,9 +1909,8 @@ module('lively.identity.WikiEditor')
         runBtn.addEventListener('mousedown', function (e) {
           e.preventDefault();
           e.stopPropagation();
-          commit();
           if (transcriptOut) { runTranscriptCell(); return; }
-          lively.identity.postCardUtils.runCodeCell(textarea.value, {
+          lively.identity.postCardUtils.runCodeCell(source(), {
             onStatus: function (text) { if (!destroyed) setRunning(true, text); },
             onDone: function (err, response) {
               if (destroyed) return;
@@ -1909,35 +1942,31 @@ module('lively.identity.WikiEditor')
 
         return {
           dom: dom,
+          contentDOM: pre,
           update: function (newNode) {
             if (newNode.type !== node.type) return false;
             // The badge, Reset button and editing helpers were built for one language: a cell of
             // another language needs a fresh view, not this one relabelled by the document.
             if (postCardUtils.codeCellLanguage(newNode.attrs.language).id !== language) return false;
-            var sourceChanged = newNode.attrs.source !== node.attrs.source;
             node = newNode;
-            // Don't clobber an in-flight local edit on an incoming
-            // collaborator update -- same care _attachmentImageNodeView's
-            // diff-before-re-render already takes.
-            if (sourceChanged && !focused) {
-              textarea.value = node.attrs.source || '';
-              if (editing) editing.refresh();
-              autosize();
-            }
             return true;
           },
           selectNode: function () { dom.classList.add('lively-code-cell-selected'); },
-          deselectNode: function () { dom.classList.remove('lively-code-cell-selected'); commit(); },
-          // Also swallow events inside the output pane, so a Scheme cell's
-          // inline input box gets its keystrokes and clicks.
-          stopEvent: function (e) { return focused || !!(e && e.target && output.contains(e.target)); },
-          ignoreMutation: function () { return true; },
-          destroy: function () {
-            destroyed = true;
-            if (pendingCommitTimer) clearTimeout(pendingCommitTimer);
-            if (resizeObserver) resizeObserver.disconnect();
-            if (editing) editing.destroy();
+          deselectNode: function () { dom.classList.remove('lively-code-cell-selected'); },
+          // Everything but the code is ours: clicks and keys in the header, the output pane (a Scheme cell's
+          // inline input box gets its keystrokes there) and the help line never reach ProseMirror.
+          stopEvent: function (e) {
+            var t = e && e.target;
+            return !!(t && (header.contains(t) || output.contains(t) || (help && help.contains(t))));
           },
+          // Only changes to the code are the document's business; the output pane fills and empties on its own,
+          // and ProseMirror must not read those as an edit.
+          ignoreMutation: function (m) {
+            if (m.type === 'selection') return false;
+            if (!pre.contains(m.target)) return true;
+            return m.target === pre && m.type === 'attributes';
+          },
+          destroy: function () { destroyed = true; },
         };
       },
 
@@ -2396,6 +2425,40 @@ module('lively.identity.WikiEditor')
         view.dispatch(tr.scrollIntoView());
       },
 
+      // Inserts an empty code cell at the selection and puts the caret INSIDE it, ready to type. Unlike the atoms above a cell
+      // has text positions of its own, so the caret belongs in it, not after it. What replaceSelectionWith alone gets wrong
+      // here: with a node selected it replaces that node instead of adding beside it, and a cell that is the last block has
+      // nothing after it to move the caret to (Mod-Enter leaves a cell by making a paragraph, but a page should not depend on that
+      // to be able to write below its last cell). So: a node selection inserts after the node, and a cell with no block after
+      // it gets an empty paragraph.
+      _insertCodeCell: function (node) {
+        var view = this.editorView;
+        var prosemirror = this._ProseMirror();
+        if (!view || !prosemirror) return;
+        var TextSelection = prosemirror.state.TextSelection;
+        var state = view.state;
+        var tr = state.tr;
+        var selected = state.selection.node;
+        var at;                                // where the cell starts
+        if (selected && !selected.isInline) {
+          at = state.selection.to;
+          tr.insert(at, node);
+        } else {
+          tr.replaceSelectionWith(node);
+          // the selection now sits at the end of what was inserted: find the cell around it
+          var $s = tr.selection.$from, d = $s.depth;
+          while (d > 0 && $s.node(d).type !== node.type) d--;
+          if (d > 0) at = $s.before(d);
+          else { var found = null; tr.doc.descendants(function (n, p) { if (!found && n === node) found = p; return !found; }); at = found; }
+        }
+        if (at === null || at === undefined) return view.dispatch(tr.scrollIntoView());
+        var end = at + node.nodeSize;
+        if (!tr.doc.resolve(end).nodeAfter) tr.insert(end, state.schema.nodes.paragraph.create());
+        tr.setSelection(TextSelection.create(tr.doc, at + 1));
+        view.dispatch(tr.scrollIntoView());
+        view.focus();
+      },
+
       _generateEmbedId: function () {
         return 'embed-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
       },
@@ -2836,8 +2899,7 @@ module('lively.identity.WikiEditor')
             var cellType = state.schema.nodes.code_cell;
             if (!cellType) return;
             var cellDef = lively.identity.postCardUtils.codeCellLanguage(btnDef.language);
-            var cellNode = cellType.create({ language: cellDef.known ? cellDef.id : 'python', source: '' });
-            this._insertBlockAtom(cellNode);
+            this._insertCodeCell(cellType.create({ language: cellDef.known ? cellDef.id : 'python' }));
             break;
           }
           case 'cycleAlign': {
@@ -3099,7 +3161,9 @@ module('lively.identity.WikiEditor')
         if (!view || !prosemirror) return alert('The editor is not ready, so the version could not be restored.');
         var doc;
         try {
-          doc = prosemirror.model.Node.fromJSON(view.state.schema, r.snapshot);
+          // A version saved before the code cell became a text block has each cell's code in a `source` attribute the
+          // schema no longer has: fromJSON would drop it and restore an empty cell. Move it into the cell's text first.
+          doc = prosemirror.model.Node.fromJSON(view.state.schema, lively.identity.postCardUtils.upgradeCodeCellSnapshot(r.snapshot));
           doc.check();
         } catch (e) {
           return alert('That version cannot be restored: ' + (e && e.message || e));
@@ -3236,23 +3300,29 @@ module('lively.identity.WikiEditor')
                               return ['a', Object.assign({ class: cls, href: a.url || '',
                                 target: '_blank', rel: 'noopener noreferrer' }, dataAttrs)];
                             } },
-            // Runnable Python cell (CodeEditorSpec.md §2.3) -- deliberately
-            // its own atom node, not an overload of the plain-text
-            // code_block above: it needs a Run button/output pane/busy
-            // state a plain PM text-content node can't carry. `output` is
-            // NOT an attr here on purpose (see _codeCellNodeView) -- a
-            // page's saved state is only ever {language, source}, per the
-            // "never persist output" decision in the spec.
-            code_cell:    { group: 'block', atom: true,
-                            attrs: { language: { default: 'python' }, source: { default: '' } },
-                            parseDOM: [{ tag: 'div.lively-code-cell', getAttrs: function(d) {
-                              var pre = d.querySelector('pre.lively-code-cell-source');
-                              return { language: d.getAttribute('data-language') || 'python',
-                                       source: pre ? pre.textContent : '' };
+            // Runnable code cell (CodeEditorSpec.md §2.3) -- its own node, not
+            // an overload of the plain-text code_block above: the view adds a
+            // Run button/output pane/busy state to it (see _codeCellNodeView).
+            // It is a TEXT BLOCK: the code is the node's content, so what two
+            // people type into one cell merges character by character. It was
+            // an atom with a whole-source `source` attribute (last writer wins:
+            // one of two concurrent edits was lost). The attribute is gone from
+            // the schema; a page saved with it is converted when it is loaded
+            // (WikiSerializer.upgradeLegacyCodeCells). `output` is NOT part of
+            // the node on purpose -- a page's saved state is only ever
+            // {language, text}, per the "never persist output" decision in the
+            // spec. marks '' keeps formatting out of code; code:true makes
+            // Enter a newline and keeps whitespace; isolating stops Backspace
+            // and Delete at its edges from merging it into its neighbours.
+            code_cell:    { group: 'block', content: 'text*', marks: '', code: true, defining: true, isolating: true,
+                            attrs: { language: { default: 'python' } },
+                            parseDOM: [{ tag: 'div.lively-code-cell', preserveWhitespace: 'full',
+                              contentElement: 'pre.lively-code-cell-source', getAttrs: function(d) {
+                              return { language: d.getAttribute('data-language') || 'python' };
                             }}],
                             toDOM: function(n) {
                               return ['div', { class: 'lively-code-cell', 'data-language': n.attrs.language || 'python' },
-                                ['pre', { class: 'lively-code-cell-source' }, n.attrs.source || '']];
+                                ['pre', { class: 'lively-code-cell-source' }, 0]];
                             } },
             image:        { group: 'inline', inline: true, atom: true,
                             attrs: { src: { default: '' }, alt: { default: '' }, title: { default: null },

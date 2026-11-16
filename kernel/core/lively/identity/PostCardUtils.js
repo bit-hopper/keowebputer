@@ -46,6 +46,9 @@ module('lively.identity.PostCardUtils')
       codeCellLanguage:    codeCellLanguage,
       codeCellLanguageList: codeCellLanguageList,
       codeCellGlobal:      codeCellGlobal,
+      codeCellSource:      codeCellSource,
+      upgradeCodeCellSnapshot: upgradeCodeCellSnapshot,
+      upgradeLegacyCodeCells: upgradeLegacyCodeCells,
       codeCellLanguageLabel: codeCellLanguageLabel,
       createSchemeOutput:  createSchemeOutput,
       createTranscriptOutput: createSchemeOutput,
@@ -75,7 +78,8 @@ module('lively.identity.PostCardUtils')
     //   resetTitle       tooltip for that button
     //   cooperativeStop  Stop interrupts the run and the environment survives
     //   loadingText      status shown while the runtime loads (transcript languages)
-    //   editing          dotted path of an editing helper with attach(textarea), or null
+    //   editing          dotted path of an editing helper with handleKeyDown(view, event, PM) and
+    //                    decorations(state, PM) (SchemeEditing.js), or null
     //   graphics         true: the output pane may carry a turtle canvas (absent = false)
     //   badge            tint of the language badge
     //   help             optional note shown under the cell (lines separated by newlines), or absent
@@ -214,20 +218,17 @@ module('lively.identity.PostCardUtils')
         '.lively-code-cell-source{display:block;width:calc(100% - 24px);box-sizing:border-box;margin:10px 12px;border:none;outline:none;' +
           'background:#1e2230;color:#d7dae0;font-family:' + mono + ';font-size:13px;line-height:1.55;' +
           'padding:14px 16px;tab-size:2;overflow-x:auto;border-radius:10px;}',
-        // Height is set from the content by WikiEditor's code-cell NodeView (autosize), so no drag handle.
-        'textarea.lively-code-cell-source{resize:none;min-height:72px;caret-color:#fff;}',
-        // Scheme editor (SchemeEditing.attach): the textarea goes transparent over a backdrop
-        // that paints the matching-bracket highlight. The backdrop copies the textarea's font
-        // metrics exactly; no wrapping so columns line up with the indentation logic.
-        '.lively-code-cell-editwrap{position:relative;background:#1e2230;margin:10px 12px;border-radius:10px;overflow:hidden;}',
-        '.lively-code-cell-editwrap textarea.lively-code-cell-source{position:relative;background:transparent;white-space:pre;' +
-          'width:100%;margin:0;border-radius:10px;}',
-        '.lively-code-cell-backdrop{position:absolute;left:0;top:0;right:0;bottom:0;overflow:hidden;pointer-events:none;}',
-        '.lively-code-cell-backdrop-inner{box-sizing:border-box;padding:14px 16px;margin:0;font-family:' + mono + ';' +
-          'font-size:13px;line-height:1.55;tab-size:2;white-space:pre;color:transparent;}',
-        '.lively-code-cell-backdrop-inner mark{background:rgba(97,175,239,.38);color:transparent;border-radius:2px;' +
+        // The source pane in the editor is the cell's own text, edited in place (WikiEditor's code-cell NodeView):
+        // it grows with its content up to a cap and then scrolls inside itself, keeps every space, and shows a
+        // white caret on the dark pane. The read-only render has no cap and no caret.
+        '.lively-code-cell-editing pre.lively-code-cell-source{white-space:pre;overflow:auto;min-height:72px;max-height:520px;' +
+          'caret-color:#fff;cursor:text;user-select:text;-webkit-user-select:text;}',
+        // Scheme bracket matching (SchemeEditing.plugin): decorations on the bracket next to the caret and its
+        // partner, or on a lone one with no partner.
+        '.lively-code-cell-source .lively-bracket-ok{background:rgba(97,175,239,.38);border-radius:2px;' +
           'box-shadow:0 0 0 1px rgba(97,175,239,.55);}',
-        '.lively-code-cell-backdrop-inner mark.bad{background:rgba(229,115,104,.42);box-shadow:0 0 0 1px rgba(229,115,104,.7);}',
+        '.lively-code-cell-source .lively-bracket-bad{background:rgba(229,115,104,.42);border-radius:2px;' +
+          'box-shadow:0 0 0 1px rgba(229,115,104,.7);}',
         '.lively-code-cell-source code.hljs{display:inline;background:transparent;color:inherit;padding:0;font:inherit;}',
         hl + 'keyword,' + hl + 'built_in{color:#c678dd;}',
         hl + 'name,' + hl + 'title,' + hl + 'function{color:#61afef;}',
@@ -2083,9 +2084,97 @@ module('lively.identity.PostCardUtils')
     // carries lively-code-cell-node so it picks up the exact same CSS as
     // the live editor's NodeView (see _ensureMediaStyle's header note on
     // why this is a second, deliberately-identical copy of those rules).
+    // The source of a code_cell node in page JSON (a snapshot): the cell's own text -- the cell is a
+    // text block, so the code is its content -- or, for a page saved before that, the `source`
+    // attribute of a cell with no children. A cell with text never reads the attribute.
+    // WikiDiff.js and the server's identity/CodeCellRender.js cannot load this module and carry the
+    // same rule; keep the three in step (tests/e2e/code-cell-registry.spec.js compares the renders).
+    function codeCellSource(node) {
+      var kids = (node && node.content) || [];
+      if (kids.length) return kids.map(function (c) { return c.text || ''; }).join('');
+      return (node && node.attrs && node.attrs.source) || '';
+    }
+
+    // A snapshot with every old-shape code cell (a `source` attribute, no children) rewritten to the
+    // current shape (the source as the cell's text, no `source` attribute). Returns a NEW tree and
+    // leaves the argument alone. For code that builds editor nodes from stored JSON (restoring a
+    // version): `Node.fromJSON` drops an attribute the schema no longer has, which would turn the
+    // cell into an empty one without a word.
+    function upgradeCodeCellSnapshot(json) {
+      if (!json || typeof json !== 'object') return json;
+      if (Array.isArray(json)) return json.map(upgradeCodeCellSnapshot);
+      var out = {};
+      Object.keys(json).forEach(function (k) {
+        if (k !== 'content' && k !== 'attrs') out[k] = json[k];
+      });
+      if (json.type === 'code_cell') {
+        var src = codeCellSource(json);
+        var attrs = {};
+        Object.keys(json.attrs || {}).forEach(function (k) { if (k !== 'source') attrs[k] = json.attrs[k]; });
+        out.attrs = attrs;
+        if (src) out.content = [{ type: 'text', text: src }];
+        return out;
+      }
+      if (json.attrs !== undefined) out.attrs = json.attrs;
+      if (json.content !== undefined) out.content = upgradeCodeCellSnapshot(json.content);
+      return out;
+    }
+
+    // The same upgrade for a LIVE Yjs document, i.e. a page loaded from its stored state: every code_cell element with a
+    // `source` attribute and no children gets the source as its text and loses the attribute. Returns how many it converted.
+    //
+    // The conversion must be SAFE TO DO ON EVERY PEER at once. Collaborators sync through a shared room, and each of them
+    // loads the same stored state: if each converted with its own random client id, every peer would insert the code, and the
+    // merged cell would hold it several times over. So each cell is converted in a scratch copy of the page, under a client
+    // id made from that cell alone (its own id in the document and its source), and the result is handed to the real document
+    // as an update. Every peer holding that cell makes the same structs for it (same client, same clocks, same content), and
+    // Yjs takes an update it already holds as no change. Made from the cell alone, not one id for the whole page, because two
+    // peers may hold DIFFERENT sets of old cells (they loaded different stored versions): one shared id would then give
+    // different content the same (client, clock), and Yjs would drop one of them as a repeat -- lost code.
+    // The scratch copy gets its id AFTER the page's state has been applied to it (applying a state that carries the
+    // document's own id makes Yjs rename the document). A peer that has been given a converted state sees no old cell left
+    // and does nothing. Not covered: two peers that hold the SAME old cell with DIFFERENT sources (an old-version client
+    // edited it in between): each converts its own source and the cell ends up with both.
+    function legacyCellClient(el, source) {
+      var id = el._item && el._item.id;
+      var s = (id ? id.client + ':' + id.clock : 'noid') + ':' + source;
+      var h = 2166136261;                                   // FNV-1a, 32 bits
+      for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+      return h >>> 0;
+    }
+    function upgradeLegacyCodeCells(Y, doc) {
+      if (!Y || !doc) return 0;
+      var elementsOf = function (root) {
+        var out = [];
+        (function walk(parent) {
+          parent.toArray().forEach(function (c) {
+            if (c instanceof Y.XmlElement) { out.push(c); walk(c); }
+          });
+        })(root);
+        return out;
+      };
+      var isOld = function (el) {
+        return el.nodeName === 'code_cell' && el.getAttribute('source') !== undefined && el.length === 0;
+      };
+      if (!elementsOf(doc.getXmlFragment('prosemirror')).some(isOld)) return 0;
+      var scratch = new Y.Doc({ gc: false });
+      Y.applyUpdate(scratch, Y.encodeStateAsUpdate(doc));
+      var old = elementsOf(scratch.getXmlFragment('prosemirror')).filter(isOld);
+      old.forEach(function (el) {
+        var src = String(el.getAttribute('source'));
+        scratch.clientID = legacyCellClient(el, src);
+        scratch.transact(function () {
+          el.removeAttribute('source');
+          if (src) { var t = new Y.XmlText(); el.insert(0, [t]); t.insert(0, src); }
+        });
+      });
+      Y.applyUpdate(doc, Y.encodeStateAsUpdate(scratch, Y.encodeStateVector(doc)), 'legacy-code-cell-upgrade');
+      return old.length;
+    }
+
     function renderCodeCell(node) {
       var attrs = node.attrs || {};
-      var source = attrs.source || '';
+      var source = codeCellSource(node);
       var hljs = (typeof window !== 'undefined' && window.hljs) || null;
       var def = codeCellLanguage(attrs.language);
       // A language this build has no row for: the source as plain text, a note

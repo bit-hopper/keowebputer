@@ -1,21 +1,22 @@
 /**
  * lively.identity.SchemeEditing
  *
- * Paren-aware editing for the wiki's Scheme code cells, layered over a plain
- * <textarea>:
+ * Paren-aware editing for the wiki's Scheme code cells. A cell is a text block
+ * of the wiki editor (ProseMirror), so this edits the document's own text:
  *   - bracket matching: the bracket next to the caret and its partner are
- *     highlighted (an unmatched one is flagged), drawn on a backdrop behind the
- *     transparent-background textarea so the textarea itself stays a normal,
- *     accessible, undoable text control;
+ *     highlighted (an unmatched one is flagged) by inline decorations;
  *   - auto-close for ( [ and ", overtyping of a closer that is already there,
  *     Backspace removing an empty pair, wrapping a selection;
  *   - Enter keeps the new line indented the Lisp way; Tab re-indents the
  *     current line or every selected line (Shift+Tab is left alone so keyboard
- *     focus can still leave the box; so can Escape).
+ *     focus can still leave the cell; so can Escape).
  *
  * The pure text functions (scan / matchAt / indentFor / reindent / ...) touch
- * no DOM and are unit-tested under Node (tests/scheme/editing.test.js); attach()
- * is the only DOM part.
+ * no DOM and are unit-tested under Node (tests/scheme/editing.test.js);
+ * handleKeyDown() and decorations() are the ProseMirror part, called by
+ * WikiEditor's code-cell plugin (the language registry's `editing` field names
+ * this module). Each edit is ONE transaction, so it is one step in the
+ * document and one undo.
  */
 
 module('lively.identity.SchemeEditing')
@@ -243,7 +244,11 @@ module('lively.identity.SchemeEditing')
       return { text: lines.join('\n'), deltas: deltas };
     }
 
-    // ---- DOM glue ---------------------------------------------------------
+    // ---- ProseMirror glue -------------------------------------------------
+    // WikiEditor calls handleKeyDown and decorations for a code cell whose language names this helper in the registry
+    // (`editing`). A cell is a text block, so a position inside it IS a text offset: offset = position - base, where base is the
+    // position of the cell's first character, and a line break is a "\n" in the text. PM is the editor's ProseMirror bundle
+    // (state, view); nothing here touches the DOM.
 
     function lineIndexOf(text, pos) {
       var n = 0;
@@ -251,195 +256,152 @@ module('lively.identity.SchemeEditing')
       return n;
     }
 
-    function escapeHtml(s) {
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    /**
+     * The cell the selection is in, when the WHOLE selection is inside one cell: { text, base, s, t } (s and t are the
+     * selection's start and end as offsets into the text), else null.
+     */
+    function cellAt(state) {
+      var sel = state.selection;
+      var $from = sel.$from;
+      if ($from.parent.type.name !== 'code_cell' || !$from.sameParent(sel.$to)) return null;
+      var base = $from.start();
+      return { text: $from.parent.textContent, base: base, s: sel.from - base, t: sel.to - base };
     }
 
     /**
-     * Replaces [start, end) of the textarea with `str` through the browser's
-     * own edit path (so Ctrl+Z still undoes it and an `input` event fires),
-     * falling back to setRangeText. Leaves the caret at [selStart, selEnd]
-     * (offsets in the NEW text).
+     * Replaces [start, end) of the cell's text with `str` in ONE transaction (one step for the document, so one undo) and
+     * leaves the selection at [selStart, selEnd] (offsets in the NEW text).
      */
-    function replaceRange(ta, start, end, str, selStart, selEnd) {
-      ta.focus();
-      ta.setSelectionRange(start, end);
-      var expected = ta.value.substring(0, start) + str + ta.value.substring(end);
-      var done = false;
-      try {
-        done = str === '' ? document.execCommand('delete') : document.execCommand('insertText', false, str);
-      } catch (e) { done = false; }
-      if (!done || ta.value !== expected) {
-        ta.value = expected;
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-      ta.setSelectionRange(selStart, selEnd === undefined ? selStart : selEnd);
+    function replaceRange(view, PM, cell, start, end, str, selStart, selEnd) {
+      var tr = view.state.tr;
+      if (str === '') tr.delete(cell.base + start, cell.base + end);
+      else tr.insertText(str, cell.base + start, cell.base + end);
+      tr.setSelection(PM.state.TextSelection.create(tr.doc, cell.base + selStart, cell.base + (selEnd === undefined ? selStart : selEnd)));
+      view.dispatch(tr.scrollIntoView());
     }
 
-    function attach(ta) {
-      var wrap = document.createElement('div');
-      wrap.className = 'lively-code-cell-editwrap';
-      var back = document.createElement('div');
-      back.className = 'lively-code-cell-backdrop';
-      var inner = document.createElement('div');
-      inner.className = 'lively-code-cell-backdrop-inner';
-      back.appendChild(inner);
-      ta.parentNode.insertBefore(wrap, ta);
-      wrap.appendChild(back);
-      wrap.appendChild(ta);
-      ta.setAttribute('wrap', 'off');
-      ta.setAttribute('autocapitalize', 'off');
-      ta.setAttribute('autocorrect', 'off');
+    function moveCaret(view, PM, cell, offset) {
+      view.dispatch(view.state.tr.setSelection(PM.state.TextSelection.create(view.state.doc, cell.base + offset)));
+    }
 
-      function syncScroll() {
-        inner.style.transform = 'translate(' + (-ta.scrollLeft) + 'px,' + (-ta.scrollTop) + 'px)';
+    function isPlainKey(e) { return !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing; }
+
+    /**
+     * A key pressed in a Scheme cell: true when it was handled here (the caller must not run its own handlers), false to let the
+     * editor treat it as any other key. Auto-close for ( [ and ", overtyping a closer that is already there, Backspace removing
+     * an empty pair, wrapping a selection, Enter keeping the new line indented the Lisp way, Tab re-indenting the current line
+     * or every selected line. Shift+Tab and Escape are left alone so keyboard focus can still leave the cell.
+     */
+    function handleKeyDown(view, e, PM) {
+      if (!isPlainKey(e)) return false;
+      var cell = cellAt(view.state);
+      if (!cell) return false;
+      var text = cell.text;
+      var s = cell.s;
+      var t = cell.t;
+      var key = e.key;
+      var next = text.charAt(t);
+      var prev = text.charAt(s - 1);
+
+      if (key === 'Tab' && !e.shiftKey) {
+        var firstLine = lineIndexOf(text, s);
+        var lastLine = lineIndexOf(text, t > s && text.charAt(t - 1) === '\n' ? t - 1 : t);
+        var res = reindent(text, firstLine, lastLine);
+        if (res.text === text) {
+          // already indented: just move the caret past the leading whitespace
+          if (s === t) {
+            var ls = lineStartOf(text, s);
+            var lead = /^[ \t]*/.exec(text.substring(ls))[0].length;
+            if (s < ls + lead) moveCaret(view, PM, cell, ls + lead);
+          }
+          return true;
+        }
+        // Replace the whole affected line range in one edit (one undo step).
+        var lines = text.split('\n');
+        var rangeStart = 0;
+        for (var a = 0; a < firstLine; a++) rangeStart += lines[a].length + 1;
+        var oldBlock = lines.slice(firstLine, lastLine + 1).join('\n');
+        var newBlock = res.text.split('\n').slice(firstLine, lastLine + 1).join('\n');
+        // map the caret / selection through the per-line deltas
+        var mapOffset = function (off) {
+          var line = lineIndexOf(text, off);
+          var lineBegin = lineStartOf(text, off);
+          var shift = 0;
+          for (var l = firstLine; l < line && l <= lastLine; l++) shift += res.deltas[l] || 0;
+          if (line < firstLine || line > lastLine) return off + shift;
+          var lead2 = /^[ \t]*/.exec(text.substring(lineBegin))[0].length;
+          var col = off - lineBegin;
+          var d = res.deltas[line] || 0;
+          return lineBegin + shift + (col <= lead2 ? lead2 + d : col + d);
+        };
+        replaceRange(view, PM, cell, rangeStart, rangeStart + oldBlock.length, newBlock, mapOffset(s), mapOffset(t));
+        return true;
       }
 
-      function refresh() {
-        var text = ta.value;
-        var html = escapeHtml(text);
-        if (document.activeElement === ta && ta.selectionStart === ta.selectionEnd) {
-          var m = matchAt(text, ta.selectionStart);
-          if (m) {
-            var marks = m.b === -1 ? [[m.a, 'bad']] : [[m.a, 'ok'], [m.b, 'ok']];
-            marks.sort(function (x, y) { return x[0] - y[0]; });
-            var out = '';
-            var cursor = 0;
-            marks.forEach(function (mk) {
-              out += escapeHtml(text.substring(cursor, mk[0])) +
-                '<mark class="' + mk[1] + '">' + escapeHtml(text.charAt(mk[0])) + '</mark>';
-              cursor = mk[0] + 1;
-            });
-            html = out + escapeHtml(text.substring(cursor));
-          }
-        }
-        // a trailing newline needs a visible last line to keep heights equal
-        inner.innerHTML = html + '\n';
-        syncScroll();
+      if (key === 'Enter' && !e.shiftKey) {
+        var tail = t;
+        while (text.charAt(tail) === ' ' || text.charAt(tail) === '\t') tail++;
+        var head = text.substring(0, s) + '\n';
+        var rest = text.substring(tail);
+        var want = indentFor(head + rest, head.length);
+        var pad = want === null ? '' : spaces(want);
+        replaceRange(view, PM, cell, s, tail, '\n' + pad, s + 1 + pad.length);
+        return true;
       }
 
-      function isPlainKey(e) { return !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing; }
-
-      function onKeyDown(e) {
-        if (!isPlainKey(e)) return;
-        var text = ta.value;
-        var s = ta.selectionStart;
-        var t = ta.selectionEnd;
-        var key = e.key;
-        var next = text.charAt(t);
-        var prev = text.charAt(s - 1);
-
-        if (key === 'Tab' && !e.shiftKey) {
-          e.preventDefault();
-          var firstLine = lineIndexOf(text, s);
-          var lastLine = lineIndexOf(text, t > s && text.charAt(t - 1) === '\n' ? t - 1 : t);
-          var res = reindent(text, firstLine, lastLine);
-          if (res.text === text) {
-            // already indented: just move the caret past the leading whitespace
-            if (s === t) {
-              var ls = lineStartOf(text, s);
-              var lead = /^[ \t]*/.exec(text.substring(ls))[0].length;
-              if (s < ls + lead) ta.setSelectionRange(ls + lead, ls + lead);
-            }
-            return;
-          }
-          // Replace the whole affected line range in one edit (one undo step).
-          var lines = text.split('\n');
-          var rangeStart = 0;
-          for (var a = 0; a < firstLine; a++) rangeStart += lines[a].length + 1;
-          var oldBlock = lines.slice(firstLine, lastLine + 1).join('\n');
-          var newBlock = res.text.split('\n').slice(firstLine, lastLine + 1).join('\n');
-          // map the caret / selection through the per-line deltas
-          function mapOffset(off) {
-            var line = lineIndexOf(text, off);
-            var lineBegin = lineStartOf(text, off);
-            var shift = 0;
-            for (var l = firstLine; l < line && l <= lastLine; l++) shift += res.deltas[l] || 0;
-            if (line < firstLine || line > lastLine) return off + shift;
-            var lead2 = /^[ \t]*/.exec(text.substring(lineBegin))[0].length;
-            var col = off - lineBegin;
-            var d = res.deltas[line] || 0;
-            return lineBegin + shift + (col <= lead2 ? lead2 + d : col + d);
-          }
-          var ns = mapOffset(s);
-          var ne = mapOffset(t);
-          replaceRange(ta, rangeStart, rangeStart + oldBlock.length, newBlock, ns, ne);
-          return;
-        }
-
-        if (key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          var tail = t;
-          while (text.charAt(tail) === ' ' || text.charAt(tail) === '\t') tail++;
-          var head = text.substring(0, s) + '\n';
-          var rest = text.substring(tail);
-          var want = indentFor(head + rest, head.length);
-          var pad = want === null ? '' : spaces(want);
-          replaceRange(ta, s, tail, '\n' + pad, s + 1 + pad.length);
-          return;
-        }
-
-        if (key === 'Backspace' && s === t && s > 0) {
-          var pairOK = (prev === '(' && next === ')') || (prev === '[' && next === ']') || (prev === '"' && next === '"');
-          if (pairOK) {
-            e.preventDefault();
-            replaceRange(ta, s - 1, s + 1, '', s - 1);
-          }
-          return;
-        }
-
-        var ctx = scan(text, s).context;
-
-        if (CLOSERS.indexOf(key) !== -1 && key.length === 1) {
-          if (s === t && next === key && ctx === 'code') {
-            e.preventDefault();
-            ta.setSelectionRange(s + 1, s + 1);
-          }
-          return;
-        }
-
-        if (key === '"') {
-          if (ctx === 'comment' || ctx === 'blockcomment') return;
-          if (s === t && ctx === 'string') {
-            if (next === '"') { e.preventDefault(); ta.setSelectionRange(s + 1, s + 1); }
-            return;
-          }
-          if (prev === '\\' || /[\w]/.test(prev || '')) return; // #\" or a word char
-          e.preventDefault();
-          if (s !== t) replaceRange(ta, s, t, '"' + text.substring(s, t) + '"', t + 2);
-          else if (isDelimiter(next) || CLOSERS.indexOf(next) !== -1) replaceRange(ta, s, s, '""', s + 1);
-          else replaceRange(ta, s, s, '"', s + 1);
-          return;
-        }
-
-        if (OPENERS.indexOf(key) !== -1 && key.length === 1) {
-          if (ctx !== 'code') return;
-          if (prev === '\\' && text.charAt(s - 2) === '#') return; // the char literal #\(
-          var close = key === '(' ? ')' : ']';
-          e.preventDefault();
-          if (s !== t) { replaceRange(ta, s, t, key + text.substring(s, t) + close, s + 1, t + 1); return; }
-          if (isDelimiter(next) || CLOSERS.indexOf(next) !== -1) replaceRange(ta, s, s, key + close, s + 1);
-          else replaceRange(ta, s, s, key, s + 1);
-          return;
-        }
+      if (key === 'Backspace' && s === t && s > 0) {
+        var pairOK = (prev === '(' && next === ')') || (prev === '[' && next === ']') || (prev === '"' && next === '"');
+        if (!pairOK) return false;
+        replaceRange(view, PM, cell, s - 1, s + 1, '', s - 1);
+        return true;
       }
 
-      function onSelectionChange() { if (document.activeElement === ta) refresh(); }
+      var ctx = scan(text, s).context;
 
-      ta.addEventListener('keydown', onKeyDown);
-      ta.addEventListener('input', refresh);
-      ta.addEventListener('scroll', syncScroll);
-      ta.addEventListener('keyup', refresh);
-      ta.addEventListener('mouseup', refresh);
-      ta.addEventListener('focus', refresh);
-      ta.addEventListener('blur', refresh);
-      document.addEventListener('selectionchange', onSelectionChange);
-      refresh();
+      if (CLOSERS.indexOf(key) !== -1 && key.length === 1) {
+        if (s === t && next === key && ctx === 'code') { moveCaret(view, PM, cell, s + 1); return true; }
+        return false;
+      }
 
-      return {
-        refresh: refresh,
-        destroy: function () { document.removeEventListener('selectionchange', onSelectionChange); },
-      };
+      if (key === '"') {
+        if (ctx === 'comment' || ctx === 'blockcomment') return false;
+        if (s === t && ctx === 'string') {
+          if (next === '"') { moveCaret(view, PM, cell, s + 1); return true; }
+          return false;
+        }
+        if (prev === '\\' || /[\w]/.test(prev || '')) return false; // #\" or a word char
+        if (s !== t) replaceRange(view, PM, cell, s, t, '"' + text.substring(s, t) + '"', t + 2);
+        else if (isDelimiter(next) || CLOSERS.indexOf(next) !== -1) replaceRange(view, PM, cell, s, s, '""', s + 1);
+        else replaceRange(view, PM, cell, s, s, '"', s + 1);
+        return true;
+      }
+
+      if (OPENERS.indexOf(key) !== -1 && key.length === 1) {
+        if (ctx !== 'code') return false;
+        if (prev === '\\' && text.charAt(s - 2) === '#') return false; // the char literal #\(
+        var close = key === '(' ? ')' : ']';
+        if (s !== t) { replaceRange(view, PM, cell, s, t, key + text.substring(s, t) + close, s + 1, t + 1); return true; }
+        if (isDelimiter(next) || CLOSERS.indexOf(next) !== -1) replaceRange(view, PM, cell, s, s, key + close, s + 1);
+        else replaceRange(view, PM, cell, s, s, key, s + 1);
+        return true;
+      }
+
+      return false;
+    }
+
+    /**
+     * Bracket matching: the bracket next to the caret and its partner get the class lively-bracket-ok, or a bracket with no
+     * partner lively-bracket-bad. A DecorationSet, or null when the caret is not collapsed inside a cell or touches no bracket.
+     */
+    function decorations(state, PM) {
+      var cell = cellAt(state);
+      if (!cell || cell.s !== cell.t) return null;
+      var m = matchAt(cell.text, cell.s);
+      if (!m) return null;
+      var marks = m.b === -1 ? [[m.a, 'bad']] : [[m.a, 'ok'], [m.b, 'ok']];
+      return PM.view.DecorationSet.create(state.doc, marks.map(function (mk) {
+        return PM.view.Decoration.inline(cell.base + mk[0], cell.base + mk[0] + 1, { class: 'lively-bracket-' + mk[1] });
+      }));
     }
 
     lively.identity.SchemeEditing = {
@@ -447,6 +409,7 @@ module('lively.identity.SchemeEditing')
       matchAt: matchAt,
       indentFor: indentFor,
       reindent: reindent,
-      attach: attach,
+      handleKeyDown: handleKeyDown,
+      decorations: decorations,
     };
   });

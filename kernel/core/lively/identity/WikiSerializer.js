@@ -52,6 +52,7 @@ module('lively.identity.WikiSerializer')
     'lively.identity.DID',
     'lively.identity.WebKey',
     'lively.identity.WebAuthn',
+    'lively.identity.PostCardUtils',
   )
   .toRun(function () {
 
@@ -249,7 +250,15 @@ module('lively.identity.WikiSerializer')
           try {
             var updateBytes = c.base64urlDecode(payload.update);
             Y.applyUpdate(doc, updateBytes);
-            thenDo(null, doc, payload, { cidMismatch: cidMismatch });
+            // A page saved before the code cell became a text block holds each cell's code in a `source`
+            // attribute; the schema no longer has it, so it would open as an empty cell. Convert it now, in a way
+            // that comes out identical on every peer that loads the same state (see
+            // PostCardUtils.upgradeLegacyCodeCells). Nothing is saved by this: the converted state is only in
+            // memory until the next save. If it fails the page still loads, as stored.
+            var upgraded = 0;
+            try { upgraded = lively.identity.postCardUtils.upgradeLegacyCodeCells(Y, doc); }
+            catch (upgradeErr) { console.warn('[WikiSerializer] could not convert old code cells:', upgradeErr && upgradeErr.message); }
+            thenDo(null, doc, payload, { cidMismatch: cidMismatch, upgradedCodeCells: upgraded });
           } catch (e) {
             thenDo(new Error('deserializeFromEnvelope: failed to apply Yjs update: ' + e.message));
           }
