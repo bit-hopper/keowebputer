@@ -180,6 +180,89 @@ const resigned = async (person, dev, env, f) => { const c = clone(env); f(c.even
   await refusedBy('a receiver whose copy of the author\'s log differs at that point (a fork) refuses the edit rather than guessing', eAt1byA2, forkedLog, /does not verify|does not end where/);
   await refusedBy('a removal event nobody signed in the log makes the whole log fail, so no edit at that point verifies', eAfter, makeCtx(people, { logOf: (p) => (p === A ? { inception: A.log.inception, sigs: A.log.sigs, events: [A.log.events[0], { event: A.log.events[1].event, sigs: { authority: [] } }] } : p.log) }), /does not verify/);
 
+  // ================================================================ remembering that an author's log checked out
+  // A receiver may hand over a logCheckCache so that the many edits of one page do not each check the same log again. Nothing that was
+  // refused may stop being refused: the cache holds answers of "it verified" only, under a hash of the exact prefix that was presented.
+  // `kd.verifyLog` is wrapped here to count how often the log is really checked.
+  {
+    const realVerifyLog = kd.verifyLog; let calls = 0;
+    kd.verifyLog = function () { calls++; return realVerifyLog.apply(this, arguments); };
+    try {
+      const P = await makePerson(), R = await makePerson();
+      const P2 = await P.addDevice();                                    // P's log: the inception and one event
+      const pt0 = await W.logPoint({ inception: P.log.inception, events: [] }), pt1 = await P.point();
+      const mk = async (who, dev, text, point) => { const objId = W.pageId(who.did, 'cache-page'); return version(who, dev, edit(await peerDoc(dev, NONCE1, objId), (d) => d.getText('body').insert(0, text)), { objId, point }); };
+      const cache = W.logCheckCache();
+      const withCache = (o) => Object.assign(makeCtx([P, R], o), { logChecks: cache });
+      const x1 = await mk(P, P.d1, 'one', pt1), x2 = await mk(P, P.d1, 'two', pt1);
+      let c0 = calls;
+      const plain1 = await W.verifyVersion(x1, makeCtx([P, R])), plain2 = await W.verifyVersion(x2, makeCtx([P, R]));
+      ok('without a cache every edit checks its author\'s log in full', plain1.ok && plain2.ok && calls - c0 === 2, calls - c0);
+      c0 = calls;
+      const h1 = await W.verifyVersion(x1, withCache()), h2 = await W.verifyVersion(x2, withCache()), h3 = await W.verifyVersion(x1, withCache());
+      ok('with a cache the log is checked once, and the next edits at the same point of it are served from the cache', h1.ok && h2.ok && h3.ok && calls - c0 === 1 && cache.size === 1, { calls: calls - c0, size: cache.size });
+      ok('and the answers are the same as without one', JSON.stringify(h1) === JSON.stringify(plain1) && JSON.stringify(h2) === JSON.stringify(plain2) && JSON.stringify(h3) === JSON.stringify(plain1));
+      c0 = calls;
+      const xOld = await mk(P, P.d1, 'old', pt0);
+      const rOld = await W.verifyVersion(xOld, withCache());
+      ok('an edit at an EARLIER point of the log is another prefix: checked once more, and the later point is still remembered', rOld.ok && calls - c0 === 1 && (await W.verifyVersion(x1, withCache())).ok && calls - c0 === 1 && cache.size === 2, { calls: calls - c0, size: cache.size });
+      const P3 = await P.addDevice(), pt2 = await P.point();             // the log has grown by one event
+      const xNew = await mk(P, P3, 'new', pt2);
+      c0 = calls;
+      ok('a log that has grown is a new prefix: it is checked again, and an edit by the device it added verifies', (await W.verifyVersion(xNew, withCache())).ok && calls - c0 === 1 && (await W.verifyVersion(xNew, withCache())).ok && calls - c0 === 1);
+      const rEarly = await W.verifyVersion(await mk(P, P3, 'early', pt1), withCache());
+      ok('and that device still cannot write at the older point the cache holds (what is remembered lists the devices of THAT point)', rEarly.ok === false && /not listed/.test(rEarly.error), rEarly);
+
+      // A FORK of the same length, validly signed by the same authority key: it verifies by itself, and it must not get the answer
+      // remembered for the real log (a key of identity and number of events would hand it over), nor the real log the fork's.
+      const forkDev = await makeDevice();
+      const forkEvent = await kd.addDeviceEvent(P.log.inception, { id: forkDev.id, jwk: forkDev.jwk, addedAt: new Date().toISOString() });
+      const forkLog = { inception: P.log.inception, sigs: P.log.sigs, events: [{ event: forkEvent, sigs: { authority: [Object.assign({ keyId: P.keyId }, await assertion(P.authPair.privateKey, await kd.eventHash(forkEvent)))] } }] };
+      const forkPt = await W.logPoint(forkLog);
+      ok('(the fork is a real log of the same length: it verifies by itself and ends in another event)', (await realVerifyLog(forkLog, P.did)).ok === true && forkPt.seq === pt1.seq && forkPt.head !== pt1.head);
+      const onFork = () => withCache({ logOf: (p) => (p === P ? forkLog : p.log) });
+      await refusedBy('an edit made on the real log is refused by a receiver that holds the fork, though the real log\'s answer is in the cache', x1, onFork(), /does not end where/);
+      ok('an edit by the fork\'s own device verifies against the fork (it is not served the real log\'s answer, which does not list that device)', (await W.verifyVersion(await mk(P, forkDev, 'fork', forkPt), onFork())).ok === true);
+      await refusedBy('and the real log\'s own second device is not listed in the fork', await mk(P, P2, 'p2', forkPt), onFork(), /not listed/);
+      ok('while the real log is still served its own answer afterwards', (await W.verifyVersion(x1, withCache())).ok === true);
+
+      // The same events with a signature that does not verify: an event's hash does not cover its signatures, so (identity, number of
+      // events, hash of the last) would be the same key as the good log's.
+      const logWith = (sigs0) => ({ inception: P.log.inception, sigs: P.log.sigs, events: [{ event: P.log.events[0].event, sigs: sigs0 }] });
+      const goodSig = P.log.events[0].sigs.authority[0];
+      for (const [what, sigs0] of [['has no signatures', { authority: [] }], ['carries a signature made for another event', { authority: [Object.assign({}, goodSig, { signature: P.log.events[1].sigs.authority[0].signature })] }]]) {
+        await refusedBy('the SAME events as a log the cache holds, with an event that ' + what + ', are refused: the key covers the signatures too', x1, withCache({ logOf: (p) => (p === P ? logWith(sigs0) : p.log) }), /does not verify/);
+      }
+      const badCtx = () => withCache({ logOf: (p) => (p === P ? logWith({ authority: [] }) : p.log) });
+      const sizeBefore = cache.size; c0 = calls;
+      await W.verifyVersion(x1, badCtx()); await W.verifyVersion(x1, badCtx());
+      ok('a refusal is not remembered: each time the bad log is checked in full, and the cache does not grow', calls - c0 === 2 && cache.size === sizeBefore, { calls: calls - c0, size: cache.size, sizeBefore });
+
+      // A log that is not plain JSON is looked up under no key at all. canonicalJson leaves out a member that is undefined, so this log has
+      // the same canonical text as the good one while verifyLog refuses it (a removal may say nothing more than what it removes).
+      const R2 = await R.addDevice(); await R.removeDevice(R2);
+      const y1 = await mk(R, R.d1, 'r1', await R.point());
+      ok('a log with a removal verifies and is remembered', (await W.verifyVersion(y1, withCache())).ok === true);
+      const odd = clone(R.log); odd.events[1].event.remove.zzz = undefined;
+      ok('(the variant has the very same canonical text as the log that was remembered)', kd.canonicalJson(odd) === kd.canonicalJson(R.log));
+      c0 = calls;
+      await refusedBy('and is refused without a cache', y1, makeCtx([P, R], { logOf: (p) => (p === R ? odd : p.log) }), /does not verify/);
+      await refusedBy('and with one that holds the good log\'s answer', y1, withCache({ logOf: (p) => (p === R ? odd : p.log) }), /does not verify/);
+      ok('(it was checked in full both times: it never reached the cache)', calls - c0 === 2, calls - c0);
+
+      // what stays outside the cache: the edit's own signature, and the point it claims
+      await refusedBy('the edit\'s own signature is still checked at a point the cache holds', tamper(x1, (c) => { c.event.created = '2001-01-01T00:00:00.000Z'; }), withCache(), /signature/);
+      await refusedBy('and so is the head it claims for the point (re-signed, so only the head gives it away)', await resigned(P, P.d1, x1, (e) => { e.authorLog.head = pt0.head; }), withCache(), /does not end where/);
+      await refusedBy('and so is whether the author\'s device is listed at that point (a stranger\'s key)', await resigned(P, strangerDev, x1, (e) => { e.author.deviceId = strangerDev.id; e.clients[0].id = 1; }), withCache(), /not listed/);
+
+      const small = W.logCheckCache(3);
+      ['a', 'b', 'c'].forEach((k) => small.set(k, k)); small.get('a'); small.set('d', 'd');
+      ok('the cache is bounded and drops the entry used longest ago (a use counts)', small.size === 3 && small.get('b') === undefined && small.get('a') === 'a' && small.get('c') === 'c' && small.get('d') === 'd');
+      small.clear();
+      ok('and it can be emptied', small.size === 0 && small.get('a') === undefined);
+    } finally { kd.verifyLog = realVerifyLog; }
+  }
+
   // ================================================================ client ids: the rule that stops a forged id
   const docB = await peerDoc(B.d1, NONCE1);
   await accept(ctx, e1);

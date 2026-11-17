@@ -166,6 +166,74 @@
     return null;
   }
 
+  // ---- remembering that an author's log checked out ---------------------------------------------------------------------------------
+  // Checking a log is a signature per event (one passkey assertion each): measured in the shell page, 0.6 ms with the inception only and
+  // 8.1 ms with 16 events after it. Every edit of a page names a point of its author's log, so a page with many edits would check the
+  // same log again and again. A receiver may hand `ctx.logChecks` (a logCheckCache) to remember the answers. What is remembered, and why it is safe:
+  //   - only a log that VERIFIED, so every refusal is made afresh, every time;
+  //   - under a hash of the identity and of the log prefix EXACTLY AS PRESENTED, its events and their signatures both. A key made of
+  //     less would be unsafe: (identity, number of events) is also the key of a forked log of that length, and (identity, number, hash of
+  //     the last event) is also the key of the same events with a signature that does not verify, because an event's hash does not
+  //     cover its signatures. A log that has grown is a different prefix, so it is checked, and an edit that names an older point is
+  //     still checked against that older prefix (what a device signed while it was listed stays valid: the rule above);
+  //   - only a log made of plain JSON values (see plainJson). Anything else is checked in full each time, so a value the key cannot
+  //     tell apart from another (a member set to undefined, a number that is not finite) cannot be served an answer made for another log.
+  // Making the key (the text and its hash) measured 0.1 ms for a log of the inception alone and 0.3 ms for one with 16 events (14 KB of text),
+  // in Node, against the check it replaces. A cache is for one signed-in session: the caller makes it with the store and drops it with the store. The log it is given must not change while a check is running, as for a plain check.
+  // What is handed back from it is the very result verifyLog gave, shared: nothing may change it.
+  function logCheckCache(max) {
+    var cap = max || 256, held = new Map();       // 256 is my number, not measured: it keeps the memory bounded (each entry is a log's state, a few KB)
+    return {
+      get: function (key) {
+        if (!held.has(key)) return undefined;
+        var v = held.get(key); held.delete(key); held.set(key, v);         // most recently used last, so the oldest goes first
+        return v;
+      },
+      set: function (key, v) {
+        held.delete(key); held.set(key, v);
+        while (held.size > cap) held.delete(held.keys().next().value);
+      },
+      clear: function () { held.clear(); },
+      get size() { return held.size; }
+    };
+  }
+  // canonicalJson, or null when x holds anything JSON would not carry as it is: undefined (canonicalJson leaves such a member out, so two
+  // logs that differ only by one would have the same text), a function, a number that is not finite, an object that is not a plain one, or a
+  // nesting deeper than any log has.
+  function plainJson(x, depth) {
+    if (x === null || typeof x === 'string' || typeof x === 'boolean') return JSON.stringify(x);
+    if (typeof x === 'number') return isFinite(x) ? JSON.stringify(x) : null;
+    if (typeof x !== 'object' || (depth || 0) > 16) return null;
+    var parts = [], i, t;
+    if (Array.isArray(x)) {
+      for (i = 0; i < x.length; i++) { t = plainJson(x[i], (depth || 0) + 1); if (t === null) return null; parts.push(t); }
+      return '[' + parts.join(',') + ']';
+    }
+    var proto = Object.getPrototypeOf(x);
+    if (proto !== Object.prototype && proto !== null) return null;
+    var keys = Object.keys(x).sort();
+    for (i = 0; i < keys.length; i++) { t = plainJson(x[keys[i]], (depth || 0) + 1); if (t === null) return null; parts.push(JSON.stringify(keys[i]) + ':' + t); }
+    return '{' + parts.join(',') + '}';
+  }
+  // The key of a log prefix, or null when it may not be remembered.
+  async function logCheckKey(did, prefix) {
+    var text = plainJson(prefix);
+    if (text === null) return null;
+    return kd.b64u(await kd.sha256(enc.encode('keo/wiki-log-check/v1\u0000' + did + '\u0000' + text)));
+  }
+  // kd.verifyLog of a log prefix for an identity, from the cache when ctx has one and it holds a check of exactly this prefix.
+  async function verifiedPrefix(ctx, did, prefix) {
+    var cache = ctx.logChecks, key = null;
+    if (cache) {
+      try { key = await logCheckKey(did, prefix); } catch (x) { key = null; }
+      var hit = key !== null ? cache.get(key) : undefined;
+      if (hit) return hit;
+    }
+    var v = await kd.verifyLog(prefix, did);
+    if (v.ok && key !== null) cache.set(key, v);
+    return v;
+  }
+
   // Steps 2 and 3 of what a receiver checks, the same for an edit and for a list change: the author's log up to the point the event
   // names, the device listed there, and the device's signature. { ok: true } or a refusal or a wait as verifyVersion returns them.
   async function checkAuthor(env, ctx) {
@@ -176,7 +244,7 @@
     var events = log.events || [];
     if (!Array.isArray(events)) return fail('the author\'s identity log is damaged');
     if (e.authorLog.seq > events.length) return pending('the author\'s identity log is not known as far as this edit says', { log: did, seq: e.authorLog.seq });
-    var v = await kd.verifyLog({ inception: log.inception, sigs: log.sigs, events: events.slice(0, e.authorLog.seq) }, did);
+    var v = await verifiedPrefix(ctx, did, { inception: log.inception, sigs: log.sigs, events: events.slice(0, e.authorLog.seq) });
     if (!v.ok) return fail('the author\'s identity log does not verify: ' + v.error);
     var headEvent = e.authorLog.seq === 0 ? log.inception : events[e.authorLog.seq - 1].event;
     if (kd.b64u(await kd.eventHash(headEvent)) !== e.authorLog.head) return fail('the author\'s identity log does not end where the edit says it did');
@@ -194,6 +262,7 @@
   }
 
   // ctx = { log(did) -> the author's identity log { inception, sigs, events } as this receiver holds it, or null if it holds none;
+  //         logChecks? -> a logCheckCache, to remember that a log verified (see above; without one every edit checks the log in full);
   //         versions(cid) -> true when this receiver has that event (an edit or a list change);
   //         writers(objId, parents) -> the DIDs that may write this page as of those parents, or null when that is not known yet
   //             (asked only for an author who is not the page's owner: the owner may always write);
@@ -343,5 +412,5 @@
     MAX_WRITERS: MAX_WRITERS, MAX_POLICY_EVENTS: MAX_POLICY_EVENTS, MAX_NAME: MAX_NAME,
     pageId: pageId, parsePageId: parsePageId, clientIdFor: clientIdFor, buildVersion: buildVersion, buildPolicy: buildPolicy,
     signedBytes: signedBytes, versionId: versionId, seal: seal, logPoint: logPoint,
-    verifyVersion: verifyVersion, verifyPolicy: verifyPolicy, writersFrom: writersFrom, closure: closure, headsOf: headsOf };
+    verifyVersion: verifyVersion, verifyPolicy: verifyPolicy, logCheckCache: logCheckCache, writersFrom: writersFrom, closure: closure, headsOf: headsOf };
 });

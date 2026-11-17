@@ -271,6 +271,49 @@ const safeText = async (store, objId) => { try { return textOf((await store.stat
   }
   ok('six edits sent in six different orders, all at once, always end with the same head and the same text, nothing waiting and nothing refused', results.size === 1 && JSON.parse(Array.from(results)[0])[1] === 'w0 w1 w2 w3 w4 w5 ' && JSON.parse(Array.from(results)[0])[2] === 0 && JSON.parse(Array.from(results)[0])[3] === 0, Array.from(results));
 
+  // ================================================================ the author's log is checked once, not once for every edit
+  // The store remembers which prefixes of an author's log it has checked in full (keo-wikilog.js logCheckCache; the unit tests there pin down
+  // that no refusal changes). Here: how often the log is really checked through the store, and when the memory is dropped. `kd.verifyLog`
+  // is wrapped to count; the log book's own check when a log is offered is counted too, so the offers are kept out of the counts.
+  {
+    const realVerifyLog = kd.verifyLog; let calls = 0;
+    kd.verifyLog = function () { calls++; return realVerifyLog.apply(this, arguments); };
+    try {
+      const Q = await makePerson(), K = await makeStore([Q]);
+      await K.store.offerLog(Q.did, Q.snapshot());
+      const qw = await writer(Q, Q.d1), OBJ_Q = pageOf(Q), ptOld = await Q.point();
+      const typeAt = (n) => (d) => d.getText('body').insert(d.getText('body').length, 'e' + n);
+      let c0 = calls;
+      const q1 = await K.store.add(await qw.publish(typeAt(1)));
+      const afterFirst = calls - c0;
+      const q2 = await K.store.add(await qw.publish(typeAt(2), [q1.cid]));
+      const q3 = await K.store.add(await qw.publish(typeAt(3), [q2.cid]));
+      ok('the first edit of an author checks the author\'s identity log in full and the next edits at the same point of it do not', q1.status === 'accepted' && q2.status === 'accepted' && q3.status === 'accepted' && afterFirst === 1 && calls - c0 === 1, { afterFirst, total: calls - c0 });
+      const Qd = await Q.addDevice();
+      await K.store.offerLog(Q.did, Q.snapshot());                    // the log has grown by one event
+      const qwd = await writer(Q, Qd);
+      c0 = calls;
+      const qn = await K.store.add(await qwd.publish(typeAt(4), [q3.cid]));
+      ok('once the log has grown the first edit at the new point checks it again (a longer log is not the one that was remembered), and the new device is accepted', qn.status === 'accepted' && calls - c0 === 1, { status: qn.status, calls: calls - c0 });
+      c0 = calls;
+      const qo = await K.store.add(await qw.publish(typeAt(5), [qn.cid], { point: ptOld }));
+      ok('an edit that names the older point is still served from what was remembered for it', qo.status === 'accepted' && calls - c0 === 0, { status: qo.status, calls: calls - c0 });
+      const qBad = await K.store.add(await qwd.publish(typeAt(6), [qo.cid], { point: ptOld }));
+      ok('and what is remembered for the older point does not list the device that was added after it: that edit is refused, from the memory', qBad.status === 'refused' && /not listed/.test(qBad.error) && calls - c0 === 0, { status: qBad.status, error: qBad.error, calls: calls - c0 });
+      await K.store.unload();
+      c0 = calls;
+      const qu = await K.store.add(await qw.publish(typeAt(7), [qo.cid], { point: ptOld }));
+      ok('a store that forgets what it holds in memory checks the log again', qu.status === 'accepted' && calls - c0 === 1, { status: qu.status, calls: calls - c0 });
+      await K.store.purge();
+      c0 = calls;
+      await K.store.offerLog(Q.did, Q.snapshot());
+      const offered = calls - c0;
+      const qp = await K.store.add(await (await writer(Q, Q.d1)).publish(typeAt(8), [], { point: ptOld }));
+      ok('and so does a store whose contents were removed (the offer of the log checks it once, the first edit once more)', qp.status === 'accepted' && offered === 1 && calls - c0 === 2, { status: qp.status, offered, calls: calls - c0 });
+      ok('(the page is the one the author owns)', (await K.store.heads(OBJ_Q)).length === 1);
+    } finally { kd.verifyLog = realVerifyLog; }
+  }
+
   // ================================================================ the owner's signed writer list, through the store
   const WL = await makeStore(people); await feedLogs(WL.store, people);
   const freshW = (person, nonce, objId) => writer(person, person.d1, nonce, objId || OBJ);       // a device writing under a client id of its own

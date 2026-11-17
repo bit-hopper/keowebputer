@@ -65,6 +65,9 @@
     var backend = o.backend, key = o.key, owner = o.did, now = o.now || function () { return new Date().toISOString(); };
     var Y = o.Y || Yjs;
     var pages = new Map(), logs = new Map(), chain = Promise.resolve(), closed = false;
+    // Which prefixes of an author's log have already been checked in full (keo-wikilog.js logCheckCache says what is kept and why it is safe).
+    // Memory only, never written to disk, and emptied wherever the store forgets what it holds in memory.
+    var logChecks = W.logCheckCache();
     // Operations run one after another: two adds that both read the same page state could each accept an edit the other makes impossible.
     // After close() an operation that has not started refuses to; the one that is running finishes (it was begun while the session was).
     function serial(fn) {
@@ -157,6 +160,7 @@
     function ctxFor(page) {
       return {
         log: async function (did) { return pinnedLog(did); },
+        logChecks: logChecks,
         versions: function (cid) { return page.versions.has(cid); },
         writers: async function (objId, parents) { return writersAmong(page, objId, parents); },
         Y: o.Y
@@ -331,15 +335,15 @@
         return serial(async function () {
           var kinds = ['page', 'version', 'pending', 'log', 'meta'];
           for (var k = 0; k < kinds.length; k++) { var ids = await backend.ids(kinds[k]); for (var i = 0; i < ids.length; i++) await backend.del(kinds[k], ids[i]); }
-          pages.clear(); logs.clear();
+          pages.clear(); logs.clear(); logChecks.clear();
         });
       },
       // forgets what is held in memory, so the next call reads the (sealed) records again: for tests and for a session that ended
-      unload: function () { return serial(async function () { pages.clear(); logs.clear(); }); },
+      unload: function () { return serial(async function () { pages.clear(); logs.clear(); logChecks.clear(); }); },
       // For a session that ended: every operation that has not started yet is refused from now on, and what is held in memory is dropped once
       // the one that is running has finished. Resolves then, which is when nothing of this store can still be written (the caller removing
       // an identity waits for it before it deletes the records, so a late write cannot bring them back). It cannot be undone: open a new store.
-      close: function () { closed = true; return chain.then(function () { pages.clear(); logs.clear(); }); }
+      close: function () { closed = true; return chain.then(function () { pages.clear(); logs.clear(); logChecks.clear(); }); }
     };
     return api;
   }
