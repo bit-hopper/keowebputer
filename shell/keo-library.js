@@ -22,7 +22,7 @@
 // arrives (keo-sha256.js), so the file's name, the SHA-256 of all its bytes, is known only at the end and is checked there, not
 // taken from the world. Each chunk is sealed with the identity, a random file id and its number as additional data, so a chunk cannot
 // be moved, dropped or reordered; the sealed manifest (name, type, size, chunk count) is stored under the file's name. IndexedDB `files`
-// (manifests), `chunks`, `pending` (an upload that has not finished: whatever is left of it is swept at the next upload, at purge).
+// (manifests), `chunks`, `pending` (an upload that has not finished: whatever is left of it is swept at an upload that comes a minute or more after the last sweep, and at the first upload of a session, and at purge).
 // A file of the first kind (one record in `blobs`) is still read the same way: as one chunk. Files count toward the same running total
 // as blobs. A search by name opens the manifests as it goes (fileSearch). They move with "Move my data" one chunk at a time
 // (exportFileList, exportFileChunk, importFile: for keo-transfer.js only). `space` says how much the files take and how much room is
@@ -45,6 +45,7 @@
   var CHUNK_BYTES = 4 * 1024 * 1024;               // every chunk of a file but the last is exactly this long
   var MAX_UPLOADS = 2;                              // files being added at once
   var UPLOAD_IDLE_MS = 5 * 60 * 1000;               // an upload that sends nothing for this long is given up
+  var SWEEP_EVERY_MS = 60 * 1000;                   // what a given-up upload left behind is looked for at most this often (see sweepPending)
   var MAX_NAME = 255;
   var MAX_QUERY = 200, MAX_TERMS = 8, MAX_RESULTS = 200, DEFAULT_RESULTS = 50, MAX_KINDS = 12;
   var CID = /^[A-Za-z0-9_-]{43}$/;
@@ -261,7 +262,7 @@
   // The hasher (keo-hash.js) hashes on a worker: it keeps running state there until it is finished or told to let go. So an upload is
   // never dropped from the table with a plain `delete`: forget() lets its hash go too, and forgetAll() also stops the worker.
   function forget(id) { var u = uploads[id]; if (u) { delete uploads[id]; u.hasher.abort(); } }
-  function forgetAll() { Object.keys(uploads).forEach(forget); uploads = {}; window.keoHash.shutdown(); }
+  function forgetAll() { Object.keys(uploads).forEach(forget); uploads = {}; sweptAt = {}; window.keoHash.shutdown(); }
   function chunkAad(did, fid, n) { return 'keo-library-chunk\n' + did + '\n' + fid + '\n' + n; }
   function fileAad(did, cid) { return 'keo-library-file\n' + did + '\n' + cid; }
   function randomId() { return kd.b64u(crypto.getRandomValues(new Uint8Array(16))); }
@@ -298,14 +299,24 @@
     if (Date.now() - u.last > UPLOAD_IDLE_MS) { forget(String(id)); throw new Error('That upload timed out.'); }
     return u;
   }
+  // When each identity's `pending` store was last swept, in this session (memory only, cleared with the uploads: the first upload after a
+  // sign-in or a reload sweeps).
+  var sweptAt = {};
   // Removes what an upload that never finished left behind. Only uploads that have been quiet for the idle time: another tab of the
   // same identity may be in the middle of one, and the stores are shared.
-  async function sweepPending(did) {
-    var cut = Date.now() - UPLOAD_IDLE_MS;
+  // It runs at most once a minute (and at the first upload of a session), not at every upload: its query was measured to cost 0.5 ms at
+  // 20 files and 11.9 ms at 1,220, a large part of what adding a small file cost. What a given-up upload left is therefore removed up to a
+  // minute later than it could be. That matters only to a browser that is nearly full (the leftovers count in its estimate for that
+  // minute); the room check of an upload comes BEFORE its own sweep, so the sweep never made room for the file that triggered it.
+  // `always` is for the one caller that does wait for it (importFile, when a clash may be leftovers).
+  async function sweepPending(did, always) {
+    var now = Date.now(), last = sweptAt[did];
+    if (!always && last !== undefined && last <= now && now - last < SWEEP_EVERY_MS) return;       // (a clock set back counts as long ago)
+    var cut = now - UPLOAD_IDLE_MS;
     var rows = await tx(['pending'], 'readonly', function (t) { var r = t.objectStore('pending').index('did').getAll(IDBKeyRange.only(did)); return function () { return r.result; }; });
     rows = rows.filter(function (p) { return !(p.at > cut); });
-    if (!rows.length) return;
-    await tx(['pending', 'chunks'], 'readwrite', function (t) { rows.forEach(function (p) { dropChunks(t, p.id); t.objectStore('pending').delete(p.id); }); });
+    if (rows.length) await tx(['pending', 'chunks'], 'readwrite', function (t) { rows.forEach(function (p) { dropChunks(t, p.id); t.objectStore('pending').delete(p.id); }); });
+    sweptAt[did] = now;                              // only once it has worked: a sweep that failed is tried again at the next upload
   }
   // Opens one stored manifest record (of the identity in s) for the file named cid.
   async function openRecord(s, rec, cid) {
@@ -1006,7 +1017,11 @@
       await checkRoom(m.size, remainingOfUploads(s.did), await readTotal(s.did), true);
       await sweepPending(s.did);
       var fk = s.did + '|' + m.fid;
-      var clash = await tx(['chunks'], 'readonly', function (t) { var r = t.objectStore('chunks').index('fk').count(IDBKeyRange.only(fk)); return function () { return r.result; }; });
+      var countChunks = function () { return tx(['chunks'], 'readonly', function (t) { var r = t.objectStore('chunks').index('fk').count(IDBKeyRange.only(fk)); return function () { return r.result; }; }); };
+      var clash = await countChunks();
+      // Chunks under this very file id may be what an earlier import of it left when it was cut off, which the sweep above (at most once a
+      // minute) has not yet removed: sweep now, and look again before calling it a clash.
+      if (clash) { await sweepPending(s.did, true); clash = await countChunks(); }
       if (clash) throw new Error('A file in this data clashes with one that is already here.');
       await tx(['pending'], 'readwrite', function (t) { t.objectStore('pending').put({ id: fk, did: s.did, at: Date.now() }); });
       return { did: s.did, m: m, cid: cid, fk: fk, man: man };

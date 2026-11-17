@@ -4,8 +4,9 @@
 // bound to its place: a chunk moved, swapped or changed is not handed back), a file left unfinished is swept, a file of the older
 // single-record kind still reads, removal gives the space back, and a 100 MB file goes through the real bridge from the world.
 // Usage: node keo-libfiles-test.js <repo root> <extension folder> <work dir>
-// A headed browser with the extension loaded, `localhost` unresolvable, a virtual authenticator with PRF (so nothing here says anything
-// about a real one). Large buffers are made and compared inside the pages, so they never cross the test's own channel.
+// A headed browser (unless KEO_HEADLESS=1: the newer headless mode, no window and no focus taken; the mode is printed first, and a headless
+// pass is not a headed pass) with the extension loaded, `localhost` unresolvable, a virtual authenticator with PRF (so nothing here says
+// anything about a real one). Large buffers are made and compared inside the pages, so they never cross the test's own channel.
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
@@ -64,14 +65,28 @@ const SETUP = () => {
   t.del = (store, key) => t.idb([store], 'readwrite', (tx) => { tx.objectStore(store).delete(key); });
   t.chunkKeys = async (did) => (await t.keys('chunks')).filter((k) => String(k).startsWith(did + '|'));
   t.pendingAge = (ms) => t.idb(['pending'], 'readwrite', (tx) => { const st = tx.objectStore('pending'), r = st.getAll(); r.onsuccess = () => r.result.forEach((x) => { x.at = Date.now() - ms; st.put(x); }); });
+  // The sweep runs at most once a minute, so a test that wants the next one moves the clock the shell reads (Date.now) instead of waiting.
+  t.clockAhead = (ms) => { if (!t.realNow) t.realNow = Date.now; Date.now = () => t.realNow.call(Date) + ms; };
+  t.clockBack = () => { if (t.realNow) { Date.now = t.realNow; t.realNow = null; } };
+  // What an upload that died leaves behind: a `pending` row last touched `ageMs` ago and one chunk under its file id.
+  t.plant = (did, fid, ageMs) => t.idb(['pending', 'chunks'], 'readwrite', (tx) => {
+    tx.objectStore('pending').put({ id: did + '|' + fid, did, at: Date.now() - ageMs });
+    tx.objectStore('chunks').put({ id: did + '|' + fid + '|0', did, fk: did + '|' + fid, iv: 'AAAAAAAAAAAAAAAA', ct: new Uint8Array(32) });
+  });
+  t.leftover = (did, fid) => t.idb(['pending', 'chunks'], 'readonly', (tx) => { const a = tx.objectStore('pending').count(IDBKeyRange.only(did + '|' + fid)), b = tx.objectStore('chunks').count(IDBKeyRange.only(did + '|' + fid + '|0')); return () => [a.result, b.result]; });
+  // A file as the data of "Move my data" carries it (sealed manifest and chunks as stored), kept in the page, and an import of it.
+  t.packOf = async (id) => { const l = await L.exportFileList(), f = l.files.find((x) => x.id === id), chunks = []; for (let n = 0; n < f.chunks; n++) chunks.push(await L.exportFileChunk({ fid: f.fid, n })); (t.packs = t.packs || {})[id] = { f, chunks }; return f.fid; };
+  t.importPack = (id) => { const p = t.packs[id]; return L.importFile({ id, manifest: p.f.manifest, readChunk: async (n) => p.chunks[n] }); };
   return true;
 };
 
 (async () => {
   fs.mkdirSync(WORK, { recursive: true });
-  const ctx = await chromium.launchPersistentContext(path.join(WORK, 'profile-libfiles'), {
-    headless: false, viewport: { width: 1280, height: 900 },
-    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--host-resolver-rules=MAP localhost ~NOTFOUND, MAP 127.0.0.1 ~NOTFOUND'] });
+  const headless = !!process.env.KEO_HEADLESS;
+  const ctx = await chromium.launchPersistentContext(path.join(WORK, 'profile-libfiles'), Object.assign({
+    headless, viewport: { width: 1280, height: 900 },
+    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--host-resolver-rules=MAP localhost ~NOTFOUND, MAP 127.0.0.1 ~NOTFOUND'] }, headless ? { channel: 'chromium' } : {}));
+  console.log('MODE ' + (headless ? 'HEADLESS (newer headless mode, channel chromium)' : 'headed') + '; package ' + path.basename(EXT));
   await sleep(2500);
   try {
     const page = await ctx.newPage();
@@ -273,15 +288,55 @@ const SETUP = () => {
     check('removing it again says it was not there', (await T((id) => window.keoLibrary.fileRemove({ id }), id1)) === false);
     check('an older single-record file is removed by the same call', (await T((id) => window.keoLibrary.fileRemove({ id }), legacyCid)) === true && (await T((id) => window.keoLibrary.fileInfo({ id }), legacyCid)) === null);
 
-    // ---- an upload left unfinished is swept at the next upload, once it has been quiet long enough
+    // ---- an upload left unfinished is swept once it has been quiet long enough: at the first upload of a session, then at most once a minute
     const lone = (await begin(C + 5)).r.upload; await chunk(lone, 0, C);
-    await T(() => window.keoLibrary.reset());                    // what the end of a session does: the upload is forgotten
+    await T(() => window.keoLibrary.reset());                    // what the end of a session does: the upload is forgotten, and so is when the shell last swept
     const pendBefore = await T(() => window.__t.count('pending')), chunkBefore = (await T((d) => window.__t.chunkKeys(d), DID)).length;
-    const fresh = await begin(5); await T((u) => window.keoLibrary.fileAbort({ upload: u }), fresh.r.upload);
+    const abortUp = (b) => T((u) => window.keoLibrary.fileAbort({ upload: u }), b.r.upload);
+    const fresh = await begin(5); await abortUp(fresh);
     check('a recent unfinished upload is NOT swept (another tab may be using it)', (await T((d) => window.__t.chunkKeys(d), DID)).length === chunkBefore && pendBefore >= 1);
     await T(() => window.__t.pendingAge(10 * 60 * 1000));
-    const fresh2 = await begin(5); await T((u) => window.keoLibrary.fileAbort({ upload: u }), fresh2.r.upload);
-    check('one that has been quiet for ten minutes is swept, with its chunk', (await T((d) => window.__t.chunkKeys(d), DID)).length === chunkBefore - 1 && (await T(() => window.__t.count('pending'))) === 0);
+    const fresh2 = await begin(5); await abortUp(fresh2);
+    check('one that has been quiet for ten minutes is left alone by an upload that follows a sweep within the minute (the sweep is not run at every upload)', (await T((d) => window.__t.chunkKeys(d), DID)).length === chunkBefore && (await T(() => window.__t.count('pending'))) >= 1);
+    await T(() => window.__t.clockAhead(61 * 1000));
+    const fresh3 = await begin(5); await T(() => window.__t.clockBack()); await abortUp(fresh3);
+    check('a minute after the last sweep the next upload sweeps it, with its chunk', (await T((d) => window.__t.chunkKeys(d), DID)).length === chunkBefore - 1 && (await T(() => window.__t.count('pending'))) === 0);
+    const chunkNow = (await T((d) => window.__t.chunkKeys(d), DID)).length;
+    // (the moved clock left the last sweep a minute in the future: one upload on the real clock makes it "just now" again)
+    const resync = await begin(5); await abortUp(resync);
+    // what the end of a session forgets is when the sweep last ran, so the first upload of the next session sweeps at once
+    const FID_A = 'fidA' + Date.now();
+    await T(([d, f]) => window.__t.plant(d, f, 10 * 60 * 1000), [DID, FID_A]);
+    const fresh4 = await begin(5); await abortUp(fresh4);
+    check('(setup) a left-over upload is not swept by an upload within a minute of the last sweep', JSON.stringify(await T(([d, f]) => window.__t.leftover(d, f), [DID, FID_A])) === '[1,1]');
+    await T(() => window.keoLibrary.reset());
+    const fresh5 = await begin(5); await abortUp(fresh5);
+    check('but after the session ended and a new one began, the first upload sweeps it', JSON.stringify(await T(([d, f]) => window.__t.leftover(d, f), [DID, FID_A])) === '[0,0]' && (await T((d) => window.__t.chunkKeys(d), DID)).length === chunkNow);
+    // a clock set back must not stop the sweeps: the last sweep then looks as if it were in the future
+    await T(() => window.__t.clockAhead(10 * 60 * 1000));
+    const fresh6 = await begin(5); await T(() => window.__t.clockBack()); await abortUp(fresh6);
+    const FID_B = 'fidB' + Date.now();
+    await T(([d, f]) => window.__t.plant(d, f, 10 * 60 * 1000), [DID, FID_B]);
+    const fresh7 = await begin(5); await abortUp(fresh7);
+    check('a clock that was set back does not stop the sweeps', JSON.stringify(await T(([d, f]) => window.__t.leftover(d, f), [DID, FID_B])) === '[0,0]');
+
+    // ---- moving data in: a clash with what an earlier, cut-off import left is settled by a sweep, a clash with a live one is not
+    await T(() => window.__t.make('imp', 7000, 91));
+    const impSent = await T(() => window.__t.tryp(window.__t.send('imp', 'imp.bin', 'application/octet-stream')));
+    const impId = impSent.r.end.id, impFid = await T((id) => window.__t.packOf(id), impId);
+    await T((id) => window.keoLibrary.fileRemove({ id }), impId);
+    const fresh8 = await begin(5); await abortUp(fresh8);                  // a sweep has just run: the next one is a minute away
+    await T(([d, f]) => window.__t.plant(d, f, 10 * 60 * 1000), [DID, impFid]);
+    const impOld = await T((id) => window.__t.tryp(window.__t.importPack(id)), impId);
+    check('an import whose file id has chunks left by a cut-off import (quiet for ten minutes) goes through: the clash is swept and looked at again', impOld.ok && impOld.r.status === 'added', impOld);
+    check('and only the file\'s own chunk is there afterwards', (await T((d) => window.__t.chunkKeys(d), DID)).filter((k) => k.startsWith(DID + '|' + impFid + '|')).length === 1 && (await T(([d, f]) => window.__t.leftover(d, f), [DID, impFid]))[0] === 0);
+    check('the imported file reads back', (await T((id) => window.keoLibrary.fileInfo({ id }), impId)) !== null);
+    await T((id) => window.keoLibrary.fileRemove({ id }), impId);
+    await T(([d, f]) => window.__t.plant(d, f, 1000), [DID, impFid]);       // chunks that belong to an import still going (touched a second ago)
+    const impLive = await T((id) => window.__t.tryp(window.__t.importPack(id)), impId);
+    check('an import whose file id has chunks of an import that is still going is refused as a clash', !impLive.ok && /clashes/.test(impLive.e), impLive);
+    check('(and the live import\'s leftovers are not touched)', JSON.stringify(await T(([d, f]) => window.__t.leftover(d, f), [DID, impFid])) === '[1,1]');
+    await T(([d, f]) => window.__t.del('pending', d + '|' + f), [DID, impFid]); await T(([d, f]) => window.__t.del('chunks', d + '|' + f + '|0'), [DID, impFid]);
 
     // ---- the real bridge, from the world, with 100 MB
     const BIG = 100 * 1024 * 1024;
