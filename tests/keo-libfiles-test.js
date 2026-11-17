@@ -366,6 +366,46 @@ const SETUP = () => {
     check('and it comes back through the bridge exactly as it went in', viaWorld.equal === true, viaWorld);
     check('the bridge removes it, and the total is back where it was', viaWorld.removed === true && (await T(() => window.__t.total())) === totalBefore - SIZE - 70000);
 
+    // ---- the world's own upload loop (the kernel's LocalFiles.put) hands each chunk over instead of copying it
+    // A wrapper on window.keo.call notes each library.fileChunk call: the buffer, and its length BEFORE the call. A buffer that was handed
+    // over is detached afterwards (length 0); one that was copied still has its length. The file must still be named by the right hash,
+    // read back whole, and report progress up to 1: the loop's offset must move by the length it took before the hand-over.
+    const OWN = 2 * C + 777, OWN_SEED = 77;
+    await T(([n, sd]) => { const t = window.__t; t.make('own', n, sd); return true; }, [OWN, OWN_SEED]);
+    const wantOwn = await T(() => window.__t.cid(window.__t.data.own));
+    // ... and the shell's answer to each library.fileRead goes the same way: a note in the shell page of each buffer it answered with and its
+    // length at that moment (the shell's own readers, such as the save-a-copy above, call the library directly and are not touched by this)
+    await T(() => { const Lb = window.keoLibrary; window.__readOrig = Lb.fileRead; window.__gave = []; Lb.fileRead = function () { return window.__readOrig.apply(this, arguments).then((b) => { if (b) window.__gave.push({ buf: b, len: b.byteLength }); return b; }); }; return true; });
+    const own = await frame.evaluate(async ([n, seed]) => {
+      const fill = (len, sd) => { const u = new Uint8Array(len); let x = (sd >>> 0) || 1; for (let i = 0; i < len; i++) { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; u[i] = x & 255; } return u; };
+      const data = fill(n, seed), real = window.keo.call, seen = [], progress = [], out = {};
+      window.keo.call = function (op, args, timeoutMs, transfer) {
+        if (op === 'library.fileChunk') seen.push({ buf: args.bytes, before: args.bytes.byteLength, listed: Array.isArray(transfer) && transfer.length === 1 && transfer[0] === args.bytes });
+        return real.apply(this, arguments);
+      };
+      try {
+        const res = await new Promise((resolve) => lively.identity.localFiles.put(new File([data], 'own.bin', { type: 'application/octet-stream' }), { onProgress: (f) => progress.push(f) }, (e, r) => resolve(e ? { err: e.message } : r)));
+        out.err = res.err; out.id = res.id; out.size = res.size;
+        const info = await real.call(window.keo, 'library.fileInfo', { id: res.id }, 120000), parts = [];
+        for (let k = 0; k < info.chunks; k++) parts.push(await real.call(window.keo, 'library.fileRead', { id: res.id, n: k }, 120000));
+        const back = new Uint8Array(await new Blob(parts).arrayBuffer());
+        out.equal = back.length === data.length && back.every((v, i) => v === data[i]);
+        out.removed = await real.call(window.keo, 'library.fileRemove', { id: res.id }, 120000);
+      } finally { window.keo.call = real; }
+      out.sizes = seen.map((s) => s.before); out.after = seen.map((s) => s.buf.byteLength); out.listed = seen.map((s) => s.listed);
+      out.lastProgress = progress[progress.length - 1]; out.progress = progress.length;
+      return out;
+    }, [OWN, OWN_SEED]);
+    check('the loop sends the file in three chunks, of the lengths the shell asked for', !own.err && JSON.stringify(own.sizes) === JSON.stringify([C, C, 777]), own);
+    check('each chunk is named in the transfer list, so it is handed over and not copied (the buffer is empty afterwards)', JSON.stringify(own.listed) === '[true,true,true]' && JSON.stringify(own.after) === '[0,0,0]', own);
+    check('the file is still named by the hash of its bytes and reads back exactly (the offset moved by the length taken before the hand-over)', own.id === wantOwn && own.size === OWN && own.equal === true, [own.id, wantOwn, own.size, own.equal]);
+    const gave = await T(() => { window.keoLibrary.fileRead = window.__readOrig; return window.__gave.map((g) => ({ len: g.len, after: g.buf.byteLength })); });
+    check('the shell answers each library.fileRead by handing the chunk over (it is empty in the shell afterwards), and the world got every byte', JSON.stringify(gave) === JSON.stringify([{ len: C, after: 0 }, { len: C, after: 0 }, { len: 777, after: 0 }]) && own.equal === true, [gave, own.equal]);
+    const none = await frame.evaluate(() => window.keo.call('library.fileRead', { id: 'A'.repeat(43), n: 0 }, 60000).then((r) => ({ r }), (e) => ({ e: e.message })));
+    check('a file that is not there still reads as nothing through the bridge (there is no buffer to hand over)', none.r === null, none);
+    check('progress ends at one, after a step for each chunk', own.lastProgress === 1 && own.progress === 4, [own.lastProgress, own.progress]);
+    check('the loop removes it again', own.removed === true && (await T(() => window.__t.total())) === totalBefore - SIZE - 70000);
+
     // ---- search by name
     const S = (a) => T((x) => window.__t.tryp(window.keoLibrary.fileSearch(x)), a);
     const putText = (name, type, text) => T(([n, t, x]) => window.__t.tryp((async () => { window.__t.data.tx = new TextEncoder().encode(x); return (await window.__t.send('tx', n, t)).end.id; })()), [name, type, text]);

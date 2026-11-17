@@ -19,8 +19,13 @@
   // public part of the session again with session.current; it cannot change either.
   var startup = null;
 
-  function toWorld(msg) { try { world.contentWindow.postMessage(msg, '*'); } catch (e) {} }   // '*': the world's origin is opaque
-  function replyOk(id, result) { toWorld({ keo: 1, id: id, ok: true, result: result }); }
+  function toWorld(msg, transfer) { try { world.contentWindow.postMessage(msg, '*', transfer || []); } catch (e) {} }   // '*': the world's origin is opaque
+  function replyOk(id, result, transfer) { toWorld({ keo: 1, id: id, ok: true, result: result }, transfer); }
+  // The ops whose ANSWER is one buffer, made for that answer and kept nowhere else in this page: it is handed to the world instead of copied
+  // (a copy of a 4 MiB chunk costs this page's thread tens of milliseconds, and a hand-over next to nothing), which detaches it here. Listing an
+  // op is a promise about the function behind it: it must return a buffer it does not hold on to (not a cache, not a view's whole backing
+  // store shared with anything else). Anything not listed is copied as before.
+  var GIVES_ANSWER = { 'library.fileRead': true };
   function replyErr(id, e) {
     toWorld({ keo: 1, id: id, ok: false, error: { name: (e && e.name) || 'Error', message: String((e && e.message) || e).slice(0, 400) } });
   }
@@ -283,7 +288,7 @@
         if (!Object.prototype.hasOwnProperty.call(OPS, m.op)) return replyErr(m.id, new Error('keo shell: unknown op ' + m.op));
         var run;
         try { run = Promise.resolve(OPS[m.op](m.args || {})); } catch (e) { run = Promise.reject(e); }
-        run.then(function (r) { replyOk(m.id, r); }, function (e) { replyErr(m.id, e); });
+        run.then(function (r) { replyOk(m.id, r, Object.prototype.hasOwnProperty.call(GIVES_ANSWER, m.op) && r instanceof ArrayBuffer ? [r] : []); }, function (e) { replyErr(m.id, e); });
         return;
       }
       // untagged {id, op, args} is the vault protocol: forward to the vault page, which checks it again itself

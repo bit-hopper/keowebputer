@@ -437,7 +437,8 @@
     });
   }
   // args: { id, n }. Chunk number n of the file, as an ArrayBuffer (null when there is no such file). A chunk is opened with its own
-  // position in its additional data, so a record moved or swapped is refused.
+  // position in its additional data, so a record moved or swapped is refused. The buffer is made for this call and held nowhere else:
+  // shell.js hands the answer to the world (which detaches it here), so this must never return a cached or shared buffer.
   function fileRead(args) {
     return serial(async function () {
       var s = session(), cid = cidOf(args.id), n = args.n, m = await openManifest(s, cid);

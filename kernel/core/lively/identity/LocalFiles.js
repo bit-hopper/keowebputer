@@ -37,8 +37,11 @@ module("lively.identity.LocalFiles")
 
       isRef: function isRef(handle) { return handle === HANDLE; },
 
-      _call: function _call(op, args, thenDo, timeoutMs) {
-        window.keo.call(op, args, timeoutMs || STEP_TIMEOUT).then(
+      // `transfer` (optional): ArrayBuffers inside `args` that this call GIVES to the shell instead of copying them. The bridge detaches them
+      // here, so their byteLength reads 0 afterwards: only for a buffer nothing else holds and the caller is done with (a 4 MiB chunk of a
+      // file is what it is for). An older bridge ignores the argument and copies, so nothing depends on which side is newer.
+      _call: function _call(op, args, thenDo, timeoutMs, transfer) {
+        window.keo.call(op, args, timeoutMs || STEP_TIMEOUT, transfer).then(
           function (result) { thenDo(null, result); },
           function (err) { thenDo(err instanceof Error ? err : new Error(String(err && err.message || err))); }
         );
@@ -92,12 +95,15 @@ module("lively.identity.LocalFiles")
               });
             }
             file.slice(off, Math.min(off + step, file.size)).arrayBuffer().then(function (bytes) {
+              // The chunk is handed over, not copied (it is a fresh buffer and nothing here reads it again). A buffer that has been handed
+              // over reports a length of 0, so its length is taken BEFORE the call, or the offset below would never move.
+              var len = bytes.byteLength;
               self._call("library.fileChunk", { upload: upload, n: n, bytes: bytes }, function (err) {
                 if (err) return fail(err);
-                n++; off += bytes.byteLength;
+                n++; off += len;
                 opts.onProgress && opts.onProgress(off / file.size);
                 next();
-              });
+              }, undefined, [bytes]);
             }, fail);
           }
           next();

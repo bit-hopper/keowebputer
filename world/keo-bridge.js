@@ -3,7 +3,8 @@
 // The world realm has an opaque origin: no IndexedDB, cookies, localStorage or passkeys. The shell page (start.html,
 // the extension's own origin) has all of them. This file gives the world the APIs it expects, backed by the shell
 // over postMessage:
-//   - window.keo.call(op, args) -> Promise: one request/response RPC to the shell;
+//   - window.keo.call(op, args[, timeoutMs[, transfer]]) -> Promise: one request/response RPC to the shell (transfer: buffers to
+//                                  hand over instead of copy, see call());
 //   - window.keo.ready          -> Promise: resolves once the shell has answered the handshake (keo-boot.js waits
 //                                  for it before it loads the bootstrap, so boot-time code finds its storage filled);
 //   - localStorage / sessionStorage: synchronous APIs, filled from a snapshot the shell sends in the handshake
@@ -67,7 +68,13 @@
     try { var C = window.lively && window.lively.Config; if (C) C.askBeforeQuit = warningWas; } catch (e) {}
   }
 
-  function call(op, args, timeoutMs) {
+  // `transfer` (optional): an array of ArrayBuffers that sit inside `args` and are GIVEN to the shell instead of copied. A copy of a 4 MiB
+  // chunk costs the world's thread tens of milliseconds and the shell another copy's worth of memory; a hand-over costs next to nothing.
+  // The price is that the caller's buffer is detached (its byteLength reads 0, it cannot be read or sent again), so the CALLER names the
+  // buffers it is done with: this never picks them out of `args` by itself, because the same call shape is used by callers that keep and
+  // reuse what they pass (stored values, key material, passkey options). Only whole ArrayBuffers can be given (not a view over one) and a
+  // buffer that is already detached is refused by the browser; both reject the call here instead of leaving it waiting for its timeout.
+  function call(op, args, timeoutMs, transfer) {
     var leaving = leavesPage(op, args);
     if (leaving) liftExitWarning();
     var sent = new Promise(function (resolve, reject) {
@@ -77,7 +84,8 @@
         reject(new Error('keo bridge: ' + op + ' timed out'));
       }, timeoutMs || 30000);
       pending[id] = { resolve: resolve, reject: reject, timer: timer };
-      parentWin.postMessage({ keo: 1, id: id, op: op, args: args || {} }, SHELL_ORIGIN);
+      try { parentWin.postMessage({ keo: 1, id: id, op: op, args: args || {} }, SHELL_ORIGIN, Array.isArray(transfer) ? transfer : []); }
+      catch (e) { delete pending[id]; clearTimeout(timer); reject(e); }
     });
     if (leaving) { var back = function () { setTimeout(restoreExitWarning, 2000); }; sent.then(back, back); }
     return sent;

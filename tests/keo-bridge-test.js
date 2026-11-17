@@ -1,14 +1,17 @@
 // Tests for the shell <-> world bridge of the built extension.
-// Usage: node keo-bridge-test.js <repo root> <extension folder> <work dir> [part ...]
+// Usage: [KEO_HEADLESS=1] node keo-bridge-test.js <repo root> <extension folder> <work dir> [part ...]
 // Parts: idb (differential test of the in-world IndexedDB against the real one), persist (localStorage and IndexedDB
-// survive a reload, and land in the shell's real store), webauthn (passkey ceremonies proxied to the shell, PRF
-// included), vault (identity vault reached through the shell). Default: all.
+// survive a reload, and land in the shell's real store), transfer (buffers a call hands over instead of copying, and the
+// refusals), webauthn (passkey ceremonies proxied to the shell, PRF included), vault (identity vault reached through the
+// shell). Default: all. Headed unless KEO_HEADLESS=1 (the newer headless mode: no window, no focus taken); a headless pass is
+// reported as headless.
 // "Differential": the same operation script runs once in the shell page against the REAL indexedDB and once in the
 // world against the stand-in; the transcripts of results and error names must be identical.
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
-const PARTS = process.argv.length > 5 ? process.argv.slice(5) : ['idb', 'persist', 'webauthn', 'vault'];
+const PARTS = process.argv.length > 5 ? process.argv.slice(5) : ['idb', 'persist', 'transfer', 'webauthn', 'vault'];
+const HEADLESS = !!process.env.KEO_HEADLESS;      // the newer headless mode (no window, no focus taken); NOT how this suite is run to call it passed: headed is the default
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -199,9 +202,9 @@ async function IDB_SCRIPT(prefix) {
 }
 
 async function launch(profile) {
-  const ctx = await chromium.launchPersistentContext(path.join(WORK, profile), {
-    headless: false, viewport: { width: 1280, height: 860 },
-    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--host-resolver-rules=MAP localhost ~NOTFOUND, MAP 127.0.0.1 ~NOTFOUND'] });
+  const ctx = await chromium.launchPersistentContext(path.join(WORK, profile), Object.assign({
+    headless: HEADLESS, viewport: { width: 1280, height: 860 },
+    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--host-resolver-rules=MAP localhost ~NOTFOUND, MAP 127.0.0.1 ~NOTFOUND'] }, HEADLESS ? { channel: 'chromium' } : {}));
   await sleep(2500);
   return ctx;
 }
@@ -314,6 +317,69 @@ function check(name, ok, detail) { results[name] = { ok: !!ok, detail }; console
       // (session, /@handle/..., users/<handle>/config.js); those failures are the next piece of work, not a bridge fault
       const unexpected = s.errors.filter((e) => !/IdentityServer\/session|\/@bridge-test\/|\/users\/bridge-test\/|XHR request failed for .*\/(users\/bridge-test|@bridge-test)/.test(e));
       check('persist: no page errors other than the fake identity server routes', unexpected.length === 0, unexpected);
+    } finally { await ctx.close(); }
+  }
+
+  // ================= transfer: buffers handed over on a call, never taken by the bridge on its own =================
+  if (PARTS.includes('transfer')) {
+    const ctx = await launch('profile-bridge-transfer');
+    try {
+      const s = await openShell(ctx);
+      // The shell page notes every call of the test's own op: what arrived (length, a checksum of the bytes, the other arguments).
+      await s.page.evaluate(() => {
+        window.__got = [];
+        window.addEventListener('message', (ev) => {
+          const m = ev.data;
+          if (!m || m.keo !== 1 || m.op !== 'test.transfer') return;
+          const b = m.args && m.args.bytes; let sum = 0, first = null, last = null;
+          if (b instanceof ArrayBuffer) { const u = new Uint8Array(b); first = u[0]; last = u[u.length - 1]; for (let i = 0; i < u.length; i++) sum = (sum + u[i] * ((i % 251) + 1)) % 4294967291; }
+          window.__got.push({ tag: m.args && m.args.tag, n: m.args && m.args.n, isBuffer: b instanceof ArrayBuffer, len: b ? b.byteLength : null, sum, first, last });
+        });
+      });
+      const r = await s.frame.evaluate(async () => {
+        const out = {};
+        const mk = (n, seed) => { const u = new Uint8Array(n); for (let i = 0; i < n; i++) u[i] = (i * 31 + seed) & 255; return u.buffer; };
+        const sumOf = (b) => { const u = new Uint8Array(b); let sum = 0; for (let i = 0; i < u.length; i++) sum = (sum + u[i] * ((i % 251) + 1)) % 4294967291; return sum; };
+        const ask = async (args, transfer) => { const t0 = performance.now(); try { await window.keo.call('test.transfer', args, 4000, transfer); return { ms: performance.now() - t0 }; } catch (e) { return { name: e.name, message: e.message, ms: performance.now() - t0 }; } };
+        const N = 1 << 20;
+        // handed over: the buffer is empty here afterwards, and the shell got every byte
+        const a = mk(N, 1); out.aSum = sumOf(a);
+        out.aAnswer = await ask({ tag: 'a', n: 7, bytes: a }, [a]);
+        out.aAfter = a.byteLength;
+        // not listed: copied, the buffer is still whole
+        const b = mk(N, 2); out.bSum = sumOf(b);
+        out.bAnswer = await ask({ tag: 'b', n: 8, bytes: b });
+        out.bAfter = b.byteLength; out.bSumAfter = sumOf(b);
+        // listed in a call whose buffer is kept by the caller on purpose: ONLY what is listed is detached (a second buffer in the arguments is not)
+        const c1 = mk(1024, 3), c2 = mk(2048, 4);
+        out.cAnswer = await ask({ tag: 'c', n: 9, bytes: c1, other: c2 }, [c1]);
+        out.cAfter = [c1.byteLength, c2.byteLength];
+        // a transfer list that is not a list is ignored (a copy is made, nothing is detached)
+        const d = mk(1024, 5);
+        out.dAnswer = await ask({ tag: 'd', n: 10, bytes: d }, 'yes please');
+        out.dAfter = d.byteLength;
+        // a buffer that was handed over already cannot be handed over again: refused at once, not left waiting for the timeout
+        out.eAnswer = await ask({ tag: 'e', n: 11, bytes: a }, [a]);
+        // a view is not a transferable: refused at once
+        const f = new Uint8Array(mk(1024, 6));
+        out.fAnswer = await ask({ tag: 'f', n: 12, bytes: f }, [f]);
+        out.fAfter = f.byteLength;
+        // after refusals the bridge still answers (nothing is left stuck), and the refused calls did not reach the shell
+        out.after = await ask({ tag: 'g', n: 13 });
+        return out;
+      });
+      const got = await s.page.evaluate(() => window.__got);
+      const g = (tag) => got.find((x) => x.tag === tag);
+      check('transfer: a listed buffer arrives whole in the shell (length and every byte)', g('a') && g('a').isBuffer && g('a').len === (1 << 20) && g('a').sum === r.aSum && g('a').n === 7, [g('a'), r.aSum]);
+      check('transfer: and is empty in the world afterwards (it was handed over, not copied)', r.aAfter === 0, r.aAfter);
+      check('transfer: a call answered as usual (the shell here answers an unknown op, with that sentence)', /unknown op test\.transfer/.test(r.aAnswer.message || ''), r.aAnswer);
+      check('transfer: a buffer that is not listed is copied: whole in the shell, and still whole in the world', g('b') && g('b').len === (1 << 20) && g('b').sum === r.bSum && r.bAfter === (1 << 20) && r.bSumAfter === r.bSum, [g('b'), r.bSum, r.bAfter]);
+      check('transfer: only what is listed is detached, a second buffer in the same arguments is copied', r.cAfter[0] === 0 && r.cAfter[1] === 2048 && g('c') && g('c').len === 1024, [r.cAfter, g('c')]);
+      check('transfer: something that is not a list is ignored, and the call goes through as a copy', r.dAfter === 1024 && g('d') && g('d').len === 1024, [r.dAfter, g('d')]);
+      check('transfer: a buffer handed over twice is refused at once, by the browser, and never reaches the shell', r.eAnswer.name === 'DataCloneError' && r.eAnswer.ms < 1500 && !g('e'), [r.eAnswer, g('e')]);
+      check('transfer: a view in the list is refused at once, and not detached', r.fAnswer.name === 'DataCloneError' && r.fAnswer.ms < 1500 && r.fAfter === 1024 && !g('f'), [r.fAnswer, r.fAfter, g('f')]);
+      check('transfer: after refusals the bridge still answers', /unknown op test\.transfer/.test(r.after.message || '') && g('g') && g('g').isBuffer === false, [r.after, g('g')]);
+      check('transfer: no page errors', s.errors.length === 0, s.errors);
     } finally { await ctx.close(); }
   }
 
