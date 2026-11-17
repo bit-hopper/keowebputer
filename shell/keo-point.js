@@ -102,23 +102,28 @@
     u.title.textContent = 'Reading ' + name;
     u.text.textContent = 'keo is reading the file once to give it a name that only these bytes have. It stays where it is.';
     u.note.hidden = true; u.go.hidden = true; u.bar.hidden = false; u.no.textContent = 'Stop';
-    var CH = window.keoLibrary.CHUNK_BYTES, hasher = window.keoSha256.create(), hashes = [], off = 0, lastPaint = 0;
-    while (off < size) {
+    // The whole-file hash runs on a worker (keo-hash.js), which keeps running state until it is finished or told to let go: whatever way this
+    // read ends (stopped, failed, done), the `finally` lets it go.
+    var CH = window.keoLibrary.CHUNK_BYTES, hasher = window.keoHash.create(size), hashes = [], off = 0, lastPaint = 0, cid;
+    try {
+      while (off < size) {
+        if (q.stop) return null;
+        var len = Math.min(CH, size - off);
+        var r = await window.keoHost.post('file', { op: 'read', path: g.path, mac: g.mac, offset: off, length: len });
+        if (r.error) throw hostError(r, 'That file could not be read.');
+        if (!r.bytes || r.bytes.length !== len) throw new Error('"' + name + '" changed while it was being read. Try again when nothing is writing to it.');
+        await hasher.update(r.bytes);              // copies the bytes, so r.bytes is still whole for the digest below
+        hashes.push(kd.b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', r.bytes))));
+        off += len;
+        if (Date.now() - lastPaint > 150) { lastPaint = Date.now(); u.fill.style.width = (size ? Math.floor(off / size * 100) : 100) + '%'; u.text.textContent = 'Reading ' + sizeText(off) + ' of ' + sizeText(size) + '. It stays where it is.'; }
+      }
+      // The file must be the same size and time after the read as before it: a file written to while it was read is not one file.
+      var after = await window.keoHost.post('file', { op: 'stat', path: g.path, mac: g.mac });
+      if (after.error || after.size !== g.size || after.mtimeMs !== g.mtimeMs) throw new Error('"' + name + '" changed while it was being read. Try again when nothing is writing to it.');
       if (q.stop) return null;
-      var len = Math.min(CH, size - off);
-      var r = await window.keoHost.post('file', { op: 'read', path: g.path, mac: g.mac, offset: off, length: len });
-      if (r.error) throw hostError(r, 'That file could not be read.');
-      if (!r.bytes || r.bytes.length !== len) throw new Error('"' + name + '" changed while it was being read. Try again when nothing is writing to it.');
-      hasher.update(r.bytes);
-      hashes.push(kd.b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', r.bytes))));
-      off += len;
-      if (Date.now() - lastPaint > 150) { lastPaint = Date.now(); u.fill.style.width = (size ? Math.floor(off / size * 100) : 100) + '%'; u.text.textContent = 'Reading ' + sizeText(off) + ' of ' + sizeText(size) + '. It stays where it is.'; }
-    }
-    // The file must be the same size and time after the read as before it: a file written to while it was read is not one file.
-    var after = await window.keoHost.post('file', { op: 'stat', path: g.path, mac: g.mac });
-    if (after.error || after.size !== g.size || after.mtimeMs !== g.mtimeMs) throw new Error('"' + name + '" changed while it was being read. Try again when nothing is writing to it.');
-    if (q.stop) return null;
-    var cid = kd.b64u(hasher.digest()), type = typeOf(name);
+      cid = kd.b64u(await hasher.digest());
+    } finally { hasher.abort(); }
+    var type = typeOf(name);
     var kept = await window.keoLibrary.pointStore({ cid: cid, name: name, type: type, size: size, mtimeMs: g.mtimeMs, point: { path: g.path, mac: g.mac }, hashes: hashes });
     return { id: kept.id, name: name, type: type, size: size, existed: kept.existed, pointed: kept.pointed };
   }

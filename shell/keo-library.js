@@ -258,6 +258,10 @@
 
   // ---- files sent in chunks ----------------------------------------------------------------------------------------------
   var uploads = {};     // upload id -> { did, fid, name, type, size, next, got, hasher, last }. Memory only: a reload loses them.
+  // The hasher (keo-hash.js) hashes on a worker: it keeps running state there until it is finished or told to let go. So an upload is
+  // never dropped from the table with a plain `delete`: forget() lets its hash go too, and forgetAll() also stops the worker.
+  function forget(id) { var u = uploads[id]; if (u) { delete uploads[id]; u.hasher.abort(); } }
+  function forgetAll() { Object.keys(uploads).forEach(forget); uploads = {}; window.keoHash.shutdown(); }
   function chunkAad(did, fid, n) { return 'keo-library-chunk\n' + did + '\n' + fid + '\n' + n; }
   function fileAad(did, cid) { return 'keo-library-file\n' + did + '\n' + cid; }
   function randomId() { return kd.b64u(crypto.getRandomValues(new Uint8Array(16))); }
@@ -280,7 +284,7 @@
   // The uploads of this identity that are still going; an upload idle for too long is forgotten (its chunks are swept later).
   function liveUploads(did) {
     var now = Date.now(), out = [];
-    Object.keys(uploads).forEach(function (k) { var u = uploads[k]; if (now - u.last > UPLOAD_IDLE_MS) delete uploads[k]; else if (u.did === did) out.push(u); });
+    Object.keys(uploads).forEach(function (k) { var u = uploads[k]; if (now - u.last > UPLOAD_IDLE_MS) forget(k); else if (u.did === did) out.push(u); });
     return out;
   }
   // What the uploads still going have announced but not yet stored: room that is already spoken for, though the browser's estimate
@@ -291,7 +295,7 @@
   function getUpload(id, s) {
     var u = uploads[String(id)];
     if (!u || u.did !== s.did) throw new Error('That upload is not open (it may have timed out).');
-    if (Date.now() - u.last > UPLOAD_IDLE_MS) { delete uploads[String(id)]; throw new Error('That upload timed out.'); }
+    if (Date.now() - u.last > UPLOAD_IDLE_MS) { forget(String(id)); throw new Error('That upload timed out.'); }
     return u;
   }
   // Removes what an upload that never finished left behind. Only uploads that have been quiet for the idle time: another tab of the
@@ -338,7 +342,7 @@
       await sweepPending(s.did);
       var fid = randomId(), up = randomId(), fk = s.did + '|' + fid;
       await tx(['pending'], 'readwrite', function (t) { t.objectStore('pending').put({ id: fk, did: s.did, at: Date.now() }); });
-      uploads[up] = { did: s.did, fid: fid, name: cleanName(args.name), type: cleanType(args.type), size: size, next: 0, got: 0, hasher: window.keoSha256.create(), last: Date.now() };
+      uploads[up] = { did: s.did, fid: fid, name: cleanName(args.name), type: cleanType(args.type), size: size, next: 0, got: 0, hasher: window.keoHash.create(size), last: Date.now() };
       return { upload: up, chunkBytes: CHUNK_BYTES };
     });
   }
@@ -358,14 +362,14 @@
         t.objectStore('chunks').put({ id: fk + '|' + u.next, did: s.did, fk: fk, iv: kd.b64u(iv), ct: ct });
         t.objectStore('pending').put({ id: fk, did: s.did, at: Date.now() });      // alive: keeps another tab's sweep away
       });
-      u.hasher.update(bytes);
+      await u.hasher.update(bytes);                  // on a worker: the shell's thread is free while it is folded in; waits only when the worker is two chunks behind
       u.next++; u.got += bytes.length; u.last = Date.now();
       return { received: u.got };
     });
   }
   // Drops an upload and what it stored.
   async function discard(s, id, u) {
-    delete uploads[id];
+    forget(id);
     var fk = s.did + '|' + u.fid;
     await tx(['chunks', 'pending'], 'readwrite', function (t) { dropChunks(t, fk); t.objectStore('pending').delete(fk); });
   }
@@ -375,7 +379,7 @@
     return serial(async function () {
       var s = session(), id = String(args.upload), u = getUpload(id, s);
       if (u.got !== u.size) throw new Error('The file is not complete: ' + u.got + ' of ' + u.size + ' bytes arrived.');
-      var cid = kd.b64u(u.hasher.digest()), key = idOf(s.did, cid), fk = s.did + '|' + u.fid;
+      var cid = kd.b64u(await u.hasher.digest()), key = idOf(s.did, cid), fk = s.did + '|' + u.fid;
       var have = await tx(['files', 'blobs'], 'readonly', function (t) { var a = get(t, 'files', key), b = get(t, 'blobs', key); return function () { return a() || b(); }; });
       var existed = !!(have && have.did === s.did), used = await readTotal(s.did);
       // A copy of bytes that were only kept where they lie replaces that record: the copy cannot be moved away or changed under it.
@@ -395,7 +399,7 @@
         t.objectStore('files').put(rec);
         t.objectStore('blobtotal').put({ did: s.did, total: used + u.size });
       });
-      delete uploads[id];
+      forget(id);
       return { id: cid, size: u.size, existed: existed };
     });
   }
@@ -1008,7 +1012,7 @@
       return { did: s.did, m: m, cid: cid, fk: fk, man: man };
     });
     if (begun.skip) return { status: 'skipped', size: 0 };
-    var hasher = window.keoSha256.create(), m = begun.m;
+    var m = begun.m, hasher = window.keoHash.create(m.size);
     try {
       for (var n = 0; n < m.chunks; n++) {
         var rec = await args.readChunk(n);
@@ -1020,7 +1024,7 @@
           try { plain = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: kd.unb64u(rec.iv), additionalData: enc.encode(chunkAad(cur.did, m.fid, n)) }, cur.key, rec.ct)); }
           catch (e) { throw new Error('A file in this data could not be decrypted (wrong identity, or it was changed).'); }
           if (plain.length !== chunkLength(m, n)) throw new Error('A file in this data is damaged: a chunk has the wrong length.');
-          hasher.update(plain);
+          await hasher.update(plain);
           await tx(['chunks', 'pending'], 'readwrite', function (t) {
             t.objectStore('chunks').put({ id: begun.fk + '|' + n, did: cur.did, fk: begun.fk, iv: rec.iv, ct: rec.ct });
             t.objectStore('pending').put({ id: begun.fk, did: cur.did, at: Date.now() });
@@ -1030,7 +1034,7 @@
       return await serial(async function () {
         var cur = session();
         if (cur.did !== begun.did) throw new Error('The signed-in identity changed.');
-        if (kd.b64u(hasher.digest()) !== begun.cid) throw new Error('A file in this data does not match its name.');
+        if (kd.b64u(await hasher.digest()) !== begun.cid) throw new Error('A file in this data does not match its name.');
         var used = await readTotal(cur.did);
         await tx(['files', 'pending', 'blobtotal'], 'readwrite', function (t) {
           t.objectStore('files').put({ id: idOf(cur.did, begun.cid), did: cur.did, iv: begun.man.iv, ct: begun.man.ct });
@@ -1040,6 +1044,7 @@
         return { status: 'added', size: m.size };
       });
     } catch (e) {
+      hasher.abort();                                                              // the worker keeps state for a file until it is told to let go
       await serial(function () { return tx(['chunks', 'pending'], 'readwrite', function (t) { dropChunks(t, begun.fk); t.objectStore('pending').delete(begun.fk); }); }).catch(function () {});
       throw e;
     }
@@ -1057,12 +1062,12 @@
   }
 
   // The session ended: uploads that were open are gone (their chunks are swept by the next upload).
-  function reset() { uploads = {}; }
+  function reset() { forgetAll(); }
 
   // Removing an identity removes its library. Needs no key: the records are found by DID.
   function purge(did) {
     return serial(function () {
-      uploads = {};
+      forgetAll();
       return tx(['docs', 'blobs', 'blobtotal', 'files', 'chunks', 'pending', 'thumbs'], 'readwrite', function (t) {
         ['docs', 'blobs', 'files', 'chunks', 'pending', 'thumbs'].forEach(function (name) {
           var ix = t.objectStore(name).index('did').openKeyCursor(IDBKeyRange.only(did));
