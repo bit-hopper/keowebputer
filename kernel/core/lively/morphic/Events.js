@@ -1794,8 +1794,18 @@ lively.morphic.Text.addMethods(
         var s = this.priorSelectionRange;
         if (s) {
             delete this.priorSelectionRange;
-            var self = this;
-            (function() { self.setSelectionRange(s[0], s[1]); }).delay(0);
+            var self = this,
+                // The restore runs on a later tick, and that tick can come late (seen 130 ms after the focus, behind a run of key
+                // events). A key pressed before it runs cancels it (Text>>onKeyDown clears this): the saved range can be long stale
+                // (a field first clicked while empty keeps [0,0]), and restoring it after typing has started moves the caret to the
+                // start of the field, or collapses a select-all, so text typed over the old text lands in front of it or after its
+                // own first letters. Kept on the prototype, as activeInstance is, so that it is not saved into a world.
+                pending = this.constructor.prototype.pendingFocusRestore = {};
+            (function() {
+                if (self.constructor.prototype.pendingFocusRestore !== pending) return;
+                delete self.constructor.prototype.pendingFocusRestore;
+                self.setSelectionRange(s[0], s[1]);
+            }).delay(0);
         };
         this.logChangeForUndo();
         // Each second, check if there is more text to log

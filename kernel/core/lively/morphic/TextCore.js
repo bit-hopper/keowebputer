@@ -672,6 +672,8 @@ lively.morphic.Morph.subclass('lively.morphic.Text', Trait('TextChunkOwner'),
 
     onKeyDown: function(evt) {
         this.cachedTextString = null;
+        // a key pressed after a focus keeps what it did: drop the selection restore that Text>>onFocus left pending
+        delete this.constructor.prototype.pendingFocusRestore;
         var shortCutResults = this.shortcutHandlers.invoke('invoke', evt, this);
         if (shortCutResults.include(true)) {
             evt.stop();

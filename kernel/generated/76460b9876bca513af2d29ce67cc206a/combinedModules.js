@@ -1,4 +1,4 @@
-// This file was generated on Tue, 17 Nov 2026 00:02:19 GMT
+// This file was generated on Wed, 18 Nov 2026 04:23:30 GMT
 
 JSLoader.expectToLoadModules(["core/lib/lively-libs-debug.js","node_modules/lively.lang/dist/lively.lang.dev.js","node_modules/lively.ast/dist/lively.ast_no-deps.js","core/lively/Migration.js","core/lively/JSON.js","core/lively/lang/LocalStorage.js","core/lively/Base.js","core/lively/ModuleSystem.js","core/lively/net/Wiki.js","core/lively/store/Interface.js","core/lively/net/SessionTracker.js","core/lively/Network.js","core/lively/IPad.js","core/lively/ide.js","core/lively/ide/tools/Differ.js","core/lively/ide/CommandLineInterface.js","core/lively/ide/FileSystem.js","core/lively/morphic/Graphics.js","apps/ColorParser.js","core/lively/persistence/BuildSpec.js","core/lively/persistence/BuildSpecMorphExtensions.js","core/lively/morphic/Core.js","core/lively/Traits.js","core/lively/morphic/Shapes.js","core/lively/morphic/Serialization.js","core/lively/users/Core.js","core/lively/DOMAbstraction.js","core/lively/morphic/TextCore.js","core/cop/Layers.js","core/lively/persistence/Serializer.js","core/lively/ide/ErrorViewer.js","core/lively/ide/SystemCodeBrowser.js","core/lively/ide/SyntaxHighlighting.js","core/lively/ide/BrowserFramework.js","core/lively/morphic/Widgets.js","core/lively/morphic/MobileInterface.js","core/lively/morphic/Styles.js","core/lively/CrayonColors.js","core/lively/morphic/Events.js","core/lively/ide/commands/default.js","core/lively/morphic/Clipboard.js","core/lively/data/FileUpload.js","core/lively/ide/CodeEditor.js","core/lively/lang/VM.js","core/lively/ast/acorn.js","core/lively/ide/codeeditor/Modes.js","core/lively/ide/codeeditor/ace.js","core/lively/ide/codeeditor/Snippets.js","core/lively/ide/codeeditor/EvalMarker.js","core/lively/ide/codeeditor/Keyboard.js","core/lively/ide/codeeditor/JumpChar.js","core/lively/ide/codeeditor/TextOverlay.js","core/lively/ide/codeeditor/Commands.js","core/lively/ide/codeeditor/DocumentChange.js","core/lively/morphic.js","core/lively/morphic/Complete.js","core/lively/morphic/TextFormattingSupport.js","core/lively/morphic/TextFormattingToolbar.js","core/lively/morphic/constraints/Core.js","core/lively/morphic/ObjectMigration.js","core/lively/morphic/Layout.js","core/lively/morphic/Halos.js","core/lively/morphic/ScriptingSupport.js","core/lively/morphic/Connectors.js","core/lively/bindings/GeometryBindings.js","core/lively/bindings/Core.js","core/lively/morphic/AdditionalMorphs.js","core/lively/morphic/TabMorphs.js","core/lively/morphic/Grid.js","core/lively/persistence/MassMorphCreation.js","core/lively/PartsBin.js","core/lively/morphic/MorphAddons.js","core/lively/morphic/Lists.js","core/lively/morphic/StyleSheets.js","core/lively/morphic/StyleSheetsHTML.js","core/lively/morphic/HTML.js","core/lively/morphic/PathShapes.js","core/lively/morphic/Rendering.js","core/lively/morphic/StyleSheetRepresentation.js","apps/cssParser.js","core/lively/ide/SourceDatabase.js","core/lively/ide/FileParsing.js","core/lively/LKFileParser.js","core/ometa/lively.js","core/lively/Ometa.js","core/lively/ide/BrowserCommands.js","core/lively/ide/SystemBrowserNodes.js","core/lively/Helper.js","core/lively/LogHelper.js","core/lively/Main.js","core/lively/bindings.js"]);
 
@@ -29463,6 +29463,8 @@ module('lively.morphic.TextCore').requires('cop.Layers', 'lively.morphic.Core').
 
         onKeyDown: function onKeyDown(evt) {
             this.cachedTextString = null;
+            // a key pressed after a focus keeps what it did: drop the selection restore that Text>>onFocus left pending
+            delete this.constructor.prototype.pendingFocusRestore;
             var shortCutResults = this.shortcutHandlers.invoke('invoke', evt, this);
             if (shortCutResults.include(true)) {
                 evt.stop();
@@ -46631,8 +46633,17 @@ module('lively.morphic.Events').requires('lively.morphic.Core', 'lively.morphic.
             var s = this.priorSelectionRange;
             if (s) {
                 delete this.priorSelectionRange;
-                var self = this;
+                var self = this,
+
+                // The restore runs on a later tick, and that tick can come late (seen 130 ms after the focus, behind a run of key
+                // events). A key pressed before it runs cancels it (Text>>onKeyDown clears this): the saved range can be long stale
+                // (a field first clicked while empty keeps [0,0]), and restoring it after typing has started moves the caret to the
+                // start of the field, or collapses a select-all, so text typed over the old text lands in front of it or after its
+                // own first letters. Kept on the prototype, as activeInstance is, so that it is not saved into a world.
+                pending = this.constructor.prototype.pendingFocusRestore = {};
                 (function () {
+                    if (self.constructor.prototype.pendingFocusRestore !== pending) return;
+                    delete self.constructor.prototype.pendingFocusRestore;
                     self.setSelectionRange(s[0], s[1]);
                 }).delay(0);
             };
