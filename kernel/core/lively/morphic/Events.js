@@ -1752,6 +1752,9 @@ lively.morphic.Text.addMethods(
         this.logChangeForUndo();
         $super(evt);
         delete this.constructor.prototype.activeInstance;
+        // A restore that onFocus left pending belongs to the text that had the focus. setSelectionRange focuses a text that is not
+        // focused, so a tick that ran after the focus had moved on would take the focus back from the text that has it now.
+        delete this.constructor.prototype.pendingFocusRestore;
         // The formatting toolbar (TextFormattingSupport.js) decides itself
         // when focus has really left its text -- it must keep the selection
         // while a toolbar button or the color picker is in use -- and clears
@@ -1796,7 +1799,7 @@ lively.morphic.Text.addMethods(
             delete this.priorSelectionRange;
             var self = this,
                 // The restore runs on a later tick, and that tick can come late (seen 130 ms after the focus, behind a run of key
-                // events). A key pressed before it runs cancels it (Text>>onKeyDown clears this): the saved range can be long stale
+                // events). A key, or the focus leaving, cancels it first (onKeyDown, onBlur): the saved range can be long stale
                 // (a field first clicked while empty keeps [0,0]), and restoring it after typing has started moves the caret to the
                 // start of the field, or collapses a select-all, so text typed over the old text lands in front of it or after its
                 // own first letters. Kept on the prototype, as activeInstance is, so that it is not saved into a world.

@@ -1,14 +1,18 @@
 // A text field that gets focus puts back the selection saved before the focus, one tick later (Text>>onFocus). That range can be long
 // stale (a field first clicked while it was empty keeps [0,0]) and the tick can come late, behind a run of key events; a restore that
 // lands after the first key has gone in moves the caret to the start of the field or collapses a select-all, so a name typed over the
-// old text ended up in front of it ("Fresh startTrip") or after its own first letters ("resh startF"). A key pressed before the tick
-// must cancel the restore; a focus with no key before the tick must restore as before.
+// old text ended up in front of it ("Fresh startTrip") or after its own first letters ("resh startF"). And a restore that lands after
+// the focus has moved to another field focuses the first field again (setSelectionRange focuses a text that is not focused). So a key
+// pressed, or the focus leaving, before the tick must cancel the restore; a focus with neither before the tick must restore as before.
 // Usage: node keo-textfocus-test.js <repo root> <extension folder> <work dir>
-// Not a race: the key is sent in the same task as the focus, so the tick cannot have run yet. That makes it fail on a build without the
-// change every time, and pass with it. The last check types with real keys over a stale range, five times; it is an end-to-end guard
-// that typing still works, NOT a test of the change (without the change it passes most of the time, the tick being usually early).
-// A headed browser with the extension loaded, `localhost` unresolvable, a virtual authenticator (the guest world needs none, it is
-// there like in the other tests). NOT covered: a mouse click as the way the focus arrives (the restore still runs after a click).
+// Not a race: the key (or the second focus) comes in the same task as the first focus, so the tick cannot have run yet. That makes the
+// checks fail on a build without the change every time, and pass with it. Nothing waits by sleeping: an effect that should appear is
+// polled for, and a tick that must already have run is waited for with a timer of the test's own queued behind it (timers of equal delay
+// run in the order they were queued), so a slow machine cannot make a check pass or fail by timing. The last check types with real
+// keys over a stale range, five times; it is an end-to-end guard that typing still works, NOT a test of the change (without the change
+// it passes most of the time, the tick being usually early).
+// A headed browser with the extension loaded, `localhost` unresolvable (the guest world needs no identity). NOT covered: a mouse click as
+// the way the focus arrives (the restore still runs after a click), and a focus that leaves because the whole window loses it.
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
@@ -17,6 +21,7 @@ const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = 0, passed = 0;
 function check(name, ok, detail) { if (ok) passed++; else failed++; console.log((ok ? 'PASS ' : 'FAIL ') + name + (detail !== undefined && !ok ? '  -> ' + JSON.stringify(detail).slice(0, 700) : '')); }
+async function until(fn, ms) { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > (ms || 5000)) return v; await sleep(100); } }
 
 const worldFrame = (page) => page.frames().find((f) => /world\.html$/.test(f.url()));
 async function waitForWorld(page, kind) {
@@ -27,6 +32,10 @@ async function waitForWorld(page, kind) {
   }
   throw new Error('the world did not start as ' + kind);
 }
+// Resolves when every timer queued before this call has run: one of its own goes in behind them, twice, so a tick that a tick queues is
+// covered too.
+const afterTicks = (frame) => frame.evaluate(() => new Promise((res) => setTimeout(() => setTimeout(res, 0), 0)));
+const rangeOf = (frame, which) => frame.evaluate((w) => window[w].getSelectionRange(), which);
 
 (async () => {
   fs.mkdirSync(WORK, { recursive: true });
@@ -38,9 +47,14 @@ async function waitForWorld(page, kind) {
     const page = await ctx.newPage();
     await page.goto(`chrome-extension://${ID}/start.html#guest`);
     const frame = await waitForWorld(page, 'guest');
-    // a one-line field holding "Trip", made the way the Create page of "My worlds" makes its name field
-    await frame.evaluate(() => { const t = new lively.morphic.Text(lively.rect(40, 100, 240, 26), 'Trip'); t.name = 'focusTestField'; t.beInputLine(); $world.addMorph(t); window.__t = t; });
+    // two one-line fields, made the way the Create page of "My worlds" makes its name field; __t holds Trip
+    await frame.evaluate(() => {
+      const mk = (text, y) => { const t = new lively.morphic.Text(lively.rect(40, y, 240, 26), text); t.beInputLine(); $world.addMorph(t); return t; };
+      window.__t = mk('Trip', 100); window.__t.name = 'focusTestField';
+      window.__other = mk('Other', 160); window.__other.name = 'focusTestOther';
+    });
     check('setup: the field is there and holds Trip', (await frame.evaluate(() => String(window.__t.textString))) === 'Trip');
+    await afterTicks(frame);
 
     // ---- a key pressed before the tick keeps what it did
     // The saved range is the stale one; focus() runs onFocus at once (the restore now waits for its tick); a select-all goes in at once,
@@ -54,17 +68,31 @@ async function waitForWorld(page, kind) {
       return { focused: t.isFocused(), waiting, cancelledByTheKey: !t.constructor.prototype.pendingFocusRestore, range: t.getSelectionRange() };
     });
     check('stale range: the focus is on the field and the select-all took effect at once', a.focused && Array.isArray(a.range) && a.range[0] === 0 && a.range[1] === 4, a);
-    await sleep(200);
+    await afterTicks(frame);
     const after = await frame.evaluate(() => ({ range: window.__t.getSelectionRange(), text: String(window.__t.textString) }));
     check('stale range: the tick that comes after the key does not collapse the select-all', Array.isArray(after.range) && after.range[0] === 0 && after.range[1] === 4, after);
     check('stale range: the pending restore was marked, and the key cancelled it', a.waiting === true && a.cancelledByTheKey === true, a);
 
-    // ---- no key before the tick: the restore is made as it always was
+    // ---- the focus leaves before the tick: the restore is for a field that has no focus now, and must not take it back
+    const d = await frame.evaluate(() => {
+      const t = window.__t, o = window.__other;
+      t.blur(); o.blur(); t.priorSelectionRange = [0, 0];
+      t.focus();                                  // the restore for t waits for its tick
+      const waiting = !!t.constructor.prototype.pendingFocusRestore;
+      o.focus();                                  // the focus moves on in the same task
+      return { waiting, holder: t.isFocused() ? 't' : o.isFocused() ? 'other' : 'none', pendingAfterMove: !!t.constructor.prototype.pendingFocusRestore };
+    });
+    await afterTicks(frame);
+    const dLater = await frame.evaluate(() => ({ holder: window.__t.isFocused() ? 't' : window.__other.isFocused() ? 'other' : 'none',
+      domFocusInOther: window.__other.renderContext().textNode.contains(document.activeElement), domFocusInT: window.__t.renderContext().textNode.contains(document.activeElement) }));
+    check('focus moves on: the focus is on the field that has it after the tick, not taken back', d.waiting === true && d.holder === 'other' && dLater.holder === 'other' && dLater.domFocusInOther && !dLater.domFocusInT, { d, dLater });
+    check('focus moves on: nothing is left pending', d.pendingAfterMove === false, d);
+
+    // ---- neither a key nor a focus change before the tick: the restore is made as it always was
     await frame.evaluate(() => { const t = window.__t; t.blur(); t.priorSelectionRange = [1, 3]; t.focus(); });
-    await sleep(200);
-    const restored = await frame.evaluate(() => ({ range: window.__t.getSelectionRange(), pending: !!window.__t.constructor.prototype.pendingFocusRestore }));
-    check('no key: the saved range is put back as before (1 to 3)', Array.isArray(restored.range) && restored.range[0] === 1 && restored.range[1] === 3, restored);
-    check('no key: nothing is left pending afterwards', restored.pending === false, restored);
+    const restored = await until(async () => { const r = await rangeOf(frame, '__t'); return Array.isArray(r) && r[0] === 1 && r[1] === 3 ? r : null; });
+    check('no key, no move: the saved range is put back as before (1 to 3)', !!restored, await rangeOf(frame, '__t'));
+    check('no key, no move: nothing is left pending afterwards', (await frame.evaluate(() => !!window.__t.constructor.prototype.pendingFocusRestore)) === false);
 
     // ---- nothing new is kept on the morph, so nothing new is saved into a world
     const own = await frame.evaluate(() => ({ own: Object.prototype.hasOwnProperty.call(window.__t, 'pendingFocusRestore'), keys: Object.keys(window.__t).filter((k) => /pending/i.test(k)) }));
@@ -76,10 +104,10 @@ async function waitForWorld(page, kind) {
       // charsTyped is emptied as a click on the field would (Text>>onMouseUp): while it holds what was typed before, Ctrl+A selects only that
       // "recent typing", not the whole text, and the check would be about that and not about the restore.
       await frame.evaluate(() => { const t = window.__t; t.setTextString('Trip'); t.charsTyped = ''; t.blur(); t.priorSelectionRange = [0, 0]; });
-      await sleep(150);
+      await afterTicks(frame);
       await frame.evaluate(() => window.__t.focus());
       await page.keyboard.press('Control+A'); await page.keyboard.type('F'); await page.keyboard.type('resh start', { delay: 10 });
-      await sleep(250);
+      await until(async () => (await frame.evaluate(() => String(window.__t.textString))) === 'Fresh start', 3000);
       typed.push(await frame.evaluate(() => String(window.__t.textString)));
     }
     check('typing over the old text with real keys, five times, gives "Fresh start" each time', typed.every((x) => x === 'Fresh start'), typed);
