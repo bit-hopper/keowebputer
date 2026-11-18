@@ -233,6 +233,10 @@ const promptDiag = (frame) => frame.evaluate(() => { const out = []; (function w
     await until(() => textRect(page, frame, 'Copy…'), 5000);
     await click(page, await textRect(page, frame, 'Copy…'));
     await until(() => hasText(frame, 'Name for the copy'), 6000);
+    // The question shows before its field exists and has focus (see answerPrompt): an Enter pressed in that gap goes nowhere and the prompt
+    // stays up. So wait for the field, holding the suggested name "<name> copy", to have the focus, and say so if it never does.
+    const copyFieldReady = await until(() => frame.evaluate(() => { const m = lively.morphic.Morph.focusedMorph(); return !!m && String(m.textString) === 'Budget 2026 copy'; }), 8000);
+    check('copy: the prompt has its suggested name in a focused field before Enter is pressed', !!copyFieldReady);
     await page.keyboard.press('Enter');          // the suggested name is "<name> copy"
     win = await until(async () => { const s = await readWin(frame); return s && s.rows.length === 4 ? s : null; });
     const copyDiag = win ? null : { promptStillUp: await hasText(frame, 'Name for the copy'), window: await readWin(frame), shell: (await keoCall(frame, 'world.list')).r.map((w) => w.name) };
