@@ -11,8 +11,12 @@
 // run in the order they were queued), so a slow machine cannot make a check pass or fail by timing. The last check types with real
 // keys over a stale range, five times; it is an end-to-end guard that typing still works, NOT a test of the change (without the change
 // it passes most of the time, the tick being usually early).
-// A headed browser with the extension loaded, `localhost` unresolvable (the guest world needs no identity). NOT covered: a mouse click as
-// the way the focus arrives (the restore still runs after a click), and a focus that leaves because the whole window loses it.
+// A click into a field is the other way a focus arrives: the browser puts the caret where the click was made and focuses the field, and the
+// range saved by an earlier click must not be put back over it a tick later. Text>>onMouseDown drops the saved range when the press is about
+// to focus the text. The click checks use real mouse presses (a control that has no saved range, then the case itself) and the same timer
+// barrier as above.
+// A headed browser with the extension loaded, `localhost` unresolvable (the guest world needs no identity). NOT covered: a focus that leaves
+// because the whole window loses it, and a click on a field that cannot take the focus.
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
@@ -93,6 +97,41 @@ const rangeOf = (frame, which) => frame.evaluate((w) => window[w].getSelectionRa
     const restored = await until(async () => { const r = await rangeOf(frame, '__t'); return Array.isArray(r) && r[0] === 1 && r[1] === 3 ? r : null; });
     check('no key, no move: the saved range is put back as before (1 to 3)', !!restored, await rangeOf(frame, '__t'));
     check('no key, no move: nothing is left pending afterwards', (await frame.evaluate(() => !!window.__t.constructor.prototype.pendingFocusRestore)) === false);
+
+    // ---- a click into a field is the other way a focus arrives, and there the caret goes where the click was made
+    // The browser puts the caret at the click and focuses the field; the range saved by an earlier click must not be put back over it. These are real
+    // mouse presses. The check that needs the tick to have run waits for it with a timer of the test's own queued behind it, not with a sleep. A press that
+    // lasts 50 ms is what a hand does (the press length is not what the checks wait on).
+    const off = await (await frame.frameElement()).boundingBox();      // the world frame's place in the page: frame coordinates to page coordinates
+    await frame.evaluate(() => { const t = new lively.morphic.Text(lively.rect(40, 230, 380, 26), 'alpha beta gamma delta'); t.beInputLine(); t.name = 'focusTestClick'; $world.addMorph(t); window.__c = t; });
+    await afterTicks(frame);
+    // the page position of the boundary before character i of the field's text (a collapsed range's rectangle)
+    const boundary = async (i) => {
+      const b = await frame.evaluate((idx) => {
+        const node = window.__c.renderContext().textNode, w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT); let rem = idx, n, tn = null, o = 0;
+        while ((n = w.nextNode())) { if (rem <= n.length) { tn = n; o = rem; break; } rem -= n.length; }
+        if (!tn) return null;
+        const r = document.createRange(); r.setStart(tn, o); r.collapse(true); const rc = r.getBoundingClientRect(); return { x: rc.left, y: (rc.top + rc.bottom) / 2 };
+      }, i);
+      return b && { x: off.x + b.x, y: off.y + b.y };
+    };
+    const press = async (p) => { await page.mouse.move(p.x, p.y); await page.mouse.click(p.x, p.y, { delay: 50 }); };
+    const len = await frame.evaluate(() => String(window.__c.textString).length), mid = 6;      // "alpha |beta ..."
+    const pMid = await boundary(mid), pEnd = await boundary(len);
+    check('click setup: the field holds the text and both click points are found', len === 22 && !!pMid && !!pEnd, { len, pMid, pEnd });
+    // control: a field that has never been clicked has no saved range, so this shows the click geometry and the caret reading are right
+    await press(pMid); await afterTicks(frame);
+    check('click control: a click into a field never clicked before puts the caret where it was made (6)', JSON.stringify(await rangeOf(frame, '__c')) === JSON.stringify([mid, mid]), await rangeOf(frame, '__c'));
+    // the case itself: a range saved at the end by a click, the field blurs, then a click in the middle
+    await press({ x: pEnd.x + 1, y: pEnd.y });
+    const savedEnd = await until(async () => { const r = await frame.evaluate(() => window.__c.priorSelectionRange || null); return r && r[0] === len && r[1] === len ? r : null; }, 3000);
+    await frame.evaluate(() => window.__c.blur());
+    const blurred = await frame.evaluate(() => ({ focused: window.__c.isFocused(), prior: window.__c.priorSelectionRange || null }));
+    check('click setup: the field has a saved range at its end and no focus', !!savedEnd && blurred.focused === false && Array.isArray(blurred.prior) && blurred.prior[0] === len, { savedEnd, blurred });
+    await press(pMid); await afterTicks(frame);
+    const landed = await frame.evaluate(() => ({ range: window.__c.getSelectionRange(), focused: window.__c.isFocused(), pending: !!window.__c.constructor.prototype.pendingFocusRestore }));
+    check('click: a click into a field that has a saved range puts the caret where it was made (6), not at the old place', Array.isArray(landed.range) && landed.range[0] === mid && landed.range[1] === mid && landed.focused, landed);
+    check('click: nothing is left pending after the click', landed.pending === false, landed);
 
     // ---- nothing new is kept on the morph, so nothing new is saved into a world
     const own = await frame.evaluate(() => ({ own: Object.prototype.hasOwnProperty.call(window.__t, 'pendingFocusRestore'), keys: Object.keys(window.__t).filter((k) => /pending/i.test(k)) }));

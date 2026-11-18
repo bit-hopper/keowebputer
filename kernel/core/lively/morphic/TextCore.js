@@ -1413,6 +1413,12 @@ lively.morphic.Morph.subclass('lively.morphic.Text', Trait('TextChunkOwner'),
 
         if (this.isFocused()) {
             this.priorSelectionRange = this.getSelectionRange();  // save for onMouseUp
+        } else {
+            // This press is about to focus the text, and the browser puts the caret where it was pressed. Text>>onFocus (Events.js)
+            // would put the range saved by an earlier click back over that caret a tick later, so a click into a text that had been
+            // clicked before landed at the old place, not where it was made. The press chooses the caret, so the saved range goes
+            // here; a focus that does not come from a press (Tab, focus() from code) still gets its restore.
+            delete this.priorSelectionRange;
         }
 
         return false;
