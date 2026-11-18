@@ -203,7 +203,9 @@ module('lively.identity.BannerLines')
       var canvas = document.createElement('canvas');
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
-      var ctx = canvas.getContext('2d');
+      // Kept in main memory: this canvas is only ever read back (toDataURL). Left to the browser it may live with the graphics process,
+      // and a read then held the page for up to 135 ms (about 230 ms for the five made while the world was entering, headless); in main memory the five took about 15.
+      var ctx = canvas.getContext('2d', { willReadFrequently: true });
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       _draw(ctx, w, h, seedStr);
       var url = canvas.toDataURL();

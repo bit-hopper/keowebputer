@@ -2244,7 +2244,9 @@ module('lively.identity.PostCardUtils')
       }
       var bc = document.createElement('canvas');
       bc.width = bc.height = SZ * SC;
-      var bctx = bc.getContext('2d');
+      // Kept in main memory: this canvas is only ever read back (toDataURL). Left to the browser it may live with the graphics process,
+      // and a read then held the page for up to 135 ms (about 230 ms for the five made while the world was entering, headless); in main memory the five took about 15.
+      var bctx = bc.getContext('2d', { willReadFrequently: true });
       cells.forEach(function (row, r) {
         row.forEach(function (v, col) {
           bctx.fillStyle = v === 1 ? fg : v === 2 ? spot : bg;
