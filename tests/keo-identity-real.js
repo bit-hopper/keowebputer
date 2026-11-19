@@ -44,6 +44,10 @@ const asResult = (e, r) => (e ? { err: e.name + ': ' + e.message } : { r });
     const errors = [];
     page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message.slice(0, 200)));
     page.on('console', (m) => { if (m.type() === 'error' && !/compute-pressure/.test(m.text())) errors.push('console: ' + m.text().slice(0, 200)); });
+    // The browser warns when the passkey request offers ES256 only (it does, on purpose). It is a warning, not a failure: it is written
+    // down so that a run says whether it was shown, and is not counted in the checks.
+    const warnings = [];
+    page.on('console', (m) => { if (m.type() === 'warning' && /pubKeyCredParams/.test(m.text())) warnings.push(m.text().slice(0, 120)); });
     await page.goto(`chrome-extension://${ID}/start.html#guest`);
     let frame = await waitForWorld(page);
     const env = await page.evaluate(() => ({ ua: navigator.userAgent, uvpaa: null, caps: null }));
@@ -84,12 +88,16 @@ const asResult = (e, r) => (e ? { err: e.name + ': ' + e.message } : { r });
       check('stored: wrapped secret 40 bytes, device and discovery keys non-extractable', stored.wrappedLen === 40 && stored.deviceExtractable === false && stored.discExtractable === false, stored);
 
       // ---- sign in
+      // Creating signs the new identity in (no third prompt), and a second sign-in is refused while one is open: end the session first, as
+      // keo-identity-test.js does, or this step fails before any prompt is shown.
+      await page.evaluate(() => window.keoIdentity.signOut());
       say('>>> PROMPT 3 of 4 coming: signing in with the new identity. Approve it.');
       const si = await frame.evaluate((did) => new Promise((res) => lively.identity.localIdentity.signIn(did, (e, r) => res(e ? { err: e.name + ': ' + e.message } : { r }))), A.did);
       say('focus diagnostics: ' + JSON.stringify(si.r && si.r.diag));
       check('signIn: works with the real authenticator (PRF unwrap, secret non-extractable)', !si.err && si.r && si.r.secretNonExtractable === true && si.r.assertionOrigin === 'chrome-extension://' + ID, si);
 
       // ---- sign in again after a reload
+      await page.evaluate(() => window.keoIdentity.signOut());     // a refresh keeps a session, so end it to see sign-in from scratch
       await page.reload();
       frame = await waitForWorld(page);
       await page.bringToFront();
@@ -102,6 +110,7 @@ const asResult = (e, r) => (e ? { err: e.name + ': ' + e.message } : { r });
     } else {
       say('create failed, so the later steps are skipped. If this is NotAllowedError, check the environment (the browser and the OS passkey provider) before suspecting the code.');
     }
+    say('console warnings about pubKeyCredParams seen: ' + warnings.length + (warnings.length ? ' (a warning, not a failure)' : ''));
     check('no page errors', errors.filter((e) => !/IdentityServer\/session/.test(e)).length === 0, errors);
   } finally { await ctx.close(); }
   fs.writeFileSync(path.join(WORK, 'keo-identity-real.json'), JSON.stringify(results, null, 2));
