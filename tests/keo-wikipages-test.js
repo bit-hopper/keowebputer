@@ -275,5 +275,34 @@ const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); re
   const rec2 = (await T3.store.pages())[0];
   ok('the listing counts what waits apart from what is held', rec2.versions === 1 && rec2.pending === 1, rec2);
 
+  // ================================================================ what the list shows of a page: created, category, tags; one damaged page
+  const T4 = await setup(A, A.d1);
+  const oc = await T4.pages.open({ name: 'places' }), ec = editor(oc);
+  const rc = await T4.pages.edit({ session: oc.session, n: ec.n(), update: ec.change((d) => { d.getText('body').insert(0, 'Paris'); const m = d.getMap('meta'); m.set('category', 'Place'); m.set('tags', ['France', 'Europe']); }) });
+  const op = await T4.pages.open({ name: 'plain' }), ep = editor(op);
+  await T4.pages.edit({ session: op.session, n: ep.n(), update: ep.change(insert('just text')) });
+  // A listing that throws must fail the checks below BY NAME, not end the run: `listed` gives the rows, or [] and the error.
+  let lastError = null;
+  const listed4 = async () => { try { lastError = null; return await T4.pages.list(); } catch (e) { lastError = String(e && e.message || e); return []; } };
+  let rows4 = await listed4();
+  const byName = (rs, n) => rs.filter((r) => r.name === n)[0] || { name: null, category: 'MISSING', tags: ['MISSING'], created: 'MISSING', unreadable: 'MISSING' };
+  ok('setup: both pages are saved and listed', rc.saved === true && rows4.length === 2 && !lastError, lastError || rows4);
+  ok('a page that sets its meta is listed with that category and those tags', byName(rows4, 'places').category === 'Place' && JSON.stringify(byName(rows4, 'places').tags) === JSON.stringify(['France', 'Europe']), byName(rows4, 'places'));
+  ok('a page with no meta is listed with no category and no tags', byName(rows4, 'plain').category === null && Array.isArray(byName(rows4, 'plain').tags) && byName(rows4, 'plain').tags.length === 0, byName(rows4, 'plain'));
+  ok('each row says when its page was created (an edit\'s own date) and that it is readable', rows4.every((r) => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(r.created) && r.unreadable === false), rows4.map((r) => r.created + ' ' + r.unreadable));
+  await T4.pages.edit({ session: oc.session, n: ec.n(), update: ec.change((d) => { d.getMap('meta').set('category', 'Event'); }) });
+  rows4 = await listed4();
+  ok('a category changed in a later edit shows in the list at once (the kept summary is not stale)', byName(rows4, 'places').category === 'Event' && JSON.stringify(byName(rows4, 'places').tags) === JSON.stringify(['France', 'Europe']), byName(rows4, 'places'));
+  // a page whose stored history is damaged (a version its record lists is gone) is still listed, and does not take the others with it
+  const ob = await T4.pages.open({ name: 'broken' }), eb = editor(ob);
+  const rBroken = await T4.pages.edit({ session: ob.session, n: eb.n(), update: eb.change(insert('soon damaged')) });
+  await T4.backend.del('version', rBroken.cid);
+  await T4.store.unload();                                // what is held in memory is forgotten, so the damage is met when the page is read again
+  rows4 = await listed4();
+  ok('listing with one damaged page among the others does not fail', !lastError && rows4.length === 3, lastError);
+  ok('a page with a missing version is still listed, and marked unreadable, with nothing but its name', rows4.length === 3 && byName(rows4, 'broken').unreadable === true && byName(rows4, 'broken').category === null && byName(rows4, 'broken').tags.length === 0 && byName(rows4, 'broken').created === null, rows4);
+  ok('the other pages are listed as before', byName(rows4, 'places').category === 'Event' && byName(rows4, 'plain').unreadable === false && byName(rows4, 'places').unreadable === false);
+  ok('setup check: the version record really is gone from the disk', (await T4.backend.get('version', rBroken.cid)) === undefined);
+
   console.log('\n' + passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('ERROR', e); process.exitCode = 1; });

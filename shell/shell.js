@@ -128,6 +128,8 @@
     'wiki.open': function (a) { return window.keoWiki.pages().open({ name: a.name, id: a.id }); },
     'wiki.edit': function (a) { return window.keoWiki.pages().edit({ session: a.session, n: a.n, update: a.update }); },
     'wiki.close': function (a) { return window.keoWiki.pages().close({ session: a.session }); },
+    // The wiki's index says which page it shows ({ id } or { name }, or nothing for none), so that a refresh comes back to it.
+    'wiki.here': function (a) { return wikiHere(a); },
     // The small objects the runtime's own apps keep (books, albums, folders), encrypted under the signed-in identity (keo-library.js).
     // `doc` is one object the world built; the shell checks whose it is and what kind, and stores it as it is.
     'library.get': function (a) { return window.keoLibrary.get({ objId: a.objId }); },
@@ -321,13 +323,34 @@
   // is not an error: the person lands where signing in lands.
   function rememberedPage(session) {
     var p = window.keoIdentity.place();
-    if (!p || p.kind !== 'wiki') return Promise.resolve(null);
+    if (!p) return Promise.resolve(null);
+    if (p.kind === 'wikiindex') {
+      // The wiki's index, with the page that was open in it if that can still be gone to (else the index alone).
+      return Promise.resolve().then(function () { return p.id ? window.keoWiki.pages().locate({ id: p.id }).then(function (page) { return page.id; }, function () { return null; }) : null; })
+        .then(function (open) { return { kind: 'wikiindex', session: session, open: open, newPage: false }; }, function () { return null; });
+    }
+    if (p.kind !== 'wiki') return Promise.resolve(null);
     return Promise.resolve().then(function () { return window.keoWiki.pages().locate({ id: p.id }); })
       .then(function (page) { return { kind: 'wiki', session: session, id: page.id, name: page.name }; }, function () { return null; });
   }
-  // What a start remembers for a refresh: the wiki page, or nothing (moving to a world, the home page or a new blank world forgets it, so a
-  // refresh there lands where it always did).
-  function placeOf(s) { return s && s.kind === 'wiki' ? { kind: 'wiki', id: s.id } : null; }
+  // What a start remembers for a refresh: the wiki page, or the wiki's index with the page open in it, or nothing (moving to a world, the home
+  // page or a new blank world forgets it, so a refresh there lands where it always did).
+  function placeOf(s) {
+    if (s && s.kind === 'wiki') return { kind: 'wiki', id: s.id };
+    if (s && s.kind === 'wikiindex') return { kind: 'wikiindex', id: s.open || null };
+    return null;
+  }
+  // The wiki's index tells which page it shows, or none, so that a refresh comes back to it. Only a world that was started as the index may
+  // say so (a world that has since been replaced, or any other, cannot move this tab's place), and the page is checked like any move to one.
+  function wikiHere(a) {
+    if (!startup || startup.kind !== 'wikiindex') return Promise.reject(new Error('That can only be said from the wiki.'));
+    var mine = startup;
+    return Promise.resolve().then(function () { return a && (a.id || a.name) ? window.keoWiki.pages().locate({ id: a.id, name: a.name }) : null; }).then(function (p) {
+      if (startup !== mine) return false;             // the world moved on while the page was being checked
+      mine.open = p ? p.id : null;
+      return window.keoIdentity.setPlace(placeOf(mine));
+    });
+  }
   function landing(session) {
     return rememberedPage(session).then(function (page) { return page || worldLanding(session); });
   }
@@ -369,6 +392,13 @@
         // world (or the home page), not on the page. The shell says which page it is (and refuses a page of someone else's that it does not
         // hold) before the world is replaced.
         return window.keoWiki.pages().locate({ id: a.id, name: a.name }).then(function (p) { return { kind: 'wiki', session: session, id: p.id, name: p.name }; });
+      }
+      if (kind === 'wikiindex') {
+        // The person's wiki on this device: the blank world with the index of their pages in it, which may start with a page open (`id`, only
+        // if the shell can go to it: otherwise the index alone, which is not an error) and may ask for the new-page dialog (`newPage`, once:
+        // a refresh does not ask again, as the host's "?new=1" is used up).
+        return Promise.resolve().then(function () { return a.id ? window.keoWiki.pages().locate({ id: a.id }).then(function (p) { return p.id; }, function () { return null; }) : null; })
+          .then(function (open) { return { kind: 'wikiindex', session: session, open: open, newPage: a.newPage === true }; });
       }
       if (kind !== 'world') throw new Error('Unknown page kind.');
       return window.keoWorlds.load({ name: a.name }).then(function (w) {

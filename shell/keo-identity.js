@@ -324,14 +324,22 @@
   // For code in THIS page only (the saved-worlds store). Never put it behind a bridge op: it is the key that decrypts
   // everything the identity has saved. Null when nobody is signed in.
   function sessionWorldKey() { return session ? { did: session.info.did, key: session.worldKey } : null; }
-  // Where this tab is, when it is somewhere a refresh should return to (only a wiki page for now: { kind: 'wiki', id }). It is kept in this tab's
+  // Where this tab is, when it is somewhere a refresh should return to: a wiki page ({ kind: 'wiki', id }) or the wiki's index, with the page open
+  // in it if one is ({ kind: 'wikiindex', id: <page id> | null }). It is kept in this tab's
   // session record, so it goes with the session: a refresh finds it again, and signing out, expiry and removing the identity delete it with the
   // record, and a tab that was closed leaves it to go stale with the record. It names a page, so it is exactly as private as the record is (the
   // world key sits beside it). For code in THIS page only: never behind a bridge op, and the world never reads it. Plain data or null.
+  // Anything else, and anything of another shape, is no place: what is read back from the record goes through the same cleaning.
+  function cleanPlace(p) {
+    if (!p || typeof p !== 'object') return null;
+    if (p.kind === 'wiki' && typeof p.id === 'string') return { kind: 'wiki', id: p.id };
+    if (p.kind === 'wikiindex') return { kind: 'wikiindex', id: typeof p.id === 'string' ? p.id : null };
+    return null;
+  }
   function place() { return session && session.place ? session.place : null; }
   function setPlace(p) {
     if (!session) return Promise.resolve(false);
-    session.place = p && p.kind === 'wiki' && typeof p.id === 'string' ? { kind: 'wiki', id: p.id } : null;
+    session.place = cleanPlace(p);
     return saveSession().then(function () { return true; });
   }
 
@@ -339,7 +347,7 @@
     var left = Date.parse(info.exp) - Date.now();
     var timer = setTimeout(function () { if (session && session.info === info) endSession(); }, Math.max(0, left));
     var beat = setInterval(function () { if (session && session.id === id) saveSession(); }, HEARTBEAT_MS);
-    session = { id: id, info: info, worldKey: worldKey, place: place || null, timer: timer, beat: beat };
+    session = { id: id, info: info, worldKey: worldKey, place: cleanPlace(place), timer: timer, beat: beat };
   }
   // The key for saved worlds: one HMAC output of the secret under its own label, kept as a non-extractable AES-GCM key. The
   // label is all that separates it from the discovery seed and the check value, so it is never reused.

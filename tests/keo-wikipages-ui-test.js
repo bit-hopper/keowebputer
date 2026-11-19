@@ -1,6 +1,7 @@
-// Wiki pages on this device, used the way a person would. A wiki page is a kind of world: it is made from the "My worlds" window (kernel
-// lively.identity.WorldsBrowser: Create, the Wiki page card, a name typed into the runtime's prompt) and opened from its row there, and
-// opening it MOVES the person to a world of its own (the shell restarts the world frame with start kind 'wiki', world/keo-boot.js) in which
+// Wiki pages on this device, used the way a person would. A wiki page is a kind of world, listed in the "My worlds" window (kernel
+// lively.identity.WorldsBrowser) and opened from its row there; it is MADE in the wiki's index (the Create card goes there: that, and the
+// index itself, are tests/keo-wikiindex-ui-test.js), so here a page starts as the shell is asked to go to it by name, as the index does for a page
+// that is not saved yet. Going to a page MOVES the person to a world of its own (the shell restarts the world frame with start kind 'wiki', world/keo-boot.js) in which
 // the page's editor (kernel lively.identity.WikiEditor.openLocal) fills the world, as a page of a wiki does on a host: not a window. Real
 // typing, the autosave into the shell's sealed store (shell/keo-wikipages.js), the page in the same list as the worlds (labelled Wiki,
 // found by search), leaving with text typed in the last moments (it is saved first), a refused save that keeps the person on the page,
@@ -92,12 +93,6 @@ const readEditor = (frame, name) => frame.evaluate((n) => {
     inWorld: e.owner === $world, inWindow: !!(win && win !== e), worldName: entry ? String(entry.textString) : null };
 }, name);
 const pmRect = (frame, name) => rectOf(frame, (n) => { const e = (lively.identity.WikiEditor.localEditors ? lively.identity.WikiEditor.localEditors() : []).filter((x) => x._wikiName === n)[0]; return e && e._pmContainer && e._pmContainer.querySelector('.ProseMirror'); }, name);
-const answerPrompt = async (page, frame, text) => {
-  await until(() => frame.evaluate(() => !!document.activeElement && document.activeElement !== document.body), 8000);
-  await page.keyboard.press('Control+A');
-  await page.keyboard.type(text);
-  await page.keyboard.press('Enter');
-};
 const click = async (page, r) => { await page.mouse.click(r.x + r.w / 2, r.y + r.h / 2); };
 const textOfState = (arr) => { const d = new Y.Doc(); if (arr && arr.length) Y.applyUpdate(d, Uint8Array.from(arr)); return d.getXmlFragment('prosemirror').toString().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); };
 // the text the shell holds for a page, read through a session of the test's own that is closed again
@@ -150,11 +145,11 @@ const versionsOf = async (frame, name) => { const l = await keoCall(frame, 'wiki
     check('Create offers a Wiki page, and says it stays on this device', !!win && win.all.includes('Wiki page') && win.all.includes('Write a page that stays on this device.') && win.all.includes('Blank world') && win.all.includes('Template'), win && win.all);
 
     phase = '2 a new page: the world becomes the page';
-    await click(page, await textRect(frame, 'Wiki page'));
-    await answerPrompt(page, frame, 'Trip notes');
+    // The Create card goes to the wiki's index (keo-wikiindex-ui-test.js); a page's own world is what asking to go to a page by name starts.
+    await frame.evaluate(() => { lively.identity.localIdentity.wikiGo({ name: 'Trip notes' }); });
     frame = await waitForWorld(page, 'wiki');
     const st = await startup();
-    check('Create > Wiki page moves to a world of its own, for the page named as typed', st.kind === 'wiki' && st.name === 'Trip notes' && st.id === did + '/Trip notes', st);
+    check('going to a page by name moves to a world of its own, for the page of that name', st.kind === 'wiki' && st.name === 'Trip notes' && st.id === did + '/Trip notes', st);
     let ed = await until(async () => { const r = await readEditor(frame, 'Trip notes'); return r && r.hasView && r.local ? r : null; }, 30000);
     check('New page: the editor opens on this device, named as typed, for the owner to write', !!ed && ed.canEdit === true && ed.objId === did + '/Trip notes', ed);
     check('the page is the world: the editor sits in the world itself, in no window', !!ed && ed.inWorld === true && ed.inWindow === false, ed);

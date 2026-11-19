@@ -467,6 +467,67 @@ const safeText = async (store, objId) => { try { return textOf((await store.stat
   const reopened = S.create({ backend: mem, key: CL.key, did: CL.did });
   ok('a new store over the same disk and key reads what the closed one kept', JSON.stringify(await reopened.heads(OBJ)) === JSON.stringify([ran.cid]));
 
+  // ================================================================ what a list of pages shows of each page: created, category, tags
+  // The page's own `meta` map holds category and tags (any writer of the page may set them, so what is read is cut to size and shape), the
+  // earliest date an edit states is `created`, and the result is kept in the page's sealed record while the page holds the same versions.
+  // `reads` counts what the store reads from disk, so "listing reads no page history" is a count and not a belief.
+  const mem0 = S.memoryBackend(), reads = { version: 0, page: 0 }, writes = { page: 0 };
+  const counting = Object.assign({}, mem0, {
+    get: async (k, id) => { if (reads[k] !== undefined) reads[k]++; return mem0.get(k, id); },
+    put: async (k, id, rec) => { if (writes[k] !== undefined) writes[k]++; return mem0.put(k, id, rec); }
+  });
+  const SM = await makeStore(people, { backend: counting });
+  await feedLogs(SM.store, people);
+  const OBJM = pageOf(A, 'meta-page'), wm = await writer(A, A.d1, undefined, OBJM);
+  const metaOf = async (store, objId) => (await store.pages()).filter((p) => p.objId === objId)[0].meta;
+  const m1 = await SM.store.add(await wm.publish((d) => d.getText('body').insert(0, 'text'), [], { created: '2026-11-18T10:00:00.000Z' }));
+  ok('setup: a page with one edit and no meta', m1.status === 'accepted' && (await metaOf(SM.store, OBJM)) === null);
+  const sum1 = await SM.store.summary(OBJM);
+  ok('a page with no meta has no category and no tags, and was created when its first edit says', sum1.category === null && Array.isArray(sum1.tags) && sum1.tags.length === 0 && sum1.created === '2026-11-18T10:00:00.000Z', sum1);
+  ok('the listing then carries what the summary found', JSON.stringify(await metaOf(SM.store, OBJM)) === JSON.stringify(sum1));
+  const m2 = await SM.store.add(await wm.publish((d) => { d.getMap('meta').set('category', 'Place'); d.getMap('meta').set('tags', ['Europe', 'France']); }, [m1.cid], { created: '2026-11-18T11:00:00.000Z' }));
+  ok('an edit that sets the meta map is accepted like any other (a map is no refused kind of content)', m2.status === 'accepted', m2);
+  ok('after a change the old summary is not offered by the listing', (await metaOf(SM.store, OBJM)) === null);
+  const sum2 = await SM.store.summary(OBJM);
+  ok('the summary reads the category and the tags the page\'s own document holds', sum2.category === 'Place' && JSON.stringify(sum2.tags) === JSON.stringify(['Europe', 'France']), sum2);
+  ok('created stays the earliest date, not the latest edit\'s', sum2.created === '2026-11-18T10:00:00.000Z', sum2);
+  const m3 = await SM.store.add(await wm.publish((d) => d.getText('body').insert(0, 'x'), [m2.cid], { created: '2026-11-17T08:00:00.500Z' }));
+  ok('an edit that states an earlier date (clocks differ) moves created back to it', m3.status === 'accepted' && (await SM.store.summary(OBJM)).created === '2026-11-17T08:00:00.500Z');
+  const writesBefore = writes.page, sum2b = await SM.store.summary(OBJM);
+  ok('asking again for the summary of a page that has not changed gives the same answer and writes nothing', JSON.stringify(sum2b) === JSON.stringify(await SM.store.summary(OBJM)) && writes.page === writesBefore, { writesBefore, now: writes.page });
+  // a change of who may write the page is not an edit of the page: its date must not become the page's `created`
+  const pol = await SM.store.add(await policy(A, A.d1, { op: 'add-writer', did: B.did }, await SM.store.heads(OBJM), { objId: OBJM, created: '2020-01-01T00:00:00.000Z' }));
+  ok('setup: the owner\'s list change is accepted', pol.status === 'accepted', pol);
+  ok('a change of the writer list does not count as when the page was created', (await SM.store.summary(OBJM)).created === '2026-11-17T08:00:00.500Z');
+  // the summary is kept in the page's record: a store over the same disk lists it, and reads no version to do so
+  reads.version = 0; reads.page = 0;
+  const SM2 = S.create({ backend: counting, key: SM.key, did: SM.did });
+  const listed = await metaOf(SM2, OBJM), versionReads = reads.version, pageReads = reads.page;
+  ok('a store opened later lists the kept summary without reading any version of any page', versionReads === 0 && pageReads > 0 && listed && listed.category === 'Place' && JSON.stringify(listed) === JSON.stringify(await SM.store.summary(OBJM)), { versionReads, pageReads, listed });
+  // what is on disk
+  const dumpM = mem0.dump(), textM = (() => { let s = ''; for (const k of Object.keys(dumpM)) for (const [id, rec] of dumpM[k]) s += id + '\n' + Buffer.from(rec.ct).toString('latin1') + '\n'; return s; })();
+  ok('the kept summary is inside the encryption: nothing on disk shows the category or a tag', !textM.includes('Place') && !textM.includes('Europe') && !textM.includes('France'));
+  // asking about a page that is not held makes no record for it
+  const before = (await SM.store.pages()).length;
+  const none = await SM.store.summary(pageOf(A, 'never-written'));
+  ok('the summary of a page that is not held is empty, and no page record is made for it', none.created === null && none.category === null && none.tags.length === 0 && (await SM.store.pages()).length === before, none);
+  // anything a writer puts in the meta map is cut down to a short label and a short list
+  const OBJH = pageOf(A, 'hostile'), wh = await writer(A, A.d1, undefined, OBJH);
+  const manyTags = []; for (let i = 0; i < 30; i++) manyTags.push('tag-' + i);
+  const hostileMeta = (map) => async (parents) => (await SM.store.add(await wh.publish((d) => { const m = d.getMap('meta'); Object.keys(map).forEach((k) => m.set(k, map[k])); }, parents || [])));
+  const h1 = await hostileMeta({ category: 'c'.repeat(5000), tags: ['ok', 5, { a: 1 }, null, 'y'.repeat(100), 'dup', 'dup', '  spaced   out  ', 'con\u0000trol\nline', ''].concat(manyTags) })();
+  ok('setup: a page whose meta holds oversized and ill-shaped values is accepted (it is a signed edit like another)', h1.status === 'accepted', h1);
+  const sh = await SM.store.summary(OBJH);
+  ok('an oversized category is dropped', sh.category === null, sh.category && sh.category.length);
+  ok('tags that are not short strings are dropped, repeats are kept once, and there are at most 20', sh.tags.length === 20 && sh.tags.every((t) => typeof t === 'string' && t.length > 0 && t.length <= 40) && sh.tags.filter((t) => t === 'dup').length === 1 && !sh.tags.includes(5) && !sh.tags.includes('y'.repeat(100)), sh.tags);
+  ok('whitespace in a tag is made single spaces and control characters are not kept', sh.tags.includes('spaced out') && sh.tags.includes('con trol line') && sh.tags.every((t) => !/[\u0000-\u001f\u007f]/.test(t)), sh.tags);
+  const h2 = await hostileMeta({ category: 'Pla\u0000ce\n', tags: 'not-an-array' })([h1.cid]);
+  const sh2 = await SM.store.summary(OBJH);
+  ok('a category with control characters is cleaned, and tags that are not a list are no tags', h2.status === 'accepted' && sh2.category === 'Pla ce' && sh2.tags.length === 0, sh2);
+  const h3 = await hostileMeta({ category: 12345, tags: { a: 1 } })([h2.cid]);
+  const sh3 = await SM.store.summary(OBJH);
+  ok('a category that is not text, and tags that are an object, give neither', h3.status === 'accepted' && sh3.category === null && sh3.tags.length === 0, sh3);
+
   // ================================================================ never throws on garbage
   const G = await makeStore(people); await feedLogs(G.store, people);
   const junk = [null, undefined, 0, 'x', [], {}, { event: {}, sig: 'a' }, { event: { objId: 'p' }, sig: 'a' }, { event: { objId: 5 }, sig: 'a' }];

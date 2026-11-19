@@ -30,6 +30,8 @@
 //   heads, versions, state   what a page's history looks like and the Yjs state at a set of versions (default: the current heads). The
 //                       heads include list changes: a new edit names them as parents, so that it follows the list as the author knew it.
 //   writers(objId, heads?)   who may write the page as of those versions (default: the current heads): the DIDs, the owner first.
+//   pages(), summary(objId)  every page held, newest change first, with what a list shows of each (created, category, tags: read out of the
+//                       page's own history and kept in its sealed record while it holds the same versions, see "what a list of pages shows").
 //   close()             for a session that ended: operations that have not started are refused from then on (see serial()).
 // Not here: checkpoints and dropping old events, private pages, how events travel. The IndexedDB backend and the store's lifetime in the
 // shell (made for the signed-in identity, closed when the session ends, its records deleted when the identity is removed) are keo-wiki.js.
@@ -137,7 +139,7 @@
     async function loadPage(objId) {
       if (pages.has(objId)) return pages.get(objId);
       var id = await pageKey(objId), rec = (await read('page', id)) || { objId: objId, cids: [], pending: [] };
-      var page = { objId: objId, id: id, versions: new Map(), pending: new Map(), byClient: new Map(), touched: rec.touched || null };
+      var page = { objId: objId, id: id, versions: new Map(), pending: new Map(), byClient: new Map(), touched: rec.touched || null, sum: rec.sum || null };
       for (var i = 0; i < rec.cids.length; i++) {
         var v = await read('version', rec.cids[i]);
         if (!v) throw new Error('The wiki store is missing a version it lists (' + rec.cids[i].slice(0, 8) + ').');
@@ -158,7 +160,58 @@
     // `touched` is when THIS device last took something into the page (its own clock, set in accept): what a page list shows as "last
     // changed here". It is not the author's claim (an event's `created`), which nothing in a receiver should rely on. A page record written
     // before the field existed has none: null.
-    async function savePage(page) { await write('page', page.id, { objId: page.objId, cids: Array.from(page.versions.keys()), pending: Array.from(page.pending.keys()), touched: page.touched }); }
+    async function savePage(page) { await write('page', page.id, { objId: page.objId, cids: Array.from(page.versions.keys()), pending: Array.from(page.pending.keys()), touched: page.touched, sum: page.sum }); }
+
+    // ---- what a list of pages shows of each page (created, category, tags) ----------------------------------------------------------
+    // Read out of the page's own history and kept in the page's record, so that listing the pages costs one small record each and not a read
+    // of every version of every page. It is a CACHE: it names the versions it was worked out from (`k`: how many are held and the last one
+    // taken in), it is used only while those are the versions the page holds, and it is worked out again, from the history, the moment they
+    // are not. Nothing in it is a claim anyone made that the store takes on trust: category and tags are read from the page's `meta` map
+    // (what any writer of the page may set, so they are cut to size and shape below: a writer could put anything there), and `created` is
+    // the earliest date any held edit states (an author's own word, as every `created` is: it orders pages on this person's list, nothing
+    // more). Not here: the page's title or text (a later step).
+    var MAX_CATEGORY = 40, MAX_TAGS = 20, MAX_TAG = 40;
+    function sumKey(cids) { return cids.length + ':' + (cids.length ? cids[cids.length - 1] : ''); }
+    function cleanLabel(x, max) {
+      if (typeof x !== 'string') return null;
+      var s = x.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+      return s && s.length <= max ? s : null;
+    }
+    function metaOf(doc) {
+      var map = doc.getMap('meta'), category = cleanLabel(map.get('category'), MAX_CATEGORY), raw = map.get('tags'), tags = [];
+      if (Array.isArray(raw)) {
+        for (var i = 0; i < raw.length && tags.length < MAX_TAGS; i++) { var t = cleanLabel(raw[i], MAX_TAG); if (t && tags.indexOf(t) < 0) tags.push(t); }
+      }
+      return { category: category, tags: tags };
+    }
+    // The summary of a loaded page: the cached one while it still matches what the page holds, else worked out now (and kept).
+    async function summarize(page) {
+      var cids = Array.from(page.versions.keys()), k = sumKey(cids);
+      // A page with no version held (one that is only waiting for something, or that is not here at all) has nothing to summarise, and
+      // writes nothing: asking about a page must never make a record for it.
+      if (!cids.length) return { created: null, category: null, tags: [] };
+      if (page.sum && page.sum.k === k) return page.sum.v;
+      var get = getter(page), heads = W.headsOf(cids, get), created = null;
+      cids.forEach(function (cid) {
+        var e = get(cid).event;
+        if (e.purpose !== W.PURPOSE) return;                    // a change of the writer list is not an edit of the page
+        if (created === null || Date.parse(e.created) < Date.parse(created)) created = e.created;
+      });
+      var doc = new Y.Doc();
+      Y.applyUpdate(doc, stateAt(page, heads).update);
+      var v = Object.assign({ created: created }, metaOf(doc));
+      page.sum = { k: k, v: v };
+      await savePage(page);
+      return v;
+    }
+    // The Yjs state at a set of versions: { update, cids }. Throws when one of them (or something it follows) is not held.
+    function stateAt(page, at) {
+      var get = getter(page), cl = W.closure(at, get);
+      if (cl.missing.length) throw new Error('That version is not held here.');
+      // a list change carries no text: only edits give updates
+      var updates = cl.order.filter(function (cid) { return get(cid).event.purpose === W.PURPOSE; }).map(function (cid) { return kd.unb64u(get(cid).event.payload.update); });
+      return { update: updates.length ? Y.mergeUpdates(updates) : Y.encodeStateAsUpdate(new Y.Doc()), cids: cl.order };
+    }
 
     function ctxFor(page) {
       return {
@@ -296,14 +349,17 @@
       offerLog: offerLog,
       logOf: function (did) { return serial(function () { return pinnedLog(did); }); },
       add: function (env) { return serial(function () { return addNow(env); }); },
-      // Every page this store holds, newest change first: [{ objId, versions, pending, touched }]. Reads the small page records only, never a
-      // page's versions, so a long list costs one decryption per page. `touched` is null for a page whose record predates the field.
+      // Every page this store holds, newest change first: [{ objId, versions, pending, touched, meta }]. Reads the small page records only, never
+      // a page's versions, so a long list costs one decryption per page. `touched` is null for a page whose record predates the field.
+      // `meta` is { created, category, tags } as kept by the last summary() while it still matches the versions the page holds, else null
+      // (a page changed since, or never summarised): summary(objId) works it out.
       pages: function () {
         return serial(async function () {
           var ids = await backend.ids('page'), out = [];
           for (var i = 0; i < ids.length; i++) {
             var rec = await read('page', ids[i]);
-            if (rec && typeof rec.objId === 'string') out.push({ objId: rec.objId, versions: rec.cids.length, pending: rec.pending.length, touched: rec.touched || null });
+            if (rec && typeof rec.objId === 'string') out.push({ objId: rec.objId, versions: rec.cids.length, pending: rec.pending.length, touched: rec.touched || null,
+              meta: rec.sum && rec.sum.k === sumKey(rec.cids) ? rec.sum.v : null });
           }
           out.sort(function (a, b) { return (a.touched || '') < (b.touched || '') ? 1 : (a.touched || '') > (b.touched || '') ? -1 : (a.objId < b.objId ? -1 : 1); });
           return out;
@@ -338,14 +394,13 @@
       // the Yjs state at `heads` (default: the page's current heads): { update, cids }; apply `update` to a Y.Doc to read the page
       state: function (objId, heads) {
         return serial(async function () {
-          var p = await loadPage(objId), get = getter(p);
-          var at = heads || W.headsOf(Array.from(p.versions.keys()), get), cl = W.closure(at, get);
-          if (cl.missing.length) throw new Error('That version is not held here.');
-          // a list change carries no text: only edits give updates
-          var updates = cl.order.filter(function (cid) { return get(cid).event.purpose === W.PURPOSE; }).map(function (cid) { return kd.unb64u(get(cid).event.payload.update); });
-          return { update: updates.length ? Y.mergeUpdates(updates) : Y.encodeStateAsUpdate(new Y.Doc()), cids: cl.order };
+          var p = await loadPage(objId);
+          return stateAt(p, heads || W.headsOf(Array.from(p.versions.keys()), getter(p)));
         });
       },
+      // { created, category, tags } of the page as it stands now: the earliest date an edit of it states, and the category and tags in the
+      // page's own `meta` map (see "what a list of pages shows" above for what is kept and why it can be trusted no further than a list).
+      summary: function (objId) { return serial(async function () { return summarize(await loadPage(objId)); }); },
       alerts: function () { return serial(async function () { return (await read('meta', 'alerts')) || []; }); },
       // removes everything this store holds (an identity removed from this device takes its pages with it)
       purge: function () {

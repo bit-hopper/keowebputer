@@ -55,16 +55,31 @@
       if (r.status === 'refused' || r.status === 'fork' || r.status === 'shorter') throw new Error('This device\'s copy of your identity could not be kept for the wiki (' + r.status + ').');
       offered = { did: proof.did, events: seq };
     }
-    function describe(row, did) {
+    function describe(row, did, meta) {
       var p = W.parsePageId(row.objId);
-      return { id: row.objId, name: p.name, owner: p.owner, mine: p.owner === did, versions: row.versions, pending: row.pending, updated: row.touched };
+      return { id: row.objId, name: p.name, owner: p.owner, mine: p.owner === did, versions: row.versions, pending: row.pending, updated: row.touched,
+        created: meta.created, category: meta.category, tags: meta.tags, unreadable: !!meta.unreadable };
     }
 
-    // [{ id, name, owner, mine, versions, pending, updated }], newest change first. `updated` is when THIS device last took a change into
-    // the page, by its own clock.
+    // [{ id, name, owner, mine, versions, pending, updated, created, category, tags, unreadable }], newest change first.
+    //   updated   when THIS device last took a change into the page, by its own clock.
+    //   created   the earliest date an edit of the page states (the author's word: it orders a list, nothing depends on it); null for a page
+    //             with no edit yet.
+    //   category, tags   from the page's own `meta` map, cut to a short label and a short list (the store's summary says how); null and [].
+    //   unreadable   the page's history could not be read (a record is missing or damaged): it is still listed, with nothing but its name, so
+    //             that one damaged page does not take the list of every other page with it.
+    // The store keeps what it works out per page, so a page that has not changed since it was last listed costs one small record.
     async function list() {
-      var proof = await identity.proof(), rows = await store.pages();
-      return rows.filter(function (r) { return W.parsePageId(r.objId); }).map(function (r) { return describe(r, proof.did); });
+      var proof = await identity.proof(), rows = (await store.pages()).filter(function (r) { return W.parsePageId(r.objId); }), out = [];
+      for (var i = 0; i < rows.length; i++) {
+        var meta = rows[i].meta;
+        if (!meta) {
+          try { meta = await store.summary(rows[i].objId); }
+          catch (e) { meta = { created: null, category: null, tags: [], unreadable: true }; }
+        }
+        out.push(describe(rows[i], proof.did, meta));
+      }
+      return out;
     }
 
     // Which page a request means: { name } is a page of the signed-in identity (made when it is first saved), { id } is any page's id.
