@@ -69,13 +69,24 @@ const MAKE = async () => {
   m.pdf2 = pdf(['0 0.6 0', '0 0 1'], 'older.pdf');
   m.badpdf = new File([enc.encode('%PDF-1.4 this is not really a document at all')], 'damaged.pdf', { type: 'application/pdf' });
   m.hugepdf = new File([new Uint8Array(51 * 1024 * 1024)], 'huge.pdf', { type: 'application/pdf' });
-  // a clip: one colour all the way through, 320 x 240 (recorded from a canvas)
+  // a clip: one colour all the way through, 320 x 240 (recorded from a canvas). The browser's video encoder can take longer to start
+  // the first time a page uses it than a fixed run of frames lasts: here the first clip, 25 frames over 2 s, ended before the encoder
+  // had produced anything and held only the 110-byte file header, while the identical clip made right after it was fine. So the canvas
+  // is drawn until the recorder has handed over picture data (more than the header), then for 25 more frames, and the recorder is not
+  // stopped before that. It gives up after 20 s and returns what it saw (window.__clips), which the setup check prints if it fails.
+  // Do not use this to make a clip a test needs to be a fixed length: the length depends on when the encoder started.
   const clip = async (w, h) => {
     const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d');
-    const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm' }); const parts = [];
-    rec.ondataavailable = (e) => parts.push(e.data); const done = new Promise((r) => (rec.onstop = r));
-    rec.start(); for (let i = 0; i < 25; i++) { g.fillStyle = '#2f9e5b'; g.fillRect(0, 0, w, h); g.fillStyle = i % 2 ? '#2f9e5c' : '#2f9e5b'; g.fillRect(0, 0, 4, 4); await new Promise((r) => setTimeout(r, 80)); }
+    const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm' }); const parts = [], seen = { bytes: 0, firstAt: null, drawn: 0 }, t0 = Date.now();
+    rec.ondataavailable = (e) => { parts.push(e.data); seen.bytes += e.data.size; if (seen.firstAt === null && seen.bytes > 500) seen.firstAt = Date.now() - t0; }; const done = new Promise((r) => (rec.onstop = r));
+    rec.start(100);
+    for (let i = 0, after = 0; Date.now() - t0 < 20000; i++) {
+      g.fillStyle = '#2f9e5b'; g.fillRect(0, 0, w, h); g.fillStyle = i % 2 ? '#2f9e5c' : '#2f9e5b'; g.fillRect(0, 0, 4, 4); seen.drawn++;
+      await new Promise((r) => setTimeout(r, 80));
+      if (seen.firstAt !== null && ++after >= 25) break;
+    }
     rec.stop(); await done;
+    (window.__clips = window.__clips || []).push({ w, h, ms: Date.now() - t0, firstDataAt: seen.firstAt, drawn: seen.drawn, parts: parts.length, bytes: seen.bytes });
     return new Blob(parts, { type: 'video/webm' });
   };
   m.video = new File([await clip(320, 240)], 'clip.webm', { type: 'video/webm' });
@@ -115,7 +126,7 @@ const MAKE = async () => {
   m.epub2b = await book('older.epub', opf('2.0', '<item id="art" href="images/cover.png" media-type="image/png"/>', '<meta name="cover" content="art"/>'), await png(200, 300, '#9b59b6'));
   m.nocover = await book('plain.epub', opf('3.0', '', ''), null);
   m.note = new File([enc.encode('# Notes\n\nwords')], 'notes.md', { type: '' });
-  return { pdf: m.pdf.size, video: m.video.size, epub: m.epub3.size };
+  return { pdf: m.pdf.size, video: m.video.size, epub: m.epub3.size, clips: window.__clips };
 };
 
 const PUT = (keys) => keys.length && window.__m && (async () => {
@@ -170,6 +181,7 @@ const near = (px, rgb, tol) => rgb.every((v, i) => Math.abs(px[i] - v) <= (tol |
 
     const sizes = await frame.evaluate(MAKE);
     check('setup: the PDF, the clip and the book were made', sizes.pdf > 300 && sizes.video > 500 && sizes.epub > 500, sizes);
+    console.log('INFO the clips: ' + JSON.stringify(sizes.clips) + ' (firstDataAt = ms after start() until the recorder handed over more than its header)');
 
     // ---- which kinds and sizes have a small picture (the limits)
     const kinds = await frame.evaluate(() => {
