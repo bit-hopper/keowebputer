@@ -5,12 +5,15 @@
  * image of its own. It replaced the earlier quilt-pattern banners, whose
  * module has been removed.
  *
- * A banner is a contour map drawn in three colours: green lowlands climb
- * through teal to pink peaks, with a heavier line every fifth level. The map
- * is generated from a seed string (a handle, a room id) with the same
- * xorshift128-from-charcodes generator identiconDataUrl uses, so the same
- * person always gets the same banner. The seed also decides which of the three
- * colours leads and where the hills are.
+ * A banner is a contour map drawn in six colours, always in the same order:
+ * green, yellow, orange, red, purple, blue. Green is the lowest ground and
+ * blue the highest, and every contour level is one whole colour (the height
+ * range is cut into six equal bands, nothing is blended), with a heavier line
+ * every fifth level. The map is generated from a seed string (a handle, a room
+ * id) with the same xorshift128-from-charcodes generator identiconDataUrl
+ * uses, so the same person always gets the same banner. The seed decides where
+ * the hills are; it does not decide the colours, because their order is the
+ * design.
  *
  * It is drawn at the size of the morph it is applied to, not tiled, so the
  * lines are never cut by a tile edge and never scaled.
@@ -22,9 +25,19 @@ module('lively.identity.BannerLines')
 
     lively.identity = lively.identity || {};
 
-    // The accent pink, the button green, and teal. These three are the whole
-    // palette: a banner must never use a fourth colour.
-    var PINK = '#e8497e', GREEN = '#2f9e5b', TEAL = '#1fa7ad';
+    // The six colours, in the order a banner uses them from the lowest ground
+    // to the highest. They are the whole palette: a banner uses these six and
+    // no others, and never reorders them. They start from the supplied swatch
+    // (#78bd21 #ffc728 #ff661c #cf0f2b #b01cab #00a1de), nudged so that no line
+    // is far stronger or fainter than the rest on the almost white ground: the
+    // yellow is deeper (the swatch's yellow was about 1.5 to 1 against the
+    // ground), and the red and purple are lighter (they were over 5 to 1).
+    // Lightening them further turns the red into pink, so they stop at about
+    // 4 to 1. The green is not the swatch's lime, which is too faint a line,
+    // and not the cooler green of the Map pill (#2ea05a), which reads as blue
+    // beside the blue: it sits at a hue of 120 degrees, midway between the
+    // yellow and the blue.
+    var COLORS = ['#27a327', '#e3a000', '#ff661c', '#ef2946', '#d822d2', '#00a1de'];
     // Almost white, with a hint of the accent, so a banner sits on a white
     // card without looking like a hole in it.
     var GROUND = '#fffafc';
@@ -49,25 +62,21 @@ module('lively.identity.BannerLines')
       }
       // A short seed leaves rs[1..3] at zero, so the first outputs stay
       // near-zero until the recurrence has spread bits through the state.
-      // Everything below reads the very first draws (which colour leads, where
-      // the first hill is), so warm up before handing it over.
+      // Everything below reads the very first draws (where the first hill is),
+      // so warm up before handing it over.
       for (var w = 0; w < 24; w++) rnd();
       return rnd;
     }
 
-    // ─── colour helpers ─────────────────────────────────────────────────────
+    // ─── colour ─────────────────────────────────────────────────────────────
 
-    function _lerpColor(a, b, t) {
-      function ch(c, i) { return parseInt(c.slice(1 + i * 2, 3 + i * 2), 16); }
-      function mix(i) { return Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t); }
-      return 'rgb(' + mix(0) + ',' + mix(1) + ',' + mix(2) + ')';
-    }
-
-    // A colour at position t (0..1) along a ramp through the given colours.
-    function _ramp(colors, t) {
-      var s = Math.max(0, Math.min(1, t)) * (colors.length - 1);
-      var i = Math.min(colors.length - 2, Math.floor(s));
-      return _lerpColor(colors[i], colors[i + 1], s - i);
+    // The colour for a position t (0..1) in the height range: the range is cut
+    // into as many equal bands as there are colours, and each band is one whole
+    // colour. There is no blending between neighbours: a level is always
+    // exactly one of the six.
+    function _band(t) {
+      var n = COLORS.length;
+      return COLORS[Math.min(n - 1, Math.floor(Math.max(0, Math.min(1, t)) * n))];
     }
 
     // ─── height field ───────────────────────────────────────────────────────
@@ -161,10 +170,10 @@ module('lively.identity.BannerLines')
     // css pixels).
     function _draw(ctx, w, h, seedStr) {
       var r = _seededRnd(seedStr + '/contour');
-      // Which colour leads differs per seed.
-      var off = Math.floor(r() * 3);
-      var pal = [PINK, GREEN, TEAL];
-      pal = pal.slice(off).concat(pal.slice(0, off));
+      // This draw used to choose which colour led. The colours no longer vary,
+      // but the draw is still spent so that the hills fall where they always
+      // did and a person's banner keeps its shape.
+      r();
 
       ctx.fillStyle = GROUND;
       ctx.fillRect(0, 0, w, h);
@@ -172,8 +181,7 @@ module('lively.identity.BannerLines')
       var hill = _hills(r, w, h, 95), wob = _wobble(r, h * 0.7);
       var F = _sample(w, h, function (x, y) { return hill(x, y) + 0.3 * wob(x, y); });
 
-      // Heights run green (low) -> teal -> pink (high), whatever leads.
-      var order = [pal[1], pal[2], pal[0]];
+      // Heights run green (low) to blue (high) through the six bands.
       var levels = h > 100 ? 34 : 22;
       ctx.lineCap = 'round';
       for (var L = 1; L <= levels; L++) {
@@ -181,7 +189,7 @@ module('lively.identity.BannerLines')
         var index = L % 5 === 0;
         ctx.beginPath();
         _traceInto(ctx, F, lv);
-        ctx.strokeStyle = _ramp(order, L / (levels + 1));
+        ctx.strokeStyle = _band(L / (levels + 1));
         ctx.globalAlpha = index ? 1 : 0.7;
         ctx.lineWidth = index ? LINE_WEIGHT * 1.5 : LINE_WEIGHT * 0.7;
         ctx.stroke();

@@ -25,6 +25,16 @@
  *
  * Open: lively.identity.WikiIndex.open(name) — called from
  * buildWikiIndexPage's onStartWorld hook once $world exists.
+ *
+ * THREE SCOPES. A constellation's wiki, a person's personal wiki on a host, and — inside keo, with a local identity — the pages kept on THIS
+ * DEVICE (openLocal; the scope kind is "local"). The layout, the cards, the sort, the two panels and the way a page opens inside the index are
+ * the same code for all three; only where the data comes from and who may write differ. The local scope asks the shell (LocalIdentity.wikiList,
+ * wikiGo, ...) instead of a server: the list is the shell's list of this identity's pages (each with the category and tags kept in the page's
+ * own document), a card opens the page's EDITOR in the slot (WikiEditor.openLocal with a target: there is no read-only view of a page on this
+ * device yet), a new page goes through the same New Wiki Page dialog and the editor writes its category and tags into the page. Page search is
+ * the shell's (LocalIdentity.wikiSearch): names, categories, tags and the text inside the pages, with a snippet of the text, and the words are
+ * marked in the page that is opened from a result. Not here for the local scope: constellations, who may edit, deleting or renaming a page,
+ * and sync.
  */
 
 module("lively.identity.WikiIndex")
@@ -55,6 +65,8 @@ module("lively.identity.WikiIndex")
     // "+ New wiki page" collapses to a "+" circle to give it room back.
     var SEARCH_BAR_MIN_W = 240, SEARCH_BAR_COMPACT_BELOW = 360;
     var SEARCH_DEBOUNCE_MS = 250;
+    // On this device: how long the saving must have paused before the list is read again from the shell (see _refreshLocalSoon).
+    var REFRESH_PAUSE_MS = 3000;
     var RESULT_ROW_H = 58;      // one search-result dropdown row
     var RESULTS_MAX = 8;
     // NEW_BTN_W is only the pre-measurement fallback: the "+ New wiki page"
@@ -166,6 +178,13 @@ module("lively.identity.WikiIndex")
         this._openScope({ kind: "personal", handle: handle });
       },
 
+      // The pages kept on this device, inside keo (see the header). opts: { open: a page id to show open at once, newPage: true to ask for
+      // the new-page dialog at once (the host's "?new=1") }.
+      openLocal: function (opts) {
+        this._localOpts = opts || {};
+        this._openScope({ kind: "local" });
+      },
+
       // What to SHOW for this wiki's owner, and what to build page links from:
       // a verified domain handle when the owner has one (/@tinylil.world/wiki
       // rather than /@tinasnow/wiki), else the registered handle / constellation
@@ -178,10 +197,54 @@ module("lively.identity.WikiIndex")
         return (this._quickInfo && this._quickInfo.domain) || this._scope.name;
       },
 
+      _isLocal: function () { return this._scope.kind === "local"; },
+
+      // The wiki's title, in the header and the menu bar and the tab: "c/name wiki", "@handle wiki", and on this device "<the identity's own
+      // label> wiki" (there is no handle: a local identity is named by its person).
+      _titleText: function () {
+        if (this._isLocal()) return this._scope.label + " wiki";
+        if (this._scope.kind === "personal") return "@" + this._shownHandle() + " wiki";
+        return "c/" + this._shownName() + " wiki";
+      },
+
       _openScope: function (scope) {
         this._scope = scope;
         if (scope.kind === "personal") return this._startPersonal();
+        if (scope.kind === "local") return this._startLocal();
         this._loadSpaceToken();
+      },
+
+      // Local scope: the pages are this identity's own, so the person may write; the label the person gave the identity is what is shown.
+      // The list comes from the shell, which may be refused (nobody signed in): the person is told, not left with an empty world.
+      _startLocal: function () {
+        var user = lively.identity.did.currentUser();
+        if (!(user && user.local && lively.identity.localIdentity && lively.identity.localIdentity.isAvailable())) {
+          return this._showError("Your wiki on this device needs keo webputer with an identity signed in.");
+        }
+        this._scope.did = user.did;
+        this._scope.label = lively.identity.did.displayHandle() || "Your";
+        this._canWrite = true;
+        this._quickInfo = {};
+        var self = this;
+        this._fetchLocal(function (err) {
+          if (err) return self._showError("Your wiki pages could not be read: " + (err.message || err));
+          self._start();
+        });
+      },
+
+      // The shell's list of this identity's pages, as the rows the index works with (the rows of a host's list): objId, wikiName, category,
+      // tags, createdAt, updatedAt. Only the person's own pages are the person's wiki; a page of someone else's that this device happens to
+      // hold is reached from My worlds. thenDo(err) after this._pages was set.
+      _fetchLocal: function (thenDo) {
+        var self = this;
+        lively.identity.localIdentity.wikiList(function (err, rows) {
+          if (err) return thenDo(err);
+          self._pages = (rows || []).filter(function (r) { return r.mine; }).map(function (r) {
+            return { objId: r.id, wikiName: r.name, title: r.name, category: r.category || null, tags: r.tags || [],
+              createdAt: r.created || null, updatedAt: r.updated || null, unreadable: !!r.unreadable };
+          });
+          thenDo(null);
+        });
       },
 
       // Constellation scope: canWrite/quickInfo come from a space-token
@@ -251,9 +314,7 @@ module("lively.identity.WikiIndex")
       },
 
       _start: function () {
-        document.title = this._scope.kind === "personal"
-          ? "@" + this._shownHandle() + " wiki"
-          : "c/" + this._shownName() + " wiki";
+        document.title = this._titleText();
         this._buildChrome();
         this._installStacking();
         this._renderCategoriesPanel();
@@ -267,6 +328,20 @@ module("lively.identity.WikiIndex")
           pinQueued = true;
           requestAnimationFrame(function () { pinQueued = false; self._pinPanels(); });
         }, { passive: true });
+        if (this._isLocal()) {
+          // A page that is saved (a new one, or a change that shows on its card: its date, its category) is read again from the shell, so
+          // the cards and the panels keep up without the person reloading. Not at every autosave while the person types: once the saving
+          // has paused (see _refreshLocalSoon).
+          this._onWikiChanged = function () { self._refreshLocalSoon(); };
+          window.addEventListener("keo-wiki-changed", this._onWikiChanged);
+          // The page named when the world was started (a reload that comes back to it) is opened, if it is still in the list; and the
+          // new-page dialog is asked for once (a reload does not ask again: the shell does not repeat it).
+          var wanted = this._localOpts && this._localOpts.open;
+          var wantedPage = wanted && this._pages.filter(function (p) { return p.objId === wanted; })[0];
+          if (wantedPage) this._openPage(wantedPage);
+          if (this._localOpts && this._localOpts.newPage) this._promptNewWikiPage();
+          return;
+        }
         // "?new=1" is how other worlds (WorldsBrowser's "Wiki page" card) hand
         // off page creation to this route instead of opening a wiki editor
         // inside their own world. Consumed once so a reload doesn't re-prompt.
@@ -292,9 +367,7 @@ module("lively.identity.WikiIndex")
         this._backBtn = this._buildBackButton();
         $world.addMorph(this._backBtn);
 
-        var titleText = this._scope.kind === "personal"
-          ? "@" + this._shownHandle() + " wiki"
-          : "c/" + this._shownName() + " wiki";
+        var titleText = this._titleText();
         this._titleLabel = lively.morphic.Text.makeLabel(titleText, {
           fontSize: 22, fontWeight: "bold", textColor: Color.rgb(20, 20, 20),
         });
@@ -360,6 +433,15 @@ module("lively.identity.WikiIndex")
       // below is measured from the actual label text.
       _buildBackButton: function () {
         var self = this;
+        // On this device the home page is a world the shell takes the person to (what was typed in the last moments is saved first, and a
+        // failure to save stops the move with the reason on screen), not an address.
+        if (this._isLocal()) {
+          return this._buildPill("← " + this._scope.label, {
+            fill: PILL_PINK, hover: PILL_PINK_HOVER, padX: 14,
+            tooltip: "Back to your homestar",
+            onClick: function () { self._goHome(); },
+          });
+        }
         var isPersonal = this._scope.kind === "personal";
         var label = isPersonal ? "← @" + this._shownHandle() : "← c/" + this._shownName();
         var href = isPersonal
@@ -540,6 +622,8 @@ module("lively.identity.WikiIndex")
         clearTimeout(this._searchDebounceTimer);
         var q = (query || "").trim();
         if (!q) {
+          // An answer still on its way to a query that has been cleared must not bring its dropdown back.
+          this._searchRequestId++;
           this._closeSearchDropdown();
           return;
         }
@@ -548,7 +632,44 @@ module("lively.identity.WikiIndex")
         }, SEARCH_DEBOUNCE_MS);
       },
 
+      // On this device the SHELL searches the pages (LocalIdentity.wikiSearch): their names, categories and tags and the text inside them,
+      // every word or "quoted phrase" having to be found, ranked as the saved worlds' search is, with a piece of the text around the first
+      // match as the snippet (the host's answer has the same rows). Only the person's own pages are shown, as the index lists those only. The
+      // answer to an earlier query that arrives after a later one is dropped (as for the host's). If the shell cannot search, the person is
+      // told and the pages are matched by name, category and tag from the list the index already holds, so that a search never gets worse.
+      _searchLocal: function (query) {
+        var self = this, requestId = ++this._searchRequestId;
+        lively.identity.localIdentity.wikiSearch(query, function (err, rows) {
+          if (requestId !== self._searchRequestId) return;
+          if (err) {
+            self._showError("Searching inside your pages did not work: " + (err.message || err), true);
+            return self._searchLocalList(query);
+          }
+          var results = (rows || []).filter(function (r) { return r.mine; }).map(function (r) {
+            var snippet = r.snippet || (r.tags && r.tags.length ? "Tags: " + r.tags.join(", ") : "");
+            return { objId: r.id, wikiName: r.name, title: r.name, category: r.category, snippet: snippet };
+          });
+          self._renderSearchResults(results, query);
+        });
+      },
+
+      // The pages matched by name, category and tag, here, from the list the index already holds. Every word has to be found in one of the
+      // three, in any order, case ignored; the snippet says where.
+      _searchLocalList: function (query) {
+        var words = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+        var results = this._pages.filter(function (p) {
+          var hay = [p.wikiName, p.category || ""].concat(p.tags || []).join("\n").toLowerCase();
+          return words.every(function (w) { return hay.indexOf(w) !== -1; });
+        }).map(function (p) {
+          var bits = [];
+          if (p.tags && p.tags.length) bits.push("Tags: " + p.tags.join(", "));
+          return { objId: p.objId, wikiName: p.wikiName, title: p.wikiName, category: p.category, snippet: bits.join("  ·  ") };
+        });
+        this._renderSearchResults(results, query);
+      },
+
       _runContentSearch: function (query) {
+        if (this._isLocal()) return this._searchLocal(query);
         var self = this;
         var base = lively.identity.did.baseUrl();
         var url = this._scope.kind === "personal"
@@ -1060,6 +1181,15 @@ module("lively.identity.WikiIndex")
         otherBtn.setPosition(lively.pt(W - SIDE_MARGIN - otherW, TOP + (HEADER_ROW_H - NEW_BTN_H) / 2));
 
         var sortX = sortXFor(newBtnW);
+        // The sort menu gives way when the search bar could not keep its
+        // least width beside it (a window under about 660 px): the bar ran
+        // over the menu. Only while no page is open: with one open the menu
+        // holds "All pages", the only way back from the page to the cards, so
+        // it stays. (Hidden, it is still positioned, so that it takes no
+        // scroll width from a spot a wider window left it at.)
+        var sortHidden = !this._activeContentMorph && (sortX - 24 - leftBound) < SEARCH_BAR_MIN_W;
+        this._sortByBox.setVisible(!sortHidden);
+        if (sortHidden) this._closeSortByDropdown();
         this._sortByBox.setPosition(lively.pt(sortX, TOP));
         if (this._sortByDropdown) this._sortByDropdown.setPosition(lively.pt(sortX, TOP + SORT_H + 4));
 
@@ -1072,7 +1202,7 @@ module("lively.identity.WikiIndex")
         // controls — confirmed live at a 1000px window, where a fixed
         // 520px bar covered ~86px of the sort pill) and is clamped into
         // that gap instead of centered.
-        var rightBound = sortX - 24;
+        var rightBound = (sortHidden ? W - SIDE_MARGIN - newBtnW : sortX) - 24;
         var barW = Math.max(SEARCH_BAR_MIN_W, Math.min(SEARCH_BAR_W, rightBound - leftBound));
         this._setSearchBarWidth(barW);
         var barX = Math.max(leftBound, Math.min(Math.round((W - barW) / 2), rightBound - barW));
@@ -1103,7 +1233,7 @@ module("lively.identity.WikiIndex")
       // in each row, not a hardcoded constant.
       _layoutGrid: function () {
         var pageOpen = !!this._activeContentMorph;
-        var gridX = pageOpen ? SIDE_MARGIN : SIDE_MARGIN + SIDEBAR_W + SIDEBAR_GAP;
+        var gridX = pageOpen || this._sidebarHidden() ? SIDE_MARGIN : SIDE_MARGIN + SIDEBAR_W + SIDEBAR_GAP;
         var gridW = pageOpen
           ? Math.max(CARD_W, this._pageW() - SIDE_MARGIN * 2)
           : Math.max(CARD_W, this._spanBetweenPanels());
@@ -1207,15 +1337,19 @@ module("lively.identity.WikiIndex")
         // getScrollOffset reads a cached window rect; drop it so it matches
         // the scroll position just read.
         if ($world) $world.cachedWindowBounds = null;
-        // Too narrow for the panels beside an open page: hide both (the
+        // A panel the window is too narrow for gives way (_sidebarHidden,
+        // _categoriesHidden say which; with a page open that is both, and the
         // page takes their room, see _contentWidth). Only on a change of
         // state, so the sidebar's own show/hide logic isn't fought every
-        // scroll tick; the sidebar's renders re-check _panelsHidden too.
-        var hidden = this._panelsHidden();
-        if (hidden !== !!this._panelsWereHidden) {
-          this._panelsWereHidden = hidden;
-          if (this._categoriesPanel) this._categoriesPanel.setVisible(!hidden);
-          if (this._sidebarBox) this._sidebarBox.setVisible(!hidden);
+        // scroll tick; the sidebar's renders re-check _sidebarHidden too.
+        var sideHidden = this._sidebarHidden(), catHidden = this._categoriesHidden();
+        if (catHidden !== !!this._categoriesWasHidden) {
+          this._categoriesWasHidden = catHidden;
+          if (this._categoriesPanel) this._categoriesPanel.setVisible(!catHidden);
+        }
+        if (sideHidden !== !!this._sidebarWasHidden) {
+          this._sidebarWasHidden = sideHidden;
+          if (this._sidebarBox) this._sidebarBox.setVisible(!sideHidden);
         }
         // Positioned even while hidden: a hidden node still counts toward
         // the page's scroll width, so one left at its old wide-window spot
@@ -1226,7 +1360,7 @@ module("lively.identity.WikiIndex")
           var rightX = this._pageW() - SIDE_MARGIN - RIGHT_PANEL_W;
           this._categoriesPanel.setPosition(lively.pt(rightX, viewportY + scrollY));
         }
-        if (hidden) return;
+        if (sideHidden) return;
         if (this._sidebarBox && this._sidebarBox.world() && this._sidebarBox.isVisible()) {
           this._sidebarBox.setPosition(lively.pt(SIDE_MARGIN, viewportY + scrollY));
         }
@@ -1285,12 +1419,17 @@ module("lively.identity.WikiIndex")
         return this._spanBetweenPanels();
       },
 
-      // The space between the two panels, whether or not a page fills it —
-      // also what the wrapped card grid is centered in (_layoutGrid).
+      // The space between the panels that are shown, whether or not a page
+      // fills it — also what the wrapped card grid is centered in
+      // (_layoutGrid). A panel that has given way (_sidebarHidden,
+      // _categoriesHidden) takes no room. The floor is one card: there used
+      // to be a floor of 400 here, wider than the room a window of 900 to
+      // 1050 px leaves between the panels, which put the cards over the
+      // categories panel.
       _spanBetweenPanels: function () {
-        var leftEdge = SIDE_MARGIN + SIDEBAR_W + SIDEBAR_GAP;
-        var rightGutter = RIGHT_PANEL_W + RIGHT_PANEL_GAP;
-        return Math.max(400, this._pageW() - leftEdge - rightGutter - SIDE_MARGIN);
+        var leftEdge = this._sidebarHidden() ? SIDE_MARGIN : SIDE_MARGIN + SIDEBAR_W + SIDEBAR_GAP;
+        var rightGutter = this._categoriesHidden() ? 0 : RIGHT_PANEL_W + RIGHT_PANEL_GAP;
+        return Math.max(CARD_W, this._pageW() - leftEdge - rightGutter - SIDE_MARGIN);
       },
 
       // True while the window is wide enough to show both panels beside a
@@ -1300,10 +1439,23 @@ module("lively.identity.WikiIndex")
         return this._pageW() - gutters >= PAGE_MIN_W;
       },
 
-      // The panels are only ever hidden for an open page — with none open
-      // they're the way to find one, so they stay.
-      _panelsHidden: function () {
-        return !!this._activeContentMorph && !this._panelsFit();
+      // Which panels give way to a window too narrow for them.
+      //  - With a page open: both, together, as soon as the page could not
+      //    keep PAGE_MIN_W beside them (_panelsFit).
+      //  - With none open the cards are the way to find a page, so the panels
+      //    give way only when the cards would not fit beside them: first the
+      //    categories panel, so that the list of pages (the way to a page by
+      //    name) is what stays as the window gets narrower, then the list too
+      //    when not even one column of cards fits beside it. Without this the
+      //    grid, whose floor used to be wider than the room there is, was
+      //    drawn over the panels.
+      _sidebarHidden: function () {
+        if (this._activeContentMorph) return !this._panelsFit();
+        return this._pageW() < SIDE_MARGIN * 2 + SIDEBAR_W + SIDEBAR_GAP + CARD_W;
+      },
+      _categoriesHidden: function () {
+        if (this._activeContentMorph) return !this._panelsFit();
+        return this._pageW() < SIDE_MARGIN * 2 + SIDEBAR_W + SIDEBAR_GAP + CARD_W + RIGHT_PANEL_GAP + RIGHT_PANEL_W;
       },
 
       // Left edge of the open page: past the sidebar, or the page margin
@@ -1810,6 +1962,7 @@ module("lively.identity.WikiIndex")
       // and scrolls to the term that was searched for.
       _openPage: function (page, extraOpts) {
         var self = this;
+        if (this._isLocal()) return this._openLocalPage(page, null, extraOpts && extraOpts.highlightQuery);
         this._resolveHandle(page.objId, function (handle, envelope) {
           var w = self._contentWidth();
           var opts = self._autoHeightOpts({ bounds: lively.rect(0, 0, w, 780) });
@@ -1819,6 +1972,142 @@ module("lively.identity.WikiIndex")
           if (extraOpts && extraOpts.highlightQuery) opts.highlightQuery = extraOpts.highlightQuery;
           self._setActiveContentMorph(lively.identity.WikiView.open(handle, page.objId, opts));
         });
+      },
+
+      // ─── pages kept on this device ────────────────────────────────────────────
+      // The same slot as a host's page, filled with the page's EDITOR (there is no read-only view of a page on this device yet): what the
+      // person sees is the page, with its toolbar, and what they type is saved as they go.
+
+      // Where and how big the open page is, and that it grows with its text (the host's own options for the slot).
+      _slotOpts: function () {
+        return this._autoHeightOpts({ target: $world, bounds: lively.rect(0, 0, this._contentWidth(), 780) });
+      },
+
+      // Takes the page that is open out of the slot: what was typed in the last moments is saved first, then the shell's editing session for it
+      // is given back and the editor is removed. thenDo(err): if err, NOTHING was removed (the text is still on screen and the person has been
+      // told why it could not be saved); without err the slot is empty. With no page open it just answers.
+      _dropActive: function (thenDo) {
+        var self = this, view = this._activeContentMorph;
+        if (!view) return thenDo(null);
+        function gone() {
+          if (self._outlineObserver) { self._outlineObserver.disconnect(); self._outlineObserver = null; }
+          view.remove();
+          if (self._activeContentMorph === view) self._activeContentMorph = null;
+          thenDo(null);
+        }
+        if (!view._local) return gone();
+        view._closeLocal(function (err) {
+          if (err) {
+            // The same sentence is what the caller is given, for whoever asked (My worlds says it in its own line): the shell's bare reason
+            // would not tell a person what it was about.
+            var told = "The page was not left, because what you typed could not be saved: " + (err.message || err);
+            self._showError(told, true);
+            return thenDo(new Error(told));
+          }
+          gone();
+        });
+      },
+
+      // Keeps "On this page" (the left panel, while it shows the open page's headings) in step with the page: it is drawn again whenever the
+      // list of headings in the editor changes (the page's text arrives a moment after the editor opens; a person types a heading). Watches the
+      // editor's own DOM, so nothing waits on a timer.
+      _watchOutline: function (editor) {
+        var self = this, signature = null, queued = false;
+        if (this._outlineObserver) { this._outlineObserver.disconnect(); this._outlineObserver = null; }
+        if (typeof MutationObserver === "undefined") return;
+        function check() {
+          queued = false;
+          if (self._activeContentMorph !== editor || self._sidebarMode !== "outline") return;
+          var s = JSON.stringify(editor.getOutline().map(function (h) { return [h.level, h.text]; }));
+          if (s === signature) return;
+          signature = s;
+          self._renderSidebarOutline(editor);
+        }
+        this._outlineObserver = new MutationObserver(function () {
+          if (queued) return;
+          queued = true;
+          requestAnimationFrame(check);
+        });
+        this._outlineObserver.observe(editor.renderContext().shapeNode, { childList: true, subtree: true, characterData: true });
+      },
+
+      // Tells the shell which page the index shows (or none), so that a refresh comes back to it. The page is named by its id, or by its name
+      // when it has not been saved yet (it is made when it is first saved). A refusal is not the person's concern: a refresh then lands on
+      // the index alone.
+      _reportHere: function (ref) {
+        lively.identity.localIdentity.wikiHere(ref, function () {});
+      },
+
+      // Opens a page of the list in the slot. A second request while the first is still saving the old page is ignored (the person clicked
+      // twice): the slot is never filled by two editors.
+      // thenDo (optional) is told how it ended: no error when the page is open (it was already, or it is now) and an error when it is not (the
+      // old page could not be saved and stays, or the editor would not open); a request ignored for the one still being served is no error.
+      // highlightQuery (optional): the words of the search the page was chosen from, marked in the page (WikiEditor.markSearch), as the host's
+      // page marks the term it was opened with.
+      _openLocalPage: function (page, thenDo, highlightQuery) {
+        var self = this, done = thenDo || function () {};
+        var open = this._activeContentMorph;
+        if (open && open._local && open._wikiName === page.wikiName && open.world()) {
+          if (highlightQuery) open.markSearch(highlightQuery);
+          return done(null);
+        }
+        if (this._opening) return done(null);
+        this._opening = true;
+        this._dropActive(function (err) {
+          if (err) { self._opening = false; return done(err); }
+          var editor = lively.identity.WikiEditor.openLocal({ id: page.objId }, Object.assign(self._slotOpts(), highlightQuery ? { highlightQuery: highlightQuery } : {}));
+          self._opening = false;
+          if (!editor) return done(new Error("The page could not be opened."));
+          self._setActiveContentMorph(editor);
+          self._watchOutline(editor);
+          self._reportHere({ id: page.objId });
+          done(null);
+        });
+      },
+
+      // Opens the page with this id in the slot, asked for from outside the index (My worlds' "open" on a page's row while the person is already
+      // in their wiki: no need to replace the world with a new one for the same index). A page made since the list was read is found by
+      // reading the list again once. thenDo(err): err when the page is not one of the person's own pages (the index lists those only) or the
+      // list could not be read, or the page that is open could not be saved first; the page is then not opened. A page already open stays.
+      openPageById: function (id, thenDo) {
+        var self = this, done = thenDo || function () {};
+        if (!this._isLocal()) return done(new Error("That page is not kept on this device."));
+        function find() { return (self._pages || []).filter(function (p) { return p.objId === id; })[0]; }
+        var page = find();
+        if (page) return this._openLocalPage(page, done);
+        this._fetchLocal(function (err) {
+          if (err) return done(err);
+          self._renderCategoriesPanel();
+          self._renderPages();
+          page = find();
+          if (!page) return done(new Error("That page is not in your wiki."));
+          self._openLocalPage(page, done);
+        });
+      },
+
+      // The back pill and the menu bar's world name: to the home page. The shell saves what was typed in the last moments first (the
+      // bridge's beforeLeave), and a failure to save stops the move.
+      _goHome: function () {
+        var self = this;
+        lively.identity.localIdentity.go("homestar", undefined, function (err) { if (err) self._showError(err.message || String(err), true); });
+      },
+
+      // The list is read again from the shell once the saving has paused (REFRESH_PAUSE_MS after the last save, so not at every autosave while
+      // the person types), and the cards and panels are drawn again from it. A changed page costs the shell a summary worked out from the
+      // page's whole history (measured in node, one machine: 17 ms for a hundred saved edits, 163 ms for a thousand, 676 ms for three
+      // thousand), which is why this waits for a pause instead of asking after every save. The page that is open stays where it is (it is only
+      // drawn again if the person closes it).
+      _refreshLocalSoon: function () {
+        var self = this;
+        clearTimeout(this._refreshTimer);
+        this._refreshTimer = setTimeout(function () {
+          self._refreshTimer = null;
+          self._fetchLocal(function (err) {
+            if (err) return self._showError("Your wiki pages could not be read: " + (err.message || err), true);
+            self._renderCategoriesPanel();
+            self._renderPages();
+          });
+        }, REFRESH_PAUSE_MS);
       },
 
       // Mirrors _createNewPage below, but for an already-existing page
@@ -1853,16 +2142,29 @@ module("lively.identity.WikiIndex")
       // list. A WikiEditor autosaves on a 2s debounce, so a pending save
       // is flushed first rather than left to a timer on a removed morph.
       _closeActivePage: function () {
-        var view = this._activeContentMorph;
+        var self = this, view = this._activeContentMorph;
         if (!view) return;
+        // On this device the page is saved FIRST and only then taken out (a save that fails keeps the page, with the reason on screen).
+        if (this._isLocal()) {
+          return this._dropActive(function (err) {
+            if (err) return;
+            self._reportHere(null);
+            self._afterPageClosed();
+          });
+        }
         if (view._saveTimer && view._saveNow) view._saveNow();
         view.remove();
         this._activeContentMorph = null;
+        this._afterPageClosed();
+      },
+
+      // The slot is empty: the grid takes the whole width again and the left panel is the list of every page.
+      _afterPageClosed: function () {
         this._closeSortByDropdown();
         this._showSidebarPageList("");
         if (this._sidebarSearchField) this._sidebarSearchField.textString = "";
         if (this._sidebarSearchPlaceholder) this._sidebarSearchPlaceholder.setVisible(true);
-        this._layoutGrid();
+        this._layout();             // not the grid only: the sort menu may have to give way again (see _layout)
         window.scrollTo(0, 0);
       },
 
@@ -1916,8 +2218,10 @@ module("lively.identity.WikiIndex")
         if (this._sidebarSearchField) this._sidebarSearchField.textString = "";
         if (this._sidebarSearchPlaceholder) this._sidebarSearchPlaceholder.setVisible(true);
         this._renderSidebarOutline(morph);
-        // The grid collapses to its one-row shelf now that a page is open.
-        this._layoutGrid();
+        // The grid collapses to its one-row shelf now that a page is open, and
+        // the sort menu (hidden in a narrow window while no page is open)
+        // comes back, so the whole layout is made again, not the grid only.
+        this._layout();
       },
 
       // Populates the "On this page" sidebar from the page's real rendered
@@ -1984,7 +2288,7 @@ module("lively.identity.WikiIndex")
         }
 
         box.setExtent(lively.pt(SIDEBAR_W, y + 14));
-        box.setVisible(!this._panelsHidden());
+        box.setVisible(!this._sidebarHidden());
       },
 
       // Home button handler — switches the sidebar out of "this page's
@@ -2055,7 +2359,7 @@ module("lively.identity.WikiIndex")
         }
 
         box.setExtent(lively.pt(SIDEBAR_W, y + 14));
-        box.setVisible(!this._panelsHidden());
+        box.setVisible(!this._sidebarHidden());
       },
 
       // Wiki pages carry their author's DID only inside the envelope, not
@@ -2142,9 +2446,11 @@ module("lively.identity.WikiIndex")
         var self = this;
         var user = lively.identity.did.currentUser();
         if (!user) return this._showError("Not signed in.");
-        var scope = this._scope.kind === "personal"
-          ? { handle: this._scope.handle }
-          : { constellation: this._scope.name };
+        var scope = this._isLocal()
+          ? { handle: this._scope.label }
+          : this._scope.kind === "personal"
+            ? { handle: this._scope.handle }
+            : { constellation: this._scope.name };
         lively.require("lively.identity.NewWikiPageDialog").toRun(function () {
           lively.identity.NewWikiPageDialog.open({
             scope: scope,
@@ -2153,8 +2459,32 @@ module("lively.identity.WikiIndex")
         });
       },
 
+      // A new page on this device: the editor opens in the slot on a page of that name (made when it is first saved), and writes the chosen
+      // category and tags into the page's document. A name the person already has is not a new page: they are told, and nothing opens.
+      _createLocalPage: function (fields) {
+        var self = this;
+        if (this._pages.some(function (p) { return p.wikiName === fields.wikiName; })) {
+          $world.inform("You already have a page named “" + fields.wikiName + "”. Open it from the list, or choose another name.");
+          return;
+        }
+        if (this._opening) return;
+        this._opening = true;
+        this._dropActive(function (err) {
+          if (err) { self._opening = false; return; }
+          var editor = lively.identity.WikiEditor.openLocal({ name: fields.wikiName }, Object.assign(self._slotOpts(), {
+            meta: { category: fields.category, tags: fields.tags },
+          }));
+          self._opening = false;
+          if (!editor) return;
+          self._setActiveContentMorph(editor);
+          self._watchOutline(editor);
+          self._reportHere({ name: fields.wikiName });
+        });
+      },
+
       _createNewPage: function (handle, fields) {
         var self = this;
+        if (this._isLocal()) return this._createLocalPage(fields);
         lively.require("lively.identity.WikiEditor").toRun(function () {
           var w = self._contentWidth();
           var newCardOpts = {
@@ -2214,6 +2544,7 @@ module("lively.identity.WikiIndex")
 
       _fetchWikiIndexSilently: function (thenDo) {
         var self = this;
+        if (this._isLocal()) return this._fetchLocal(function () { thenDo(); });
         var base = lively.identity.did.baseUrl();
         var url = this._scope.kind === "personal"
           ? base + "/@" + encodeURIComponent(this._scope.handle) + "/wiki"
@@ -2253,6 +2584,14 @@ module("lively.identity.WikiIndex")
 
       _patchMenuBarEntry: function (entry) {
         var self = this;
+        if (this._isLocal()) {
+          var localLabel = this._titleText();
+          entry.currentWorldDisplayName = function () { return localLabel; };
+          entry.toolTip = localLabel + " — back to your homestar";
+          entry.onMouseUp = function (evt) { self._goHome(); evt.stop(); return true; };
+          entry.update();
+          return;
+        }
         var isPersonal = this._scope.kind === "personal";
         var label = isPersonal ? "@" + this._shownHandle() + " wiki" : "c/" + this._shownName() + " wiki";
         var backHref = isPersonal
@@ -2271,8 +2610,13 @@ module("lively.identity.WikiIndex")
         entry.update();
       },
 
+      // A host's index only logs: the page is a server's, and the person can reload. On this device the person is told in the world, because
+      // nothing else on screen says why a list is empty or a page did not open.
       _showError: function (msg) {
         console.error("[WikiIndex]", msg);
+        if (this._scope && this._scope.kind === "local" && typeof $world !== "undefined" && $world && $world.setStatusMessage) {
+          $world.setStatusMessage(msg, Color.red, 8);
+        }
       },
     });
 
@@ -2281,14 +2625,25 @@ module("lively.identity.WikiIndex")
     // onStartWorld hooks) are expected to only call these once $world
     // already exists.
     lively.identity.WikiIndex = {
+      // The index that is running in this world (one per world), for whatever needs to look at it: the other morphs of the world, a test.
+      current: null,
       open: function (name) {
         var controller = new lively.identity.WikiIndexController();
+        lively.identity.WikiIndex.current = controller;
         controller.open(name);
         return controller;
       },
       openPersonal: function (handle) {
         var controller = new lively.identity.WikiIndexController();
+        lively.identity.WikiIndex.current = controller;
         controller.openPersonal(handle);
+        return controller;
+      },
+      // The pages kept on this device (inside keo). opts: { open: a page id, newPage: true }, see WikiIndexController>>openLocal.
+      openLocal: function (opts) {
+        var controller = new lively.identity.WikiIndexController();
+        lively.identity.WikiIndex.current = controller;
+        controller.openLocal(opts);
         return controller;
       },
     };

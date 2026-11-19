@@ -18,11 +18,15 @@ lively.BuildSpec("lively.morphic.tools.MenuBar", {
     name: "MenuBar",
     isGlobalMenuBar: true,
 
+    // The side an entry is on is the side it asked for (menuBarAlign), and its place on that side is the order it was added in: a
+    // left entry goes to the right of the ones already there, a right entry to the left of them, so the right side reads in the
+    // reverse of the adding. NEVER work the side out from where an entry sits now: a window too narrow for the bar squeezes it,
+    // the right-hand entries move across the middle, and sorting by place then left them in the left group for good, so the bar
+    // came back wide with its entries in another order and some in the middle.
     leftsAndRights: function leftsAndRights() {
-      var mid = this.innerBounds().center().x;
-      return this.submorphs
-        .sortBy(function(ea) { return ea.getPosition().x; })
-        .partition(function(ea) { return ea.bounds().topRight().x < mid; });
+      var lefts = this.submorphs.filter(function(ea) { return ea.menuBarAlign !== "right"; }),
+          rights = this.submorphs.filter(function(ea) { return ea.menuBarAlign === "right"; });
+      return [lefts, rights.reverse()];
     },
 
     // Entries are centered vertically (each at its own height) and the right-most
