@@ -204,6 +204,7 @@ module("lively.identity.MenuBarEntry")
               ["My homestar",        function () { self.openMyHomestar(); }],
               ["My worlds",          function () { self.openMyWorlds(); }],
               ["My files",           function () { self.openMyFiles(); }],
+              ["Wiki pages",         function () { self.openWikiPages(); }],
               ["Messages",           function () { self.openMessages(); }],
               ["Connect a device ...", function () { self.openPeerDialog(); }],
             ].concat(lively.identity.localIdentity && lively.identity.localIdentity.phoneReady
@@ -368,6 +369,13 @@ module("lively.identity.MenuBarEntry")
         openMyFiles: function openMyFiles() {
           lively.require("lively.identity.MyFilesBrowser").toRun(function () {
             lively.identity.MyFilesBrowser.open();       // finds the open one and brings it forward, or opens a new one
+          });
+        },
+
+        // The wiki pages kept on this device (a local identity): one window at a time, found by name, like My files.
+        openWikiPages: function openWikiPages() {
+          lively.require("lively.identity.WikiPagesDialog").toRun(function () {
+            lively.identity.WikiPagesDialog.open();
           });
         },
 

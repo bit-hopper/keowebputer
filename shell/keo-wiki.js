@@ -1,7 +1,8 @@
 // The shell's hold on the local wiki store (keo-wikistore.js): WHERE its sealed records are kept (IndexedDB `keo-wiki`) and WHICH SESSION
 // owns it. The checking and the sealing are keo-wikistore.js's; this file only gives it a disk and a lifetime. Runs in the extension's own
-// page; nothing in the world can reach it (there is no bridge op yet: the code that will let the world read and write a page, W-3, decides
-// what it may ask, and every edit still goes through the store's checks).
+// page. The world reaches pages only through the four bridge ops of shell.js (wiki.list, wiki.open, wiki.edit, wiki.close), which call
+// pages() below (keo-wikipages.js); the store itself, the log book and the signing stay out of its reach, and every edit goes through the
+// store's checks.
 //
 //   IndexedDB `keo-wiki`, one object store `records`: key `<DID> NUL <kind> NUL <id>` -> { iv, ct } (the sealed record of keo-wikistore.js).
 //   The key is the only thing readable without the session key besides the sizes and the order of writes: the identity's DID (as in the
@@ -86,14 +87,36 @@
     if (!s) throw new Error('Sign in to use wiki pages.');
     if (cur && (cur.did !== s.did || cur.key !== s.key)) reset();
     if (!cur) {
-      cur = { did: s.did, key: s.key, store: window.keoWikiStore.create({ backend: backend(s.did), key: s.key, did: s.did }) };
+      cur = { did: s.did, key: s.key, store: window.keoWikiStore.create({ backend: backend(s.did), key: s.key, did: s.did }), pages: null };
     }
     return cur.store;
+  }
+  // What the signed-in identity gives the page operations: its public proof (the log and the device key's id) and a signature by the device
+  // key. Neither is reachable by the world: only the operations built on them are, and they sign events they built themselves.
+  function deviceIdOf(jwk) {
+    var kd = window.keoDid;
+    return kd.sha256(new TextEncoder().encode(kd.canonicalJson({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y }))).then(kd.b64u);
+  }
+  var identityForPages = {
+    proof: function () {
+      return window.keoIdentity.deviceProof().then(function (p) {
+        return deviceIdOf(p.cert.devicePubKeyJwk).then(function (id) { return { did: p.did, deviceId: id, log: { inception: p.inception, sigs: p.sigs, events: p.events } }; });
+      });
+    },
+    sign: function (bytes, did) { return window.keoIdentity.signWithDevice(bytes, did); }
+  };
+  // The page operations of the signed-in identity (keo-wikipages.js: list, open, edit, close), made on first use and gone with the session.
+  // Throws when nobody is signed in.
+  function pages() {
+    var s = store();
+    if (!cur.pages) cur.pages = window.keoWikiPages.create({ store: s, identity: identityForPages });
+    return cur.pages;
   }
   // The session ended: nothing of the identity stays in memory, and the store starts nothing more.
   function reset() {
     var c = cur;
     cur = null;
+    if (c && c.pages) c.pages.reset();
     if (c) draining = Promise.all([draining, c.store.close().catch(function () {})]).then(function () {});
     return draining;
   }
@@ -127,5 +150,5 @@
     return draining.then(function () { return run('readwrite', function (st) { st['delete'](IDBKeyRange.bound(p, p + MAXCH)); }); });
   }
 
-  window.keoWiki = { store: store, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
+  window.keoWiki = { store: store, pages: pages, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
 })();

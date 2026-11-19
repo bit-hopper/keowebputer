@@ -21,7 +21,8 @@
     "test:sha256": "node tests/keo-sha256-test.js",
     "test:hash": "node tests/keo-hash-test.js",
     "test:wikilog": "node tests/keo-wikilog-test.js",
-    "test:wikistore": "node tests/keo-wikistore-test.js"
+    "test:wikistore": "node tests/keo-wikistore-test.js",
+    "test:wikipages": "node tests/keo-wikipages-test.js"
   },
   "devDependencies": {
     "jsqr": "1.4.0",

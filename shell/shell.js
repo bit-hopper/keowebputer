@@ -120,6 +120,14 @@
     'world.meta': function (a) { return window.keoWorlds.setMeta({ name: a.name, tags: a.tags, note: a.note }); },
     'world.duplicate': function (a) { return window.keoWorlds.duplicate({ from: a.from, to: a.to }); },
     'world.search': function (a) { return window.keoWorlds.search({ query: a.query }); },
+    // Wiki pages (keo-wikipages.js): list the pages this device holds, open one for editing, hand over what an editing session changed, close
+    // it. The world only ever ASKS: the shell builds each signed event itself from the bytes the editor changed, under a client id it made
+    // up for that session, adds it to the sealed store and answers what the store made of it, so the world is never the judge of its own
+    // edit and cannot sign anything it chooses. `update` is a Yjs update (bytes), `n` the editor's own count of its saves.
+    'wiki.list': function () { return window.keoWiki.pages().list(); },
+    'wiki.open': function (a) { return window.keoWiki.pages().open({ name: a.name, id: a.id }); },
+    'wiki.edit': function (a) { return window.keoWiki.pages().edit({ session: a.session, n: a.n, update: a.update }); },
+    'wiki.close': function (a) { return window.keoWiki.pages().close({ session: a.session }); },
     // The small objects the runtime's own apps keep (books, albums, folders), encrypted under the signed-in identity (keo-library.js).
     // `doc` is one object the world built; the shell checks whose it is and what kind, and stores it as it is.
     'library.get': function (a) { return window.keoLibrary.get({ objId: a.objId }); },

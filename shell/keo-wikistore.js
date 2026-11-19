@@ -137,7 +137,7 @@
     async function loadPage(objId) {
       if (pages.has(objId)) return pages.get(objId);
       var id = await pageKey(objId), rec = (await read('page', id)) || { objId: objId, cids: [], pending: [] };
-      var page = { objId: objId, id: id, versions: new Map(), pending: new Map(), byClient: new Map() };
+      var page = { objId: objId, id: id, versions: new Map(), pending: new Map(), byClient: new Map(), touched: rec.touched || null };
       for (var i = 0; i < rec.cids.length; i++) {
         var v = await read('version', rec.cids[i]);
         if (!v) throw new Error('The wiki store is missing a version it lists (' + rec.cids[i].slice(0, 8) + ').');
@@ -155,7 +155,10 @@
         page.byClient.set(c, list);
       });
     }
-    async function savePage(page) { await write('page', page.id, { objId: page.objId, cids: Array.from(page.versions.keys()), pending: Array.from(page.pending.keys()) }); }
+    // `touched` is when THIS device last took something into the page (its own clock, set in accept): what a page list shows as "last
+    // changed here". It is not the author's claim (an event's `created`), which nothing in a receiver should rely on. A page record written
+    // before the field existed has none: null.
+    async function savePage(page) { await write('page', page.id, { objId: page.objId, cids: Array.from(page.versions.keys()), pending: Array.from(page.pending.keys()), touched: page.touched }); }
 
     function ctxFor(page) {
       return {
@@ -233,6 +236,7 @@
       await write('version', cid, v);          // the version first, then the list that names it: a crash between them leaves an unused record, never a list with a hole
       index(page, cid, v);
       page.pending.delete(cid);
+      page.touched = now();
       await backend.del('pending', cid);
       await savePage(page);
     }
@@ -292,6 +296,19 @@
       offerLog: offerLog,
       logOf: function (did) { return serial(function () { return pinnedLog(did); }); },
       add: function (env) { return serial(function () { return addNow(env); }); },
+      // Every page this store holds, newest change first: [{ objId, versions, pending, touched }]. Reads the small page records only, never a
+      // page's versions, so a long list costs one decryption per page. `touched` is null for a page whose record predates the field.
+      pages: function () {
+        return serial(async function () {
+          var ids = await backend.ids('page'), out = [];
+          for (var i = 0; i < ids.length; i++) {
+            var rec = await read('page', ids[i]);
+            if (rec && typeof rec.objId === 'string') out.push({ objId: rec.objId, versions: rec.cids.length, pending: rec.pending.length, touched: rec.touched || null });
+          }
+          out.sort(function (a, b) { return (a.touched || '') < (b.touched || '') ? 1 : (a.touched || '') > (b.touched || '') ? -1 : (a.objId < b.objId ? -1 : 1); });
+          return out;
+        });
+      },
       // checks the page's waiting edits again (after the caller learned something: a new writer list, say)
       recheck: function (objId) { return serial(async function () { return settle(await loadPage(objId)); }); },
       heads: function (objId) { return serial(async function () { var p = await loadPage(objId); return W.headsOf(Array.from(p.versions.keys()), getter(p)); }); },

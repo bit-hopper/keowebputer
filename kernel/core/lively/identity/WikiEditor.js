@@ -37,6 +37,15 @@
  * WikiSerializer or attaching a WebsocketProvider. This file enforces that
  * at create-time.
  *
+ * Two places the page can live:
+ *   - on a host (everything above: the server loads, saves and syncs it), and
+ *   - ON THIS DEVICE, inside keo with a local identity (openLocal below; `_local` is true). There is no server: the shell keeps the page
+ *     as signed edits in a sealed store (shell/keo-wikipages.js) and the editor only asks it, through lively.identity.localIdentity
+ *     (wikiOpen, wikiEdit, wikiClose). Loading, saving, edit access and sync then take the 'keo local pages' methods instead of the XHR,
+ *     serializer and websocket ones; nothing else about the editor changes. What the editor sends is ONLY what its own client wrote
+ *     (the document's own updates, merged), under the client id the shell hands out at every opening: the shell refuses an edit that
+ *     carries any other client's changes. History, embeds of other pages and sync between devices are not available there yet.
+ *
  * Entry points:
  *   lively.identity.WikiEditor.openCard(handle, objId)
  *     — loads an existing wiki page and opens the editor
@@ -108,7 +117,8 @@ module('lively.identity.WikiEditor')
         '_previewContainer', '_previewMode', '_activeDropdown', '_outsideClickHandler',
         '_flowEl', '_heightObserver', '_onHeightChanged',
         '_editAccess', '_tokenTimer', '_permissionsRow', '_permPanel', '_permCloseHandler',
-        '_saveInFlight', '_saveRerun', '_saveWaiters', '_restore'],
+        '_saveInFlight', '_saveRerun', '_saveWaiters', '_restore',
+        '_local', '_localRef', '_localKey', '_pageSession', '_pageClientId', '_unsaved', '_unconfirmed', '_saveN'],
     },
 
     // ─── initialization ──────────────────────────────────────────────────────────
@@ -879,15 +889,18 @@ module('lively.identity.WikiEditor')
       _buildSaveControls: function (row) {
         var self = this;
 
-        var histBtn = document.createElement('button');
-        histBtn.textContent = 'History';
-        histBtn.title = 'Save, then view the version history';
-        histBtn.style.cssText = 'flex:0 0 auto;width:64px;height:24px;padding:0;font-size:11px;cursor:pointer;border:1px solid #ccc;border-radius:3px;background:#fff;';
-        histBtn.addEventListener('mousedown', function (e) {
-          e.preventDefault(); e.stopPropagation();
-          self._openHistory();
-        });
-        row.appendChild(histBtn);
+        // The version history reads a host; on this device it comes with a later step, so there is no button to a window that cannot open.
+        if (!this._local) {
+          var histBtn = document.createElement('button');
+          histBtn.textContent = 'History';
+          histBtn.title = 'Save, then view the version history';
+          histBtn.style.cssText = 'flex:0 0 auto;width:64px;height:24px;padding:0;font-size:11px;cursor:pointer;border:1px solid #ccc;border-radius:3px;background:#fff;';
+          histBtn.addEventListener('mousedown', function (e) {
+            e.preventDefault(); e.stopPropagation();
+            self._openHistory();
+          });
+          row.appendChild(histBtn);
+        }
 
         var statusSpan = document.createElement('span');
         statusSpan.style.cssText = 'flex:0 0 auto;min-width:44px;text-align:right;font-size:10px;color:#888;pointer-events:none;';
@@ -915,6 +928,20 @@ module('lively.identity.WikiEditor')
           });
         });
         row.appendChild(saveBtn);
+
+        // On this device the page is in a window of its own: Close saves what is typed, then closes the window (as the window's own close
+        // control does).
+        if (this._local) {
+          var closeBtn = document.createElement('button');
+          closeBtn.textContent = 'Close';
+          closeBtn.title = 'Save, then close this page';
+          closeBtn.style.cssText = 'flex:0 0 auto;width:64px;height:24px;padding:0;font-size:12px;cursor:pointer;border:1px solid #ccc;border-radius:3px;background:#fff;';
+          closeBtn.addEventListener('mousedown', function (e) {
+            e.preventDefault(); e.stopPropagation();
+            self._closeLocal();
+          });
+          row.appendChild(closeBtn);
+        }
       },
 
       // Reflects the current selection's formatting into the toolbar —
@@ -1168,6 +1195,7 @@ module('lively.identity.WikiEditor')
       },
 
       _loadExistingNow: function () {
+        if (this._local) return this._loadLocalNow();
         var self = this;
         var base = lively.identity.did.baseUrl();
         var url = base + '/@' + encodeURIComponent(this._handle) + '/' + encodeURIComponent(this._objId);
@@ -2060,6 +2088,9 @@ module('lively.identity.WikiEditor')
       // the request failed. Cached in _editAccess; pass force to refetch.
       _fetchEditAccess: function (thenDo, force) {
         var self = this;
+        // On this device the shell decided at opening whether the page may be written (the owner, or someone the owner listed);
+        // there is no token, and no server to ask.
+        if (this._local) return thenDo({ canEdit: !!this._canEdit, reason: this._readOnlyReason, policy: null, token: null });
         if (this._editAccess && !force) return thenDo(this._editAccess);
         if (!this._objId || !this._handle) return thenDo(null);
         var url = lively.identity.did.baseUrl() + '/@' + encodeURIComponent(this._handle) +
@@ -2081,6 +2112,7 @@ module('lively.identity.WikiEditor')
       },
 
       _connectSync: function () {
+        if (this._local) return; // no live sync room on this device (sync between devices is a later step)
         if (!this._objId) return; // no sync until first save establishes objId
         if (!this.yDoc) return;
         if (this.wsProvider) return;
@@ -2221,6 +2253,7 @@ module('lively.identity.WikiEditor')
         if (!user) { this._setStatus('Not signed in'); return cb(new Error('Not signed in')); }
         if (!this.editorView) { this._setStatus('No document'); return cb(new Error('No document')); }
         this._saveInFlight = Date.now();
+        if (this._local) return this._saveLocal(cb);
 
         var params = {
           prevEnvelope:  this._envelope || null,
@@ -2286,6 +2319,136 @@ module('lively.identity.WikiEditor')
           callback(new Error('Network error'));
         };
         xhr.send(JSON.stringify(envelope));
+      },
+
+    },
+
+    // ─── pages kept on this device (keo) ──────────────────────────────────────────
+    // Used when `_local` is set (see openLocal): the shell keeps the page, as signed edits in a sealed store, and this editor only asks it
+    // (lively.identity.localIdentity.wikiOpen / wikiEdit / wikiClose). The shell builds, signs and checks every edit itself; here the
+    // only question is WHAT to send, and the rule is: only what this client wrote. A save sends the document's own updates since the last
+    // save, merged, never "the document's state since a saved vector", so that the day another writer's update is applied to this document
+    // it cannot ride along into an edit that is refused for carrying someone else's changes.
+
+    'keo local pages', {
+
+      // Opens the page for editing. `_localRef` is { name } (this identity's own page, made when it is first saved) or { id }.
+      _loadLocalNow: function () {
+        var self = this, Y = this._Y(), li = lively.identity.localIdentity;
+        if (!Y) return this._showLocalError('Yjs not loaded — cannot open the page');
+        this._setStatus('Loading…');
+        li.wikiOpen(this._localRef, function (err, r) {
+          if (err) return self._showLocalError('Could not open the page: ' + (err.message || err));
+          // taken out of the world while the shell was answering (another page was opened, or this one was closed): give the session back
+          if (!self.world()) { li.wikiClose(r.session); return; }
+          var doc = new Y.Doc({ gc: false });
+          if (r.state && r.state.length) Y.applyUpdate(doc, r.state);
+          // Set after the page's state is applied (applying it writes nothing under this client) and before anything is written: every
+          // struct this client makes from here on carries this id, the only one the shell will take an edit under.
+          doc.clientID = r.clientId;
+          self.yDoc = doc;
+          self._objId = r.id;
+          self._wikiName = r.name;
+          self._pageSession = r.session;
+          self._pageClientId = r.clientId;
+          self._isOwner = !!r.mine;
+          self._canEdit = !!r.canEdit;
+          self._readOnlyReason = r.canEdit ? null : 'not-listed';
+          self._attachments = [];
+          self._unsaved = [];
+          self._unconfirmed = null;
+          self._saveN = 0;
+          // What this client writes, from BEFORE the editor is attached: its first draw may write too, and a later edit can depend on that.
+          // An update that arrives from elsewhere (a later step) is applied with the origin 'keo-remote' and is not this client's to send.
+          doc.on('update', function (update, origin) { if (origin !== 'keo-remote') self._unsaved.push(update); });
+          self._attachEditor();
+          self._applyReadOnlyMode();
+          self._refreshPermissionsRow();
+          self._setStatus(r.isNew ? 'New page' : 'Saved');
+        });
+      },
+
+      // True while there is something typed that the shell has not taken: the editor's own edits since the last save, or a save whose
+      // answer never came.
+      _hasUnsavedLocal: function () {
+        return !!(this._local && this._pageSession && (this._unconfirmed || (this._userHasEdited && this._unsaved && this._unsaved.length)));
+      },
+
+      // Sends what has changed since the last save. A save whose answer never came (the call timed out) is asked for again first, with
+      // the same number and the same bytes: the shell then answers a repeat with its earlier answer and builds nothing, so a lost answer
+      // cannot turn into a second edit over the same clock numbers. Any other failure is the shell's word that nothing was stored, and the
+      // next save sends everything not yet stored, as one edit.
+      _saveLocal: function (cb) {
+        var self = this, li = lively.identity.localIdentity, Y = this._Y();
+        if (!this._pageSession || !this._unsaved) { this._setStatus('Error'); return cb(new Error('The page is not open for saving.')); }
+        var sent = this._unconfirmed;
+        if (!sent) {
+          var batch = this._unsaved.slice();
+          if (!batch.length) { this._setStatus('Saved'); return cb(null); }
+          sent = this._unconfirmed = { n: this._saveN++, update: batch.length === 1 ? batch[0] : Y.mergeUpdates(batch), count: batch.length };
+        }
+        this._setStatus('Saving…');
+        li.wikiEdit({ session: this._pageSession, n: sent.n, update: sent.update }, function (err, r) {
+          if (err) {
+            if (!/timed out/.test(err.message || '')) self._unconfirmed = null;
+            return self._localSaveFailed(err.message || String(err), cb);
+          }
+          if (!r || !r.saved) {
+            self._unconfirmed = null;
+            return self._localSaveFailed((r && r.error) || 'The page was not saved.', cb);
+          }
+          // The updates collected after the batch was taken stay: they are the next save's.
+          self._unsaved.splice(0, sent.count);
+          self._unconfirmed = null;
+          self._setStatus('Saved');
+          // the list of pages (a window of its own) reads again: a page may have just come into being, or have a newer change
+          try { window.dispatchEvent(new CustomEvent('keo-wiki-changed')); } catch (e) { /* no listener matters */ }
+          cb(null);
+        });
+      },
+
+      _localSaveFailed: function (message, cb) {
+        this._setStatus('Not saved');
+        this._tellLocal('The page was not saved: ' + message);
+        cb(new Error(message));
+      },
+
+      _showLocalError: function (message) {
+        console.error('[WikiEditor]', message);
+        this._setStatus('Error');
+        this._tellLocal(message);
+      },
+
+      _tellLocal: function (message) {
+        if (typeof $world !== 'undefined' && $world && $world.setStatusMessage) $world.setStatusMessage(message, Color.red, 8);
+      },
+
+      // Gives the shell's editing session back (it keeps a limited number open).
+      _endLocalSession: function () {
+        var s = this._pageSession;
+        this._pageSession = null;
+        if (s) lively.identity.localIdentity.wikiClose(s);
+      },
+
+      // The Close button, and the window's own close control, both go through the window's shutdown: ifOkToShutdownDo first (below), then
+      // onShutdown.
+      _closeLocal: function () {
+        var win = this.getWindow();
+        if (win && win !== this && win.initiateShutdown) win.initiateShutdown();
+      },
+
+      // Asked by the window before it closes (Window#initiateShutdown): what was typed in the last moments is saved first. If that cannot be
+      // saved the window stays open with its text and the reason on screen, rather than lose the text.
+      ifOkToShutdownDo: function (thenDo) {
+        if (!this._local || !this._hasUnsavedLocal()) return thenDo();
+        this._saveNow(function (err) { if (!err) thenDo(); });
+      },
+
+      // The window is closing for good: no save is pending any more, and the shell's session for the page is given back.
+      onShutdown: function () {
+        if (!this._local) return;
+        clearTimeout(this._saveTimer);
+        this._endLocalSession();
       },
 
     },
@@ -3470,6 +3633,43 @@ module('lively.identity.WikiEditor')
           WikiEditorClass._openInWorld(editor);
           editor._setup();
         }
+        return editor;
+      },
+
+      // The editors of pages kept on this device that are open now, in the windows that hold them.
+      localEditors: function () {
+        return $world.submorphs.map(function (m) { return m.targetMorph; }).filter(function (e) { return e && e._local && e.world(); });
+      },
+
+      // A page kept on THIS device (inside keo, signed in with a local identity). ref is { name } for this identity's own page, which comes
+      // into being when it is first saved, or { id } for a page the shell already holds. The page opens in a window of its own, like the
+      // other windows of keo: a page opened as the world's backdrop is behind whatever the world shows (the home page covers it, and a
+      // click never reaches it). One window per page: asking for a page that is open brings its window forward. Returns the editor.
+      openLocal: function (ref, options) {
+        var opts = options || {};
+        var user = lively.identity.did.currentUser();
+        if (!(user && user.local && lively.identity.localIdentity.isAvailable())) {
+          $world.inform('Wiki pages on this device need keo webputer with an identity signed in.');
+          return null;
+        }
+        // This identity's own page is the same page whether it is asked for by name or by id; the window is found by name either way.
+        if (ref.id && ref.id.indexOf(user.did + '/') === 0) ref = { name: ref.id.slice(user.did.length + 1) };
+        var key = ref.id ? 'id:' + ref.id : 'name:' + ref.name;
+        var open = WikiEditorClass.localEditors().filter(function (e) { return e._localKey === key; })[0];
+        if (open) { open.getWindow().comeForward(); return open; }
+        var vis = lively.morphic.World.current().visibleBounds();
+        var w = Math.min(900, Math.max(520, vis.width - 60)), h = Math.min(680, Math.max(400, vis.height - 100));
+        var editor = new lively.identity.WikiEditor(opts.bounds || lively.rect(0, 0, w, h));
+        editor._handle = user.handle;
+        editor._objId = ref.id || null;
+        editor._isNew = false;
+        editor._local = true;
+        editor._localKey = key;
+        editor._localRef = ref.id ? { id: ref.id } : { name: ref.name };
+        editor._wikiName = ref.name || (ref.id ? ref.id.slice(ref.id.indexOf('/') + 1) : null);
+        var title = ref.name || ref.id.slice(ref.id.indexOf('/') + 1);
+        editor.openInWindow({ title: title, pos: vis.center().subPt(lively.pt(w / 2, h / 2)) });
+        editor._setup();
         return editor;
       },
 

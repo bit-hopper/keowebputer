@@ -93,6 +93,9 @@ npm run test:worldtext                               # no browser: the text that
 node tests/keo-identity-test.js . dist <work dir>    # identity creation end to end, virtual authenticator
 node tests/keo-session-test.js  . dist <work dir>    # the session, encrypted saved worlds, menu bar
 node tests/keo-wikistore-idb-test.js . dist <work dir>  # the wiki page store on its real disk: sealed records, a reload, sign-out, removing an identity
+npm run test:wikipages                                # no browser: how the world lists, opens and saves wiki pages with every check kept in the shell (a fresh client id at every opening, saves one after another, the store judging each edit)
+node tests/keo-wikipages-bridge-test.js . dist <work dir>  # the same through the real bridge: bytes both ways, refusals as answers, nothing readable on disk, a reload, sign-out and sign-in
+node tests/keo-wikipages-ui-test.js . dist <work dir>      # wiki pages used like a person would: the menu entry, the list window, a new page by real clicks and typing, autosave, closing, a reload, reading a page that is not yours, a code cell run
 node tests/keo-enroll-test.js    . dist <work dir>    # two browsers, two extension ids: one identity moved to the other origin by a second passkey, the secret carried over, the words that guard both ends
 node tests/keo-enroll-ui-test.js . dist <work dir>    # the same, through the shell dialog by real clicks, typing, a real file chooser and a real download
 node tests/keo-transfer-test.js . dist <work dir>    # two browsers: the saved worlds and library of one identity saved as a sealed file on one origin and added on the other, by real clicks, a real download and a real file chooser

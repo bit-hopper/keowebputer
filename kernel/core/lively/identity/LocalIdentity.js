@@ -240,6 +240,23 @@ module("lively.identity.LocalIdentity")
         return window.keo.on("friend", fn);
       },
 
+      // ─── wiki pages (shell/keo-wikipages.js) ──────────────────────────────────────────────────────────────────
+      // A person's wiki pages are kept on this device by the shell, as signed edits in a sealed store. The world only ASKS: the shell builds
+      // and signs each edit itself and says what its checks made of it, so the world is never the judge of its own edit, cannot sign
+      // anything it chooses, and cannot say who may write a page. All bytes are Yjs updates (a Uint8Array).
+      //   wikiList()       -> [{ id, name, owner, mine, versions, pending, updated }]   newest change first; a page exists once it has a saved edit
+      //   wikiOpen(ref)    -> { session, id, name, owner, mine, isNew, canEdit, clientId, heads, state }
+      //                       ref is { name } for this identity's own page (made when first saved) or { id } for any page held here. `state`
+      //                       is the page's Yjs update; `clientId` is the number the editor must give its Yjs document (a fresh one at every
+      //                       opening): an edit under any other client id is refused.
+      //   wikiEdit({ session, n, update }) -> { status, cid, error, saved }   `n` counts the editor's saves; the same n with the same bytes
+      //                       gets the earlier answer, so a lost answer can be asked for again. saved is false for anything but a stored edit.
+      //   wikiClose(session) -> true
+      wikiList: function wikiList(thenDo) { this._run("wiki.list", {}, 30000, thenDo); },
+      wikiOpen: function wikiOpen(ref, thenDo) { this._run("wiki.open", ref.id ? { id: ref.id } : { name: ref.name }, 30000, thenDo); },
+      wikiEdit: function wikiEdit(a, thenDo) { this._run("wiki.edit", { session: a.session, n: a.n, update: a.update }, 60000, thenDo); },
+      wikiClose: function wikiClose(session, thenDo) { this._run("wiki.close", { session: session }, 30000, thenDo || function () {}); },
+
       // ─── introductions (shell/keo-intro.js) ───────────────────────────────────────────────────────────────────
       // An introduction says who a person is (their identity) and where they can be asked to connect, small enough for a QR code. Both screens
       // are drawn by the SHELL, because our own addresses and the Add button must stay out of the world: the world can only ask for one to
