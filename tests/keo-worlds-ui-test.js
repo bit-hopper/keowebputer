@@ -254,10 +254,10 @@ const promptDiag = (frame) => frame.evaluate(() => { const out = []; (function w
     win = await until(async () => { const s = await readWin(frame); return s && s.rows.length === 3 ? s : null; });
     check('delete: it is gone from the list and from the shell', win && !names(win.rows).includes('Budget 2026 copy') && (await keoCall(frame, 'world.has', { name: 'Budget 2026 copy' })).r === false, win);
 
-    // ---- Create: the picker offers a blank world and a template (no wiki page: there is no wiki on this device)
+    // ---- Create: the picker offers a blank world, a wiki page (kept on this device) and a template
     r = await byName(page, frame, 'createBtn'); await click(page, r);
     win = await until(async () => { const s = await readWin(frame); return s && s.all.includes('Create new') ? s : null; });
-    check('create: the picker offers a blank world and a template, and no wiki page', !!win && win.all.includes('Blank world') && win.all.includes('Template') && !win.all.includes('Wiki page'), win && win.all);
+    check('create: the picker offers a blank world, a wiki page that stays on this device, and a template', !!win && win.all.includes('Blank world') && win.all.includes('Template') && win.all.includes('Wiki page') && win.all.includes('Write a page that stays on this device.'), win && win.all);
     await page.screenshot({ path: path.join(WORK, 'my-worlds-create.png') });
     await click(page, await textRect(page, frame, 'Template'));
     win = await until(async () => { const s = await readWin(frame); return s && s.all.includes('Choose a template') ? s : null; });
