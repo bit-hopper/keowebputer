@@ -137,6 +137,15 @@ const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); re
   const rB = await T.pages.edit({ session: oB.session, n: 0, update: eB.change(insert('not mine')) });
   ok('an edit of someone else\'s page is refused', rB.status !== 'accepted' && rB.saved === false, rB);
   ok('and nothing is kept', !(await T.pages.list()).some((r) => r.owner === B.did));
+  // which page a world may be started for (the shell's `go`, kind 'wiki'): the identity's own, held or not; someone else's only if held
+  const nLoc = T.adds.length, locBefore = (await T.pages.list()).length;
+  const lNew = await T.pages.locate({ name: 'never saved' });
+  ok('locate: the identity\'s own page that was never saved is a page to go to', lNew.id === W.pageId(A.did, 'never saved') && lNew.name === 'never saved' && lNew.owner === A.did && lNew.mine === true, lNew);
+  const lId = await T.pages.locate({ id: W.pageId(A.did, 'notes') });
+  ok('locate: the same for a held page of its own, asked for by id', lId.id === W.pageId(A.did, 'notes') && lId.name === 'notes' && lId.mine === true, lId);
+  ok('locate: a page of someone else\'s that this device does not hold is refused, with a sentence', /holds no such page/.test(await rejects(T.pages.locate({ id: W.pageId(B.did, 'theirs') })) || ''));
+  ok('locate: no name, an empty name and an id that is not a page\'s are refused as open refuses them', /Say which page/.test(await rejects(T.pages.locate({})) || '') && /Say which page/.test(await rejects(T.pages.locate()) || '') && /named by its owner/.test(await rejects(T.pages.locate({ name: '' })) || '') && /not the name of a page/.test(await rejects(T.pages.locate({ id: 'notes' })) || ''));
+  ok('locate makes nothing: no event, no page in the list', T.adds.length === nLoc && (await T.pages.list()).length === locBefore && !(await T.pages.list()).some((r) => r.name === 'never saved'));
   // once B's page is held (here: B's own first edit delivered), it is listed as not mine and readable
   await T.store.offerLog(B.did, B.snapshot());
   const wB = await writer(B, B.d1, undefined, W.pageId(B.did, 'theirs'));
@@ -147,12 +156,22 @@ const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); re
   ok('the list is newest change first', rows[0].updated >= rows[1].updated && rows[1].updated >= rows[2].updated, rows.map((r) => r.updated));
   const oB2 = await T.pages.open({ id: W.pageId(B.did, 'theirs') });
   ok('reading B\'s page gives B\'s text', textOf(oB2.state) === 'from B' && oB2.canEdit === false && oB2.isNew === false);
+  const lB = await T.pages.locate({ id: W.pageId(B.did, 'theirs') });
+  ok('locate: a page of someone else\'s that this device holds is a page to go to, and is not mine', lB.id === W.pageId(B.did, 'theirs') && lB.owner === B.did && lB.mine === false, lB);
 
   // ================================================================ sessions
   ok('an unknown session is refused', /not open for editing/.test(await rejects(T.pages.edit({ session: 'nope', n: 0, update: u1 })) || ''));
   ok('a missing session is refused', /not open for editing/.test(await rejects(T.pages.edit({ n: 0, update: u1 })) || ''));
   const o5 = await T.pages.open({ name: 'closing' }); await T.pages.close({ session: o5.session });
   ok('a closed session is refused', /not open for editing/.test(await rejects(T.pages.edit({ session: o5.session, n: 0, update: u1 })) || ''));
+
+  // every session given up at once (the world frame that held the editors is being replaced): none can be written to, new ones open as before
+  const oAll1 = await T.pages.open({ name: 'all closed 1' }), oAll2 = await T.pages.open({ name: 'all closed 2' });
+  T.pages.closeAll();
+  ok('closeAll: no session is left to write to', /not open for editing/.test(await rejects(T.pages.edit({ session: oAll1.session, n: 0, update: u1 })) || '') && /not open for editing/.test(await rejects(T.pages.edit({ session: oAll2.session, n: 0, update: u1 })) || ''));
+  const oAll3 = await T.pages.open({ name: 'all closed 1' }), eAll3 = editor(oAll3);
+  const rAll3 = await T.pages.edit({ session: oAll3.session, n: 0, update: eAll3.change(insert('after')) });
+  ok('closeAll: a page opened afterwards is written as usual (it keeps nothing else: the identity\'s log stays offered)', rAll3.status === 'accepted' && rAll3.saved === true, rAll3);
 
   // two saves started without waiting for each other: one after the other, the second follows the first
   const o6 = await T.pages.open({ name: 'quick' }), e6 = editor(o6);
@@ -239,9 +258,10 @@ const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); re
 
   // ================================================================ the store's own listing
   const pagesNow = await T.store.pages();
-  // the pages that have an accepted edit by now: notes, strict, theirs (B's), quick, inputs, xml, race (the others were opened or refused, never saved)
+  // the pages that have an accepted edit by now: notes, strict, theirs (B's), quick, inputs, xml, race, and "all closed 1" (written after
+  // closeAll); the others were opened, located or refused, never saved
   const heldNames = pagesNow.map((p) => W.parsePageId(p.objId).name).sort();
-  ok('the store lists every page it holds, and only those', JSON.stringify(heldNames) === JSON.stringify(['inputs', 'notes', 'quick', 'race', 'strict', 'theirs', 'xml']), heldNames);
+  ok('the store lists every page it holds, and only those', JSON.stringify(heldNames) === JSON.stringify(['all closed 1', 'inputs', 'notes', 'quick', 'race', 'strict', 'theirs', 'xml']), heldNames);
   ok('the listing is newest change first, with the counts', pagesNow.every((p, i) => i === 0 || p.touched <= pagesNow[i - 1].touched) && pagesNow.filter((p) => p.versions === 2).length === 2 && pagesNow.filter((p) => W.parsePageId(p.objId).name === 'notes')[0].versions === 4, pagesNow.map((p) => p.touched + ' ' + p.versions));
   const T3 = await setup(A, A.d1);
   await T3.store.offerLog(A.did, A.snapshot());

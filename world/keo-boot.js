@@ -8,6 +8,7 @@
 //   guest     the document as it is: the blank world
 //   world     a saved world: its serialized data replaces the blank world's in this document, before the bootstrap reads it
 //   homestar  a new identity (nothing saved yet): the blank world, then the identity's home page opened on it
+//   wiki      a page kept on this device: the blank world, with the page's editor filling it (the shell has checked which page it is)
 // and, once the world is up, what a save and a move between pages do here. Saved worlds live in the shell, encrypted under
 // the signed-in identity (shell/keo-worlds.js); this file only asks for them and never sees a key.
 (function () {
@@ -93,10 +94,14 @@
     // The home page is built fresh on every visit, so a saved copy of it would be frozen morphs with nothing behind them. This
     // has to be refused BEFORE the runtime serializes the page: serializing the home page took the whole tab down in testing.
     // The completion callback is the last function among the arguments (the runtime lets some be left out).
+    // The same for a wiki page: it keeps itself as it is written (the shell holds its edits), and a saved copy of the world around its
+    // editor would be a frozen editor with nothing behind it.
     W.saveWorldAs = function () {
-      if (local.page !== 'homestar') return saveAs.apply(this, arguments);
+      if (local.page !== 'homestar' && local.page !== 'wiki') return saveAs.apply(this, arguments);
       var args = Array.prototype.slice.call(arguments), cb = args.filter(function (a) { return typeof a === 'function'; }).pop();
-      var e = new Error('This is your home page, which is rebuilt each time. Start a new blank world (keo > New blank world) to save one.');
+      var e = new Error(local.page === 'wiki'
+        ? 'This is a wiki page, which keeps itself as you write. Start a new blank world (keo > New blank world) to save one.'
+        : 'This is your home page, which is rebuilt each time. Start a new blank world (keo > New blank world) to save one.');
       this.inform(e.message);
       if (cb) cb(e);
     };
@@ -144,10 +149,12 @@
 
   // The shell holds the session; the runtime's identity module (menu bar, ambient panel, ...) only knows its own server
   // sessions, so show it the shell's. Both modules are needed first: the menu entry calls LocalIdentity.
-  function syncSession(session) {
+  // `then` (optional) runs once the runtime knows the session: what needs the signed-in identity (a wiki page's editor) waits for it.
+  function syncSession(session, then) {
     lively.require('lively.identity.LocalIdentity').toRun(function () {
       lively.require('lively.identity.DID').toRun(function () {
         if (lively.identity.did.setLocalSession) lively.identity.did.setLocalSession(session);
+        if (then) then();
       });
     });
   }
@@ -184,6 +191,20 @@
     });
   }
 
+  // A wiki page kept on this device, as the world: this world is blank and the page's editor fills it, the way the host's own page for a
+  // wiki page does (the page is not a window to open and close, it is where the person is; leaving is moving to another world, from the
+  // menu bar or My worlds). What was typed in the last moments is saved before the shell replaces this world with another page: a move
+  // that cannot do that stops, with the reason on screen and the text still there.
+  function openWiki(startup) {
+    lively.require('lively.identity.WikiEditor').toRun(function () {
+      var E = lively.identity.WikiEditor;
+      if (!E.openLocal({ id: startup.id })) return;
+      window.keo.beforeLeave(function () {
+        return new Promise(function (ok, no) { E.leaveLocal(function (err) { if (err) no(err); else ok(); }); });
+      });
+    });
+  }
+
   // The same dialog the landing page's own link opens, in its local mode (the identities on this device, by label).
   function openSignIn() {
     lively.require('lively.identity.LoginDialog').toRun(function () {
@@ -201,7 +222,7 @@
         installSave();
         installMenu();
         rememberHomeTheme();
-        if (startup && startup.session) syncSession(startup.session);
+        if (startup && startup.session) syncSession(startup.session, startup.kind === 'wiki' ? function () { openWiki(startup); } : null);
         if (startup && startup.kind === 'world') local.current = startup.name;
         // A new world that was named when it was asked for: it takes that name and is saved once, so it is in the library now
         // and not only after the person remembers to save. The shell has already checked that the name is free.

@@ -289,7 +289,7 @@
   }
   function saveSession() {
     if (!session) return Promise.resolve();
-    return sessionTx('readwrite', function (st) { return st.put({ id: session.id, info: session.info, worldKey: session.worldKey, seen: Date.now() }); }).catch(function () {});
+    return sessionTx('readwrite', function (st) { return st.put({ id: session.id, info: session.info, worldKey: session.worldKey, place: session.place || null, seen: Date.now() }); }).catch(function () {});
   }
   // Records nobody has touched within the window belong to a tab that is gone (or a browser that was closed).
   function purgeStale() {
@@ -324,12 +324,22 @@
   // For code in THIS page only (the saved-worlds store). Never put it behind a bridge op: it is the key that decrypts
   // everything the identity has saved. Null when nobody is signed in.
   function sessionWorldKey() { return session ? { did: session.info.did, key: session.worldKey } : null; }
+  // Where this tab is, when it is somewhere a refresh should return to (only a wiki page for now: { kind: 'wiki', id }). It is kept in this tab's
+  // session record, so it goes with the session: a refresh finds it again, and signing out, expiry and removing the identity delete it with the
+  // record, and a tab that was closed leaves it to go stale with the record. It names a page, so it is exactly as private as the record is (the
+  // world key sits beside it). For code in THIS page only: never behind a bridge op, and the world never reads it. Plain data or null.
+  function place() { return session && session.place ? session.place : null; }
+  function setPlace(p) {
+    if (!session) return Promise.resolve(false);
+    session.place = p && p.kind === 'wiki' && typeof p.id === 'string' ? { kind: 'wiki', id: p.id } : null;
+    return saveSession().then(function () { return true; });
+  }
 
-  function armSession(id, info, worldKey) {
+  function armSession(id, info, worldKey, place) {
     var left = Date.parse(info.exp) - Date.now();
     var timer = setTimeout(function () { if (session && session.info === info) endSession(); }, Math.max(0, left));
     var beat = setInterval(function () { if (session && session.id === id) saveSession(); }, HEARTBEAT_MS);
-    session = { id: id, info: info, worldKey: worldKey, timer: timer, beat: beat };
+    session = { id: id, info: info, worldKey: worldKey, place: place || null, timer: timer, beat: beat };
   }
   // The key for saved worlds: one HMAC output of the secret under its own label, kept as a non-extractable AES-GCM key. The
   // label is all that separates it from the discovery seed and the check value, so it is never reused.
@@ -360,7 +370,7 @@
     if (!rec || Date.now() - rec.seen > RESUME_WINDOW_MS || Date.parse(rec.info.exp) <= Date.now()) { tabId(null); return null; }
     var ident = await dbGet(rec.info.did);
     if (!ident) { tabId(null); return null; }
-    armSession(rec.id, rec.info, rec.worldKey);
+    armSession(rec.id, rec.info, rec.worldKey, rec.place);
     await saveSession();
     return sessionInfo();
   }
@@ -627,6 +637,6 @@
   }
 
   window.keoIdentity = { create: create, list: list, rename: rename, remove: remove, signIn: signIn, current: current,
-    signOut: signOut, onEnd: onEnd, resume: resume, sessionWorldKey: sessionWorldKey, deviceProof: deviceProof, signWithDevice: signWithDevice,
+    signOut: signOut, onEnd: onEnd, resume: resume, sessionWorldKey: sessionWorldKey, place: place, setPlace: setPlace, deviceProof: deviceProof, signWithDevice: signWithDevice,
     enrollRequest: enrollRequest, enrollWordsMatch: enrollWordsMatch, enrollCancel: enrollCancel, enrollGrant: enrollGrant, enrollPreview: enrollPreview, enrollComplete: enrollComplete, enrollAccept: enrollAccept };
 })();

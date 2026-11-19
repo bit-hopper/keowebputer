@@ -112,6 +112,8 @@
     if (!cur.pages) cur.pages = window.keoWikiPages.create({ store: s, identity: identityForPages });
     return cur.pages;
   }
+  // The world frame is being replaced: the editing sessions its editors held are given up. Starts nothing (no store is made for it).
+  function closePages() { if (cur && cur.pages) cur.pages.closeAll(); }
   // The session ended: nothing of the identity stays in memory, and the store starts nothing more.
   function reset() {
     var c = cur;
@@ -150,5 +152,5 @@
     return draining.then(function () { return run('readwrite', function (st) { st['delete'](IDBKeyRange.bound(p, p + MAXCH)); }); });
   }
 
-  window.keoWiki = { store: store, pages: pages, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
+  window.keoWiki = { store: store, pages: pages, closePages: closePages, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
 })();

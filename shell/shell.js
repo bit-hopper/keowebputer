@@ -316,7 +316,22 @@
   vault.src = 'vault.html';
   // Where a signed-in identity lands on entering: the world it saved last, else (a new identity, or nothing saved) its home page.
   // A last world that cannot be read does not lock the person out: they land on the home page with a warning.
+  // The wiki page this tab was on, when the tab is refreshed (keo-identity.js keeps it with the tab's session): a refresh lands on it again, as
+  // it does on the same saved world. The shell checks it again like any move to a page, and a page that cannot be gone to now (it was removed)
+  // is not an error: the person lands where signing in lands.
+  function rememberedPage(session) {
+    var p = window.keoIdentity.place();
+    if (!p || p.kind !== 'wiki') return Promise.resolve(null);
+    return Promise.resolve().then(function () { return window.keoWiki.pages().locate({ id: p.id }); })
+      .then(function (page) { return { kind: 'wiki', session: session, id: page.id, name: page.name }; }, function () { return null; });
+  }
+  // What a start remembers for a refresh: the wiki page, or nothing (moving to a world, the home page or a new blank world forgets it, so a
+  // refresh there lands where it always did).
+  function placeOf(s) { return s && s.kind === 'wiki' ? { kind: 'wiki', id: s.id } : null; }
   function landing(session) {
+    return rememberedPage(session).then(function (page) { return page || worldLanding(session); });
+  }
+  function worldLanding(session) {
     var startup = { kind: 'homestar', session: session };
     return window.keoWorlds.last().then(function (last) {
       if (last) startup = { kind: 'world', session: session, name: last.name, doc: last.doc };
@@ -348,6 +363,13 @@
           return next;
         });
       }
+      if (kind === 'wiki') {
+        // A page kept on this device is a world of its own, as a page of a wiki is on a host: the world starts blank and the editor fills it
+        // (world/keo-boot.js). Nothing is saved as a world and it is not "the world saved last", so a reload or a new sign-in lands on that
+        // world (or the home page), not on the page. The shell says which page it is (and refuses a page of someone else's that it does not
+        // hold) before the world is replaced.
+        return window.keoWiki.pages().locate({ id: a.id, name: a.name }).then(function (p) { return { kind: 'wiki', session: session, id: p.id, name: p.name }; });
+      }
       if (kind !== 'world') throw new Error('Unknown page kind.');
       return window.keoWorlds.load({ name: a.name }).then(function (w) {
         if (!w) throw new Error('No such saved world.');
@@ -355,9 +377,14 @@
       });
     }).then(function (next) {
       startup = next;
-      world.src = 'about:blank';
-      setTimeout(function () { world.src = 'world.html'; }, 0);
-      return true;
+      // The editors of the world being replaced are gone with it: their editing sessions are given up now, not left for later ones to push out.
+      window.keoWiki.closePages();
+      // Written before the frame is replaced, so a refresh a moment later already finds it.
+      return window.keoIdentity.setPlace(placeOf(next)).then(function () {
+        world.src = 'about:blank';
+        setTimeout(function () { world.src = 'world.html'; }, 0);
+        return true;
+      });
     });
   }
   window.keoShell = {
@@ -365,6 +392,7 @@
     start: function (s) {
       if (startup) return;           // once per page: another identity means signing out, which reloads this page
       startup = s;
+      window.keoIdentity.setPlace(placeOf(s));     // a refresh that could not return to the page leaves nothing behind that points at it
       world.src = 'world.html';
     }
   };

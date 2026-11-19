@@ -58,6 +58,16 @@
   function leavesPage(op, args) {
     return op === 'session.signOut' || op === 'identity.remove' || (op === 'world.go' && !!args && args.kind === 'enter');
   }
+  // The calls after which this world is no longer there: another page replaces the world frame, and signing out or removing an identity
+  // reloads the page. (leavesPage above is narrower: only the ones that must not raise the browser's own warning.)
+  function endsWorld(op) { return op === 'world.go' || op === 'session.signOut' || op === 'identity.remove'; }
+  // beforeLeave(fn): fn(op) runs before such a call is sent and may return a promise; the call waits for it. A rejection stops a move to
+  // another page (the call rejects with it) and is ignored for the others. Returns a function that takes the hook away again.
+  var beforeLeave = [];
+  function addBeforeLeave(fn) {
+    beforeLeave.push(fn);
+    return function () { beforeLeave = beforeLeave.filter(function (f) { return f !== fn; }); };
+  }
   var lifts = 0, warningWas;
   function liftExitWarning() {
     try { var C = window.lively && window.lively.Config; if (C && lifts === 0) warningWas = C.askBeforeQuit; if (C) C.askBeforeQuit = false; } catch (e) {}
@@ -75,6 +85,19 @@
   // reuse what they pass (stored values, key material, passkey options). Only whole ArrayBuffers can be given (not a view over one) and a
   // buffer that is already detached is refused by the browser; both reject the call here instead of leaving it waiting for its timeout.
   function call(op, args, timeoutMs, transfer) {
+    // Something in this world may need a moment before it goes (a wiki page's last typing, see beforeLeave below); the call is sent once
+    // that has answered. With nothing registered the call is sent at once, as before.
+    if (beforeLeave.length && endsWorld(op)) {
+      // Moving to another page stops when a hook says it could not do its part: what the person typed is still on screen, with the reason.
+      // Signing out and removing an identity never stop: they have to work, and the hook has only had its chance.
+      var mustHold = op === 'world.go';
+      return Promise.all(beforeLeave.slice().map(function (h) {
+        try { return Promise.resolve(h(op)); } catch (e) { return Promise.reject(e); }
+      })).then(null, function (e) { if (mustHold) throw e; }).then(function () { return send(op, args, timeoutMs, transfer); });
+    }
+    return send(op, args, timeoutMs, transfer);
+  }
+  function send(op, args, timeoutMs, transfer) {
     var leaving = leavesPage(op, args);
     if (leaving) liftExitWarning();
     var sent = new Promise(function (resolve, reject) {
@@ -232,5 +255,5 @@
     return init;
   });
 
-  window.keo = { call: call, on: on, ready: ready, shellOrigin: SHELL_ORIGIN, makeStorage: makeStorage };
+  window.keo = { call: call, on: on, beforeLeave: addBeforeLeave, ready: ready, shellOrigin: SHELL_ORIGIN, makeStorage: makeStorage };
 })();

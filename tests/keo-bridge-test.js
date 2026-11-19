@@ -2,7 +2,7 @@
 // Usage: [KEO_HEADLESS=1] node keo-bridge-test.js <repo root> <extension folder> <work dir> [part ...]
 // Parts: idb (differential test of the in-world IndexedDB against the real one), persist (localStorage and IndexedDB
 // survive a reload, and land in the shell's real store), transfer (buffers a call hands over instead of copying, and the
-// refusals), webauthn (passkey ceremonies proxied to the shell, PRF included), vault (identity vault reached through the
+// refusals), leave (a world may ask for a moment before it is left: keo.beforeLeave), webauthn (passkey ceremonies proxied to the shell, PRF included), vault (identity vault reached through the
 // shell). Default: all. Headed unless KEO_HEADLESS=1 (the newer headless mode: no window, no focus taken); a headless pass is
 // reported as headless.
 // "Differential": the same operation script runs once in the shell page against the REAL indexedDB and once in the
@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { REPO, EXT, WORK } = require('./args.js')();
-const PARTS = process.argv.length > 5 ? process.argv.slice(5) : ['idb', 'persist', 'transfer', 'webauthn', 'vault'];
+const PARTS = process.argv.length > 5 ? process.argv.slice(5) : ['idb', 'persist', 'transfer', 'leave', 'webauthn', 'vault'];
 const HEADLESS = !!process.env.KEO_HEADLESS;      // the newer headless mode (no window, no focus taken); NOT how this suite is run to call it passed: headed is the default
 const { chromium } = require(path.join(REPO, 'node_modules', 'playwright-core'));
 const ID = 'keoapnoighmdpncpbfffhcdgdjgjmpdn';
@@ -380,6 +380,51 @@ function check(name, ok, detail) { results[name] = { ok: !!ok, detail }; console
       check('transfer: a view in the list is refused at once, and not detached', r.fAnswer.name === 'DataCloneError' && r.fAnswer.ms < 1500 && r.fAfter === 1024 && !g('f'), [r.fAnswer, r.fAfter, g('f')]);
       check('transfer: after refusals the bridge still answers', /unknown op test\.transfer/.test(r.after.message || '') && g('g') && g('g').isBuffer === false, [r.after, g('g')]);
       check('transfer: no page errors', s.errors.length === 0, s.errors);
+    } finally { await ctx.close(); }
+  }
+
+  // ================= leave: a world may ask for a moment before it is left (keo.beforeLeave) =================
+  if (PARTS.includes('leave')) {
+    const ctx = await launch('profile-bridge-leave');
+    try {
+      const s = await openShell(ctx);
+      // Every op the shell is asked, in order, kept on this side so that it survives the shell page reloading (sign-out reloads it).
+      // Nobody is signed in here, so a move is answered by the shell with a sentence: no page is left behind.
+      const shellOps = [];
+      s.page.on('console', (m) => { const t = m.text(); if (t.startsWith('LEAVEOP ')) shellOps.push(t.slice(8)); });
+      await s.page.evaluate(() => window.addEventListener('message', (ev) => { const m = ev.data; if (m && m.keo === 1 && typeof m.op === 'string') console.log('LEAVEOP ' + m.op); }));
+      const api = await s.frame.evaluate(() => {
+        window.__seen = [];
+        window.__ask = async (op) => { const t0 = performance.now(); try { await window.keo.call(op, {}, 5000); return { ms: performance.now() - t0 }; } catch (e) { return { message: e.message, ms: performance.now() - t0 }; } };
+        return typeof window.keo.beforeLeave;
+      });
+      const run = async (fn) => { const n0 = shellOps.length; const res = await s.frame.evaluate(fn); await sleep(400); return { res, ops: shellOps.slice(n0) }; };
+      check('leave: the bridge offers beforeLeave', api === 'function', api);
+      // 1: a hook runs first, and the call waits for it
+      await s.frame.evaluate(() => { window.__off = window.keo.beforeLeave(async (op) => { window.__seen.push(op); await new Promise((r) => setTimeout(r, 500)); }); });
+      const a = await run(() => window.__ask('world.go'));
+      check('leave: a move to another page waits for the hook, then the shell is asked', a.res.ms >= 450 && JSON.stringify(a.ops) === '["world.go"]' && /Sign in/.test(a.res.message || ''), a);
+      check('leave: the hook was given the name of the call', JSON.stringify(await s.frame.evaluate(() => window.__seen)) === '["world.go"]');
+      // 2: a hook that rejects stops a move: the call answers with its reason and the shell is never asked
+      await s.frame.evaluate(() => { window.__off(); window.__off = window.keo.beforeLeave(() => Promise.reject(new Error('not saved: disk full'))); });
+      const b = await run(() => window.__ask('world.go'));
+      check('leave: a hook that rejects stops a move to another page, with its own reason, and the shell is not asked', b.res.message === 'not saved: disk full' && b.ops.length === 0, b);
+      // 3: a call that does not end the world does not meet the hook
+      const c = await run(() => window.__ask('session.current'));
+      check('leave: a call that does not end the world goes straight to the shell, whatever the hook says', c.res.message !== 'not saved: disk full' && JSON.stringify(c.ops) === '["session.current"]', c);
+      // 4: a hook that throws is a hook that rejects
+      await s.frame.evaluate(() => { window.__off(); window.__off = window.keo.beforeLeave(() => { throw new Error('threw'); }); });
+      const d = await run(() => window.__ask('world.go'));
+      check('leave: a hook that throws stops a move as one that rejects does', d.res.message === 'threw' && d.ops.length === 0, d);
+      // 5: take the hook away and the call is sent at once, as before there was a hook
+      await s.frame.evaluate(() => { window.__off(); });
+      const e = await run(() => window.__ask('world.go'));
+      check('leave: with the hook taken away the call is sent at once', e.res.ms < 300 && JSON.stringify(e.ops) === '["world.go"]' && /Sign in/.test(e.res.message || ''), e);
+      check('leave: no page errors', s.errors.length === 0, s.errors);
+      // 6: signing out is never stopped by a hook: the shell is asked although the hook rejects (and reloads its page, which ends this part)
+      await s.frame.evaluate(() => { window.keo.beforeLeave(() => Promise.reject(new Error('not saved: disk full'))); window.__ask('session.signOut'); });
+      await sleep(1500);
+      check('leave: signing out is not stopped by a hook that rejects', shellOps.slice(-1)[0] === 'session.signOut', shellOps.slice(-3));
     } finally { await ctx.close(); }
   }
 

@@ -67,16 +67,32 @@
       return rows.filter(function (r) { return W.parsePageId(r.objId); }).map(function (r) { return describe(r, proof.did); });
     }
 
-    // a: { name } for a page of the signed-in identity (made when it is first saved), or { id } for any page the store holds.
-    // Answers { session, id, name, owner, mine, isNew, canEdit, clientId, heads, state }: `state` is the page's Yjs update (empty for a new
-    // page), `canEdit` whether this identity may write it as of those heads. A page that cannot be written is still opened, to be read.
-    async function open(a) {
-      var proof = await identity.proof(), id;
+    // Which page a request means: { name } is a page of the signed-in identity (made when it is first saved), { id } is any page's id.
+    // Throws a sentence for anything else.
+    function refOf(proof, a) {
+      var id;
       if (a && typeof a.id === 'string') id = a.id;
       else if (a && typeof a.name === 'string') id = W.pageId(proof.did, a.name);       // throws a sentence for a name the page id cannot hold
       else throw new Error('Say which page to open: a name, or the id of a page.');
       var parsed = W.parsePageId(id);
       if (!parsed) throw new Error('That is not the name of a page (its owner\'s identity, a slash and a name).');
+      return { id: id, parsed: parsed };
+    }
+
+    // Whether a page can be made the world a person is taken to (shell.js `go`, kind 'wiki'): the signed-in identity's own page, held or not
+    // (a new one is made when it is first saved), or a page of someone else's that this device holds. A page of someone else's that it does
+    // not hold would open empty and unwritable, so no world is started for it. Answers { id, name, owner, mine }; opens no session.
+    async function locate(a) {
+      var proof = await identity.proof(), r = refOf(proof, a), mine = r.parsed.owner === proof.did;
+      if (!mine && !(await store.heads(r.id)).length) throw new Error('This device holds no such page.');
+      return { id: r.id, name: r.parsed.name, owner: r.parsed.owner, mine: mine };
+    }
+
+    // a: { name } for a page of the signed-in identity (made when it is first saved), or { id } for any page the store holds.
+    // Answers { session, id, name, owner, mine, isNew, canEdit, clientId, heads, state }: `state` is the page's Yjs update (empty for a new
+    // page), `canEdit` whether this identity may write it as of those heads. A page that cannot be written is still opened, to be read.
+    async function open(a) {
+      var proof = await identity.proof(), r = refOf(proof, a), id = r.id, parsed = r.parsed;
       await offerOwn(proof);
       // The heads first, then the state AT those heads: asking for the state alone could read a newer one than the heads name.
       var heads = await store.heads(id);
@@ -130,10 +146,13 @@
       if (a && typeof a.session === 'string') sessions.delete(a.session);
       return Promise.resolve(true);
     }
+    // Every editing session is given up, and nothing else changes: the world frame that held the editors is being replaced, so no editor is
+    // left to use one (a session whose editor is gone would otherwise sit here until later ones pushed it out).
+    function closeAll() { sessions.clear(); }
     // The session ended: nothing about an open page stays.
     function reset() { sessions.clear(); offered = { did: null, events: -1 }; }
 
-    return { list: list, open: open, edit: edit, close: close, reset: reset, MAX_SESSIONS: MAX_SESSIONS };
+    return { list: list, locate: locate, open: open, edit: edit, close: close, closeAll: closeAll, reset: reset, MAX_SESSIONS: MAX_SESSIONS };
   }
 
   return { create: create, MAX_SESSIONS: MAX_SESSIONS };
