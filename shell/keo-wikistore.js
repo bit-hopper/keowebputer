@@ -32,6 +32,7 @@
 //   writers(objId, heads?)   who may write the page as of those versions (default: the current heads): the DIDs, the owner first.
 //   pages(), summary(objId)  every page held, newest change first, with what a list shows of each (created, category, tags: read out of the
 //                       page's own history and kept in its sealed record while it holds the same versions, see "what a list of pages shows").
+//   text(objId)         the page's readable text for searching it, kept sealed in a record of its own while the page holds the same versions
 //   close()             for a session that ended: operations that have not started are refused from then on (see serial()).
 // Not here: checkpoints and dropping old events, private pages, how events travel. The IndexedDB backend and the store's lifetime in the
 // shell (made for the signed-in identity, closed when the session ends, its records deleted when the identity is removed) are keo-wiki.js.
@@ -211,6 +212,43 @@
       // a list change carries no text: only edits give updates
       var updates = cl.order.filter(function (cid) { return get(cid).event.purpose === W.PURPOSE; }).map(function (cid) { return kd.unb64u(get(cid).event.payload.update); });
       return { update: updates.length ? Y.mergeUpdates(updates) : Y.encodeStateAsUpdate(new Y.Doc()), cids: cl.order };
+    }
+
+    // ---- the page's text, for searching it ------------------------------------------------------------------------------------------
+    // The readable text of a page (what a person typed into its paragraphs, headings, lists and code cells, one block to a line), worked out
+    // from the history the way the summary is and kept the same way: sealed, in a record of its own (kind `meta`, id `text:<page id>`), naming
+    // the versions it was worked out from and used only while those are the versions the page holds. A record of its own so that listing the
+    // pages never decrypts every page's text. It is a CACHE of what the history says: nothing here is a claim anyone made, and what a writer
+    // put in the page is cut to size (a page can be made to hold a great deal) and read without ever following more than MAX_NODES nodes.
+    var MAX_TEXT = 256 * 1024, MAX_NODES = 200000;
+    function textOf(doc) {
+      var out = [], size = 0, nodes = 0, stack = [{ list: doc.getXmlFragment('prosemirror').toArray(), i: 0 }];
+      function add(s) { if (size >= MAX_TEXT || !s) return; s = s.slice(0, MAX_TEXT - size); out.push(s); size += s.length; }
+      while (stack.length && size < MAX_TEXT && nodes < MAX_NODES) {
+        var top = stack[stack.length - 1];
+        if (top.i >= top.list.length) { stack.pop(); if (stack.length) add('\n'); continue; }
+        var n = top.list[top.i++];
+        nodes++;
+        if (n instanceof Y.XmlText) {
+          // the pieces of typed text, not their formatting: toString() would bring the marks back as tags, and does not escape what is typed
+          n.toDelta().forEach(function (op) { if (typeof op.insert === 'string') add(op.insert); });
+        } else if (n instanceof Y.XmlElement) {
+          stack.push({ list: n.toArray(), i: 0 });
+        }
+      }
+      return out.join('').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+    async function textNow(objId) {
+      var id = await pageKey(objId), held = pages.get(objId), cids = held ? Array.from(held.versions.keys()) : ((await read('page', id)) || { cids: [] }).cids;
+      // a page with no version held has no text, and asking about it writes nothing
+      if (!cids.length) return '';
+      var k = sumKey(cids), kept = await read('meta', 'text:' + id);
+      if (kept && kept.k === k && typeof kept.t === 'string') return kept.t;
+      var page = await loadPage(objId), got = Array.from(page.versions.keys()), doc = new Y.Doc();
+      Y.applyUpdate(doc, stateAt(page, W.headsOf(got, getter(page))).update);
+      var t = textOf(doc);
+      await write('meta', 'text:' + id, { k: sumKey(got), t: t });
+      return t;
     }
 
     function ctxFor(page) {
@@ -401,6 +439,8 @@
       // { created, category, tags } of the page as it stands now: the earliest date an edit of it states, and the category and tags in the
       // page's own `meta` map (see "what a list of pages shows" above for what is kept and why it can be trusted no further than a list).
       summary: function (objId) { return serial(async function () { return summarize(await loadPage(objId)); }); },
+      // The page's text as it stands now (a string, '' for a page with nothing held): for searching it, see "the page's text" above.
+      text: function (objId) { return serial(function () { return textNow(objId); }); },
       alerts: function () { return serial(async function () { return (await read('meta', 'alerts')) || []; }); },
       // removes everything this store holds (an identity removed from this device takes its pages with it)
       purge: function () {

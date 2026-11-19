@@ -1,6 +1,7 @@
 // The person's wiki on this device, used the way a person would: the INDEX of their pages (kernel lively.identity.WikiIndex, local scope), a
 // world of its own that the shell starts (start kind 'wikiindex', world/keo-boot.js), as the host's own page for a wiki is. Reached from My
-// worlds (Create, Wiki page: it goes to the index and asks for the new-page dialog, as the host's card hands off with "?new=1") and, from a
+// worlds (Create, Wiki page: it goes to the index and asks for the new-page dialog, as the host's card hands off with "?new=1"; "open" on a
+// page's row: it goes to the index with that page open, or opens the page in place when the world already is the index) and, from a
 // page's own world, by clicking the world's name in the menu bar. Cards (name, "Updated <date>"), the sort menu, the left list, the search
 // box, the right panel of categories and tags, a page opened INSIDE the index in the slot below the cards (its editor, saving as the person
 // types), the New wiki page dialog (name, category, tags), the back pill to the home page, leaving with typing not yet saved, and a reload
@@ -263,6 +264,54 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     pl = await place(page);
     check('and the shell is told the index shows no page now', !!pl && pl.kind === 'wikiindex' && pl.id === null, pl);
 
+    phase = '4b the window made narrower, with no page open';
+    // The left list, the cards and the categories panel share the width, and the top row (back pill, search bar, sort menu, new-page button)
+    // shares it too. When the window is too narrow they give way instead of being drawn over one another: the categories panel first, so that
+    // the list of pages stays as long as it can, then the list when not even one column of cards fits beside it; the sort menu goes when the
+    // search bar could not keep its least width beside it. What is on screen is read from the DOM, and any two parts that share area are an
+    // overlap.
+    const layoutOf = () => frame.evaluate(() => {
+      const I = lively.identity.WikiIndex.current, dom = (m) => { const r = m.renderContext().shapeNode.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+      const vis = (m) => (m && m.isVisible() ? dom(m) : null);
+      return { clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth, cards: (I._cardMorphs || []).map(dom),
+        left: vis(I._sidebarBox), cats: vis(I._categoriesPanel), back: dom(I._backBtn), search: dom(I._searchBar), sort: vis(I._sortByBox), newBtn: vis(I._newBtn) || vis(I._newBtnCompact) };
+    });
+    const clashes = (L, withHeader) => {
+      const parts = L.cards.map((c, i) => ['card ' + i, c]); if (L.left) parts.push(['left list', L.left]); if (L.cats) parts.push(['categories', L.cats]);
+      if (withHeader) { parts.push(['back pill', L.back], ['search bar', L.search]); if (L.sort) parts.push(['sort menu', L.sort]); if (L.newBtn) parts.push(['new-page button', L.newBtn]); }
+      const out = [];
+      for (let i = 0; i < parts.length; i++) {
+        const a = parts[i][1]; if (a.x < 0 || a.x + a.w > L.clientWidth) out.push(parts[i][0] + ' is outside the window');
+        for (let j = i + 1; j < parts.length; j++) { const b = parts[j][1]; if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) out.push(parts[i][0] + ' over ' + parts[j][0]); }
+      }
+      return out;
+    };
+    const resizeTo = async (w) => { await page.setViewportSize({ width: w, height: 900 }); await until(async () => (await layoutOf()).clientWidth === w, 8000); await sleep(700); return layoutOf(); };
+    // [width, left list shown, categories shown, sort menu shown]. The widths stay clear of the exact limits (the back pill's width, which sets the
+    // limit for the sort menu, depends on the font that was loaded), except the two panel limits, which do not depend on anything measured.
+    for (const [w, wantLeft, wantCats, wantSort] of [[933, true, true, true], [908, true, true, true], [907, true, false, true], [700, true, false, true], [640, true, false, false], [624, true, false, false], [623, false, false, false], [500, false, false, false], [1280, true, true, true]]) {
+      const L = await resizeTo(w), bad = clashes(L, true);
+      check('at ' + w + ' px wide nothing is drawn over anything else, and nothing is outside the window', bad.length === 0 && L.cards.length === 3, { bad, cards: L.cards });
+      check('at ' + w + ' px wide the list of pages is ' + (wantLeft ? 'shown' : 'hidden') + ', the categories panel ' + (wantCats ? 'shown' : 'hidden') + ' and the sort menu ' + (wantSort ? 'shown' : 'hidden'), !!L.left === wantLeft && !!L.cats === wantCats && !!L.sort === wantSort, { left: !!L.left, cats: !!L.cats, sort: !!L.sort });
+      check('at ' + w + ' px wide the page does not scroll sideways', L.scrollWidth <= L.clientWidth, { scrollWidth: L.scrollWidth, clientWidth: L.clientWidth });
+      // the room the sort menu leaves goes to the search bar: at 640 px it is wider than it can be with the menu beside it (240 px, its least)
+      if (w === 640) check('at 640 px the search bar takes the room the sort menu left', L.search.w > 300, L.search);
+    }
+    // With a page open the sort menu stays, whatever the width: it holds "All pages", the only way back from a page to the cards.
+    await resizeTo(640);
+    await click(page, await cardRect(frame, 'rome'), 'card rome');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView ? r : null; }, 30000);
+    const Lopen = await layoutOf();
+    check('at 640 px with a page open the sort menu is shown again (it holds "All pages")', !!ix && !!Lopen.sort, { open: !!ix, sort: Lopen.sort });
+    await click(page, await ctl(frame, (I) => I._sortByBox), 'sort button');
+    const menuRows = await frame.evaluate(() => { const I = lively.identity.WikiIndex.current, d = I._sortByDropdown; return d ? d.submorphs.map((m) => typeof m.textString === 'string' ? m.textString.trim() : null).filter(Boolean) : null; });
+    check('and its menu still has "All pages", so the way back to the cards is there', !!menuRows && menuRows.includes('All pages'), menuRows);
+    await click(page, await rectOf(frame, () => { const I = lively.identity.WikiIndex.current; return I._sortByDropdown.submorphs.find((m) => typeof m.textString === 'string' && m.textString.trim() === 'All pages'); }), 'All pages');
+    ix = await until(async () => { const r = await readIndex(frame); return r && !r.open ? r : null; }, 10000);
+    const Lclosed = await layoutOf();
+    check('"All pages" closes the page at that width, and with no page open the sort menu gives way again', !!ix && ix.editors === 0 && !Lclosed.sort && clashes(Lclosed, true).length === 0, { open: ix && ix.open, sort: Lclosed.sort, bad: clashes(Lclosed, true) });
+    await resizeTo(1280);
+
     phase = '5 opening pages: a card, the left list, the home button';
     await click(page, await cardRect(frame, 'rome'), 'card rome');
     ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView && /Colosseum/.test(r.open.text || '') ? r : null; }, 30000);
@@ -302,6 +351,69 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     await page.keyboard.press('Control+A'); await page.keyboard.type('zzzz', { delay: 30 });
     ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.some((t) => /No wiki pages match/.test(t)) ? r : null; }, 8000);
     check('words no page has say so', !!ix, ix && ix.searchDropdown);
+    await page.keyboard.press('Control+A'); await page.keyboard.press('Backspace');
+    await until(async () => (await readIndex(frame)).searchDropdown === null, 6000);
+
+    phase = '6b search inside the pages';
+    // The shell searches the TEXT of the pages too (names, categories and tags as before). Real typing in the search bar and real clicks on
+    // the results; what is marked in the opened page is read from the editor's DOM.
+    const searchFor = async (q) => { await click(page, await ctl(frame, (I) => I._searchField), 'the search field'); await page.keyboard.press('Control+A'); await page.keyboard.type(q, { delay: 30 }); };
+    // what the editor holds about the marks, so that a failed check names the step that did not happen
+    const markDiag = () => frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0], v = e && e.editorView, k = e && e._searchMarkKey, set = v && k && k.getState(v.state); return e ? { pending: e._pendingSearch, hasKey: !!k, hasView: !!v, text: v ? v.state.doc.textContent.slice(0, 60) : null, decorations: set ? set.find().length : null, nodes: v ? v.dom.querySelectorAll('.keo-search-mark').length : null } : null; });
+    const markedText = () => frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0]; return e && e.editorView ? Array.from(e.editorView.dom.querySelectorAll('.keo-search-mark')).map((n) => n.textContent) : null; });
+    const firstResult = () => rectOf(frame, () => { const I = lively.identity.WikiIndex.current, d = I._searchDropdown; return d && d.submorphs[0]; });
+    await searchFor('colosseum');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.includes('rome') ? r : null; }, 10000);
+    check('a word that is only in the text of a page finds that page, and only that page', !!ix && ix.searchDropdown.includes('rome') && !ix.searchDropdown.includes('meeting-notes') && !ix.searchDropdown.includes('paris-trip'), ix && ix.searchDropdown);
+    check('the result shows the piece of the text around the word', !!ix && ix.searchDropdown.some((t) => /Colosseum/.test(t)), ix && ix.searchDropdown);
+    const vRome = (await shellList(page)).find((p) => p.name === 'rome').versions;
+    await click(page, await firstResult(), 'first result');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView && /Colosseum/.test(r.open.text || '') ? r : null; }, 30000);
+    const mk = await until(async () => { const m = await markedText(); return m && m.length ? m : null; }, 10000);
+    check('the page opened from the result has the word marked in its text', !!ix && !!mk && mk.length === 1 && mk[0] === 'Colosseum', mk || await markDiag());
+    await sleep(2600);
+    check('marking changed nothing: the page still says Saved and no version was made', (await readIndex(frame)).open.status === 'Saved' && (await shellList(page)).find((p) => p.name === 'rome').versions === vRome, { status: (await readIndex(frame)).open.status });
+    await searchFor('"is not paris"');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.includes('paris-trip') ? r : null; }, 10000);
+    check('a quoted phrase finds the page that has it', !!ix && ix.searchDropdown.includes('paris-trip') && !ix.searchDropdown.includes('rome'), ix && ix.searchDropdown);
+    await click(page, await firstResult(), 'first result');
+    await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.hasView && /Rome is not Paris/.test(r.open.text || '') ? r : null; }, 30000);
+    const mk2 = await until(async () => { const m = await markedText(); return m && m.length ? m : null; }, 10000);
+    check('the whole phrase is marked, as it is written in the page', !!mk2 && mk2.length === 1 && mk2[0] === 'is not Paris', mk2 || await markDiag());
+    await typeInPage(' zzz');
+    const gone = await until(async () => { const m = await markedText(); return m && m.length === 0 ? true : null; }, 6000);
+    check('writing in the page takes the marks off', gone === true, await markedText());
+    await waitSaved('paris-trip', /Rome is not Paris zzz/);
+    // a result for the page that is open already marks the words in it, and does not open it again
+    const sessionOpen = (await readIndex(frame)).open.session;
+    await searchFor('zzz');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.includes('paris-trip') ? r : null; }, 10000);
+    check('(setup) searching for what was just typed finds the page that is open', !!ix && ix.searchDropdown.includes('paris-trip'), ix && ix.searchDropdown);
+    await click(page, await firstResult(), 'first result');
+    const mk3 = await until(async () => { const m = await markedText(); return m && m.length ? m : null; }, 10000);
+    ix = await readIndex(frame);
+    check('a result for the page that is already open marks the words in it, and does not open it again (one editor, the same session)', !!mk3 && mk3.join() === 'zzz' && ix.editors === 1 && ix.open.session === sessionOpen, { mk3, editors: ix.editors, same: ix.open.session === sessionOpen });
+    // an answer that is late, and one for a query that was cleared, are not shown
+    const late = await frame.evaluate(() => new Promise((resolve) => {
+      const li = lively.identity.localIdentity, real = li.wikiSearch, I = lively.identity.WikiIndex.current;
+      li.wikiSearch = function (q, cb) { if (q === 'colosseum') setTimeout(function () { real.call(li, q, cb); }, 700); else real.call(li, q, cb); };
+      const shown = () => { const out = []; if (I._searchDropdown) (function walk(m) { if (typeof m.textString === 'string' && m.textString) out.push(m.textString); (m.submorphs || []).forEach(walk); })(I._searchDropdown); return out; };
+      I._searchLocal('colosseum'); I._searchLocal('work');
+      setTimeout(function () {
+        const afterTwo = shown();
+        I._searchLocal('colosseum'); I._queueContentSearch('');
+        setTimeout(function () { li.wikiSearch = real; resolve({ afterTwo: afterTwo, afterCleared: I._searchDropdown ? shown() : null }); }, 1500);
+      }, 1500);
+    }));
+    check('an answer that arrives after a later query is dropped: the dropdown is the later query\'s', late.afterTwo.includes('meeting-notes') && !late.afterTwo.includes('rome'), late.afterTwo);
+    check('and an answer on its way to a query that was cleared does not bring the dropdown back', late.afterCleared === null, late.afterCleared);
+    // the shell cannot search: the person is told, and the pages are matched by name, category and tag from the list the index holds
+    await frame.evaluate(() => { window.__realSearch = lively.identity.localIdentity.wikiSearch; lively.identity.localIdentity.wikiSearch = function (q, cb) { cb(new Error('the shell said no')); }; });
+    await searchFor('work');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.includes('meeting-notes') ? r : null; }, 10000);
+    check('when the shell cannot search, the pages are still matched by name, category and tag', !!ix && ix.searchDropdown.includes('meeting-notes') && !ix.searchDropdown.includes('rome'), ix && ix.searchDropdown);
+    check('and the person is told that searching inside the pages did not work, and why', (await told(frame)).some((m) => /Searching inside your pages did not work: the shell said no/.test(m)), await told(frame));
+    await frame.evaluate(() => { lively.identity.localIdentity.wikiSearch = window.__realSearch; });
     await page.keyboard.press('Control+A'); await page.keyboard.press('Backspace');
     await until(async () => (await readIndex(frame)).searchDropdown === null, 6000);
 
@@ -376,12 +488,89 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     pl = await place(page);
     check('moving to the home page forgets the place: a reload there is not the wiki', pl === null, pl);
 
-    phase = '11 from a page\'s own world, up to the wiki';
+    phase = '11 "open" on a page\'s row in My worlds, from the home page';
+    // "open" on a page of the person's own goes to where their pages are read: the wiki's index, with that page open in it (the list of pages
+    // on the left, the categories on the right), not to the page alone.
+    const rowsListed = () => until(async () => frame.evaluate(() => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); return !!(w && w.get('worldsList') && w.get('worldsList').submorphs.some((m) => m.name === 'worldRow' && m.wikiId)); }), 20000);
+    const rowOpen = (name) => rectOf(frame, (n) => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); const r = w.get('worldsList').submorphs.find((m) => m.name === 'worldRow' && m.worldName === n); return r && r.submorphs.find((x) => x.name === 'worldOpen'); }, name);
+    const winCount = () => frame.evaluate(() => $world.submorphs.filter((m) => m.name === 'WorldsBrowser').length);
     await openList();
-    await until(async () => frame.evaluate(() => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); return !!(w && w.get('worldsList') && w.get('worldsList').submorphs.some((m) => m.name === 'worldRow' && m.wikiId)); }), 20000);
-    await click(page, await rectOf(frame, () => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); const r = w.get('worldsList').submorphs.find((m) => m.name === 'worldRow' && m.worldName === 'rome'); return r && r.submorphs.find((x) => x.name === 'worldOpen'); }), 'open on the row of rome');
+    await rowsListed();
+    await click(page, await rowOpen('rome'), 'open on the row of rome');
+    const toIndex = await tryWorld(page, 'wikiindex', 30000);
+    check('"open" on a page\'s row moves to a world that starts as the wiki index', !!toIndex);
+    if (!toIndex) throw new Error('"open" on the page\'s row did not go to the wiki index: nothing after this can be trusted');
+    frame = toIndex;
+    await installTell(frame);
+    const sRow = await startup();
+    check('"open" on a page\'s row moves to the wiki index, with that page named as the one to show', sRow.kind === 'wikiindex' && sRow.open === did + '/rome' && sRow.newPage === false, sRow);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.hasView ? r : null; }, 30000);
+    check('the page is open in the index\'s slot, with the three cards and the list of the wiki around it', !!ix && ix.open.name === 'rome' && ix.open.inIndex && ix.open.inWorld && ix.editors === 1 && ix.cards.length === 3 && ix.leftHeader === 'ON THIS PAGE', ix);
+    const sides = await frame.evaluate(() => { const I = lively.identity.WikiIndex.current, v = $world.visibleBounds(), c = (m) => { const b = m.getBounds(); return b.x + b.width / 2; }; return { list: c(I._sidebarBox), cats: c(I._categoriesPanel), mid: v.x + v.width / 2 }; });
+    check('the list of pages is on the left and the categories panel on the right, as on the host', sides.list < sides.mid && sides.cats > sides.mid, sides);
+    pl = await place(page);
+    check('the tab remembers the index with that page open', !!pl && pl.kind === 'wikiindex' && pl.id === did + '/rome', pl);
+
+    phase = '11b "open" on a page\'s row, inside the index';
+    // The world already is the index: the page opens in the slot, no new world, and the window that was asked has done its work.
+    await frame.evaluate(() => { window.__sameWorld = 'yes'; });
+    await typeInPage(' ++typed before the next page');
+    const pend11 = (await readIndex(frame)).open;
+    check('(setup) the last typing has not been sent when the person opens another page', !!pend11 && pend11.unsaved > 0, pend11);
+    await openList();
+    await rowsListed();
+    await click(page, await rowOpen('paris-trip'), 'open on the row of paris-trip');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.hasView ? r : null; }, 30000);
+    check('opening another page from My worlds, inside the index, opens it in the slot', !!ix && ix.editors === 1 && ix.cards.length === 3, ix && ix.open);
+    check('and it is the same world: no new world was started for it', (await frame.evaluate(() => window.__sameWorld)) === 'yes' && (await startup()).kind === 'wikiindex');
+    check('the My worlds window is gone, as it is when a move replaces the world', (await winCount()) === 0);
+    check('what was typed in the page that was left was saved first', /\+\+typed before the next page/.test((await shellText(page, 'rome')) || ''), await shellText(page, 'rome'));
+    pl = await until(async () => { const p = await place(page); return p && p.id === did + '/paris-trip' ? p : null; }, 10000);
+    check('the tab remembers the page that is open now', !!pl, await place(page));
+    await openList();
+    await rowsListed();
+    await click(page, await rowOpen('paris-trip'), 'open on the row of the page that is open');
+    await until(async () => (await winCount()) === 0, 8000);
+    ix = await readIndex(frame);
+    check('"open" on the page that is already open leaves it as it is (one editor, the same world) and closes the window', !!ix && ix.open && ix.open.name === 'paris-trip' && ix.editors === 1 && (await winCount()) === 0 && (await frame.evaluate(() => window.__sameWorld)) === 'yes', ix && ix.open);
+
+    phase = '11c "open" on a page\'s row while the text cannot be saved';
+    await frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0]; e.yDoc.clientID = e.yDoc.clientID + 1; });
+    const v11 = (await shellList(page)).find((p) => p.name === 'paris-trip').versions;
+    await typeInPage(' forged again');
+    const refused11 = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.status === 'Not saved' ? r : null; }, 15000);
+    check('(setup) an edit the shell refuses shows as "Not saved"', !!refused11, await readIndex(frame));
+    await openList();
+    await rowsListed();
+    await click(page, await rowOpen('rome'), 'open on the row of rome');
+    await sleep(2500);
+    ix = await readIndex(frame);
+    check('the page stays, with its text, and the window stays open', !!ix && ix.open && ix.open.name === 'paris-trip' && /forged again/.test(ix.open.text || '') && ix.editors === 1 && (await winCount()) === 1, ix && ix.open);
+    const line11 = await frame.evaluate(() => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'), t = w && w.get('worldsStatus'); return t ? String(t.textString) : null; });
+    check('the line under the list says the page was not left and why (the shell\'s reason is in it)', /^The page was not left, because what you typed could not be saved: .*which is not one of this author's/.test(line11 || ''), line11);
+    check('and nothing of the refused text is stored', (await shellList(page)).find((p) => p.name === 'paris-trip').versions === v11);
+    await frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0]; e._userHasEdited = false; e._unsaved = []; e._unconfirmed = null; });
+    await click(page, await rowOpen('rome'), 'open on the row of rome, again');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView ? r : null; }, 30000);
+    check('once the unsaved text is given up it opens, and the window closes', !!ix && ix.editors === 1 && (await winCount()) === 0, ix && ix.open);
+
+    phase = '11d a page of someone else\'s, and the page as a world of its own';
+    // The index lists the person's own pages only, so a page of someone else's that this device holds cannot be opened inside it: "open" goes
+    // to it as a world of its own. No such page can be held here (nothing syncs yet), so this checks WHICH move "open" asks for, with the two
+    // moves stubbed in the world for the length of the call; that the move itself works is checked below for a page of the person's own.
+    await openList();
+    await rowsListed();
+    const asked = await frame.evaluate(() => {
+      const li = lively.identity.localIdentity, calls = [], g = li.wikiGo, i = li.wikiIndexGo, w = $world.submorphs.find((m) => m.name === 'WorldsBrowser');
+      li.wikiGo = function (r) { calls.push(['wikiGo', r.id]); }; li.wikiIndexGo = function (o) { calls.push(['wikiIndexGo', o.id]); };
+      try { w.localOpenWiki({ wiki: true, id: 'did:keo:x/theirs', name: 'theirs', mine: false }); } finally { li.wikiGo = g; li.wikiIndexGo = i; }
+      return calls;
+    });
+    check('"open" on a page that is not the person\'s own asks for that page as a world of its own, not for the index', JSON.stringify(asked) === JSON.stringify([['wikiGo', 'did:keo:x/theirs']]), asked);
+    await frame.evaluate(() => { const w = $world.submorphs.find((m) => m.name === 'WorldsBrowser'); if (w) w.initiateShutdown(); });
+    await frame.evaluate((d) => { lively.identity.localIdentity.wikiGo({ id: d + '/rome' }); }, did);
     frame = await waitForWorld(page, 'wiki');
-    check('"open" on a page\'s row still goes to that page as a world of its own', (await startup()).id === did + '/rome');
+    check('a page can still be gone to as a world of its own (a direct link does)', (await startup()).id === did + '/rome');
     await click(page, await rectOf(frame, () => { const b = $world.get(/^MenuBar/); return b.submorphs.find((m) => m.name === 'WorldNameMenuBarEntry'); }), 'the world name in the menu bar');
     const upFrame = await tryWorld(page, 'wikiindex', 25000);
     check('clicking the page name in the menu bar moves to the wiki', !!upFrame);
@@ -426,11 +615,16 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
 
     const unload = errors.filter((e) => /Blocked attempt to show a 'beforeunload' confirmation/.test(e));
     if (unload.length) note('the browser blocked ' + unload.length + ' "Leave site?" prompt(s), seen in: ' + unload.map((e) => (e.match(/\[([^\]]*)\]/) || [0, '?'])[1]).join('; '));
-    // Step 8 refuses a save on purpose (the editor's client id is changed): the index logs that the page was not left, with the shell's reason,
-    // and that is the only error allowed. It must be there: a list that only allows an error cannot show that the error was not missing.
-    const refusal = errors.filter((e) => /\[8 a save that fails keeps the person on the page\] (\[WikiIndex\] )?(The page was not saved: |The page was not left, because what you typed could not be saved: )the edit writes with client id \d+, which is not one of this author's/.test(e));
-    check('the refused move was logged with the reason the shell gave, in that step only', refusal.length >= 1, errors.slice(0, 6));
-    const mine = errors.filter((e) => !unload.includes(e) && !refusal.includes(e));
+    // Steps 8 and 11c refuse a save on purpose (the editor's client id is changed): the index logs that the page was not left, with the shell's
+    // reason, and that is the only error allowed, in those two steps. Each must be there: a list that only allows an error cannot show that
+    // the error was not missing.
+    const refusalIn = (step) => errors.filter((e) => e.indexOf('[' + step + '] ') !== -1 && /(\[WikiIndex\] )?(The page was not saved: |The page was not left, because what you typed could not be saved: )the edit writes with client id \d+, which is not one of this author's/.test(e));
+    const refusal = refusalIn('8 a save that fails keeps the person on the page').concat(refusalIn('11c "open" on a page\'s row while the text cannot be saved'));
+    check('the refused moves were logged with the reason the shell gave, in those two steps only (each has one)', refusalIn('8 a save that fails keeps the person on the page').length >= 1 && refusalIn('11c "open" on a page\'s row while the text cannot be saved').length >= 1, errors.slice(0, 6));
+    // Step 6b makes the shell's search fail on purpose: the index says so on screen and in the console, in that step only.
+    const searchFail = errors.filter((e) => e.indexOf('[6b search inside the pages] ') !== -1 && /Searching inside your pages did not work: the shell said no/.test(e));
+    check('the failed search was logged with the reason, in that step only', searchFail.length >= 1, errors.slice(0, 6));
+    const mine = errors.filter((e) => !unload.includes(e) && !refusal.includes(e) && !searchFail.includes(e));
     check('no other page errors or console errors during the run', mine.length === 0, mine.slice(0, 6));
   } catch (e) {
     console.log('FAIL test aborted in phase ' + phase + ': ' + (e && e.stack || e));

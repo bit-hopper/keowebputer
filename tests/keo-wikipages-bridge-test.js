@@ -99,7 +99,7 @@ const type = (s) => (d) => d.getText('body').insert(d.getText('body').length, s)
 
     phase = '0 nobody signed in';
     check('the shell page has the page operations and the package lists them', await page.evaluate(() => !!window.keoWikiPages && typeof window.keoWiki.pages === 'function'));
-    for (const [op, args] of [['wiki.list', {}], ['wiki.open', { name: 'notes' }], ['wiki.edit', { session: 'x', n: 0, update: [1, 2, 3] }]]) {
+    for (const [op, args] of [['wiki.list', {}], ['wiki.open', { name: 'notes' }], ['wiki.edit', { session: 'x', n: 0, update: [1, 2, 3] }], ['wiki.search', { query: 'x' }]]) {
       const r = await keoCall(frame, op, args);
       check(op + ' with nobody signed in is an error that says so', r.ok === false && /Sign in/.test(r.e), r);
     }
@@ -145,6 +145,26 @@ const type = (s) => (d) => d.getText('body').insert(d.getText('body').length, s)
     const o2 = r.r;
     check('reopening gives the text that was saved, and a fresh client id', r.ok && textOf(o2.state) === typed + '!' && o2.isNew === false && o2.clientId !== o1.clientId && o2.session !== o1.session, [r.ok && textOf(o2.state), typed]);
 
+    phase = '4b searching the text of the pages';
+    // A page written the way the editor writes it (paragraphs in the `prosemirror` fragment): the shell reads its text and answers which
+    // pages mention some words. What comes back over the bridge is rows with a short snippet, never a page's text.
+    const oT = (await keoCall(frame, 'wiki.open', { name: 'trip' })).r, dT = new Y.Doc(); dT.clientID = oT.clientId;
+    const svT = Y.encodeStateVector(dT), pT = new Y.XmlElement('paragraph'), xT = new Y.XmlText();
+    xT.insert(0, 'We saw the lighthouse at dusk'); pT.insert(0, [xT]); dT.getXmlFragment('prosemirror').insert(0, [pT]);
+    r = await keoCall(frame, 'wiki.edit', { session: oT.session, n: 0, update: Array.from(Y.encodeStateAsUpdate(dT, svT)) });
+    check('(setup) a page written the way the editor writes it is accepted', r.ok && r.r.saved === true, r);
+    r = await keoCall(frame, 'wiki.search', { query: 'lighthouse' });
+    check('searching finds the page by a word of its text, with the piece of the text around it', r.ok && r.r.length === 1 && r.r[0].name === 'trip' && r.r[0].id === did + '/trip' && r.r[0].mine === true && r.r[0].where.join() === 'text' && /lighthouse at dusk/.test(r.r[0].snippet), r);
+    check('a row has these fields and no text of the page', r.ok && JSON.stringify(Object.keys(r.r[0]).sort()) === JSON.stringify(['category', 'id', 'mine', 'name', 'owner', 'score', 'snippet', 'tags', 'where']), r.ok && Object.keys(r.r[0]));
+    r = await keoCall(frame, 'wiki.search', { query: 'NOTES' });
+    check('a page is found by its name, whatever the case', r.ok && r.r.length === 1 && r.r[0].name === 'notes' && r.r[0].where.join() === 'name', r);
+    r = await keoCall(frame, 'wiki.search', { query: 'hello' });
+    check('words that are only in the plain body of a page (what the editor does not write) are not found', r.ok && r.r.length === 0, r);
+    r = await keoCall(frame, 'wiki.search', { query: '' });
+    check('an empty query finds nothing and is not an error', r.ok && Array.isArray(r.r) && r.r.length === 0, r);
+    const noQuery = await keoCall(frame, 'wiki.search', {}), numQuery = await keoCall(frame, 'wiki.search', { query: 42 });
+    check('a query that is not text is an error with a sentence', noQuery.ok === false && /Say what to search for/.test(noQuery.e) && numQuery.ok === false && /Say what to search for/.test(numQuery.e), [noQuery, numQuery]);
+
     phase = '5 what is refused';
     const forged = new Y.Doc(); forged.clientID = o2.clientId + 1; const sv0 = Y.encodeStateVector(forged); forged.getText('body').insert(0, 'forged');
     r = await keoCall(frame, 'wiki.edit', { session: o2.session, n: 0, update: Array.from(Y.encodeStateAsUpdate(forged, sv0)) });
@@ -161,14 +181,14 @@ const type = (s) => (d) => d.getText('body').insert(d.getText('body').length, s)
     r = await keoCall(frame, 'wiki.open', { id: other + '/theirs' });
     check('a page of someone else opens, read-only', r.ok && r.r.canEdit === false && r.r.mine === false && r.r.isNew === true, r);
     r = await keoCall(frame, 'wiki.list');
-    check('and was not made by opening it', r.ok && r.r.length === 1, r);
+    check('and was not made by opening it (the two pages that were saved are all it lists)', r.ok && r.r.length === 2, r);
     r = await keoCall(frame, 'wiki.close', { session: o2.session });
     check('closing a session answers true', r.ok && r.r === true, r);
     r = await keoCall(frame, 'wiki.edit', { session: o2.session, n: 1, update: [1] });
     check('a closed session cannot save', r.ok === false && /not open for editing/.test(r.e), r);
 
     phase = '6 on disk';
-    const scan = await page.evaluate(() => window.__scan(['notes', 'hello world', 'Maya', 'forged']));
+    const scan = await page.evaluate(() => window.__scan(['notes', 'hello world', 'Maya', 'forged', 'lighthouse', 'trip']));
     check('the records are on disk and nothing readable is in them (name, text, label)', scan.records > 20 && scan.found.length === 0, scan);
     // the control: the identity's DID IS readable in every key (keo-wiki.js says so), so a scan that cannot find it proves nothing
     const ctl = await page.evaluate((d) => window.__scan([d]), did);
@@ -185,7 +205,9 @@ const type = (s) => (d) => d.getText('body').insert(d.getText('body').length, s)
     r = await keoCall(frame, 'wiki.edit', { session: o1.session, n: 99, update: [1] });
     check('after a reload an old session is not valid', r.ok === false && /not open for editing/.test(r.e), r);
     r = await keoCall(frame, 'wiki.list');
-    check('the page is still listed after the reload', r.ok && r.r.length === 1 && r.r[0].name === 'notes' && r.r[0].versions === 23, r);
+    check('the page is still listed after the reload', r.ok && r.r.length === 2 && r.r.some((p) => p.name === 'notes' && p.versions === 23), r);
+    r = await keoCall(frame, 'wiki.search', { query: 'lighthouse dusk' });
+    check('and the text is still searchable after the reload (the kept text is on the disk)', r.ok && r.r.length === 1 && r.r[0].name === 'trip', r);
     r = await keoCall(frame, 'wiki.open', { name: 'notes' });
     const o3 = r.r;
     check('and opens with its text, under yet another client id', r.ok && textOf(o3.state) === typed + '!' && o3.clientId !== o2.clientId && o3.clientId !== o1.clientId, r.ok && textOf(o3.state));
@@ -203,7 +225,7 @@ const type = (s) => (d) => d.getText('body').insert(d.getText('body').length, s)
     const after = await page.evaluate((s) => window.keoWiki.pages().edit({ session: s, n: 0, update: new Uint8Array([1]) }).then(() => 'taken', (e) => e.message), stale);
     check('and after signing in again a session from before is not valid', /not open for editing/.test(after), after);
     const again = await page.evaluate(() => window.keoWiki.pages().list().then((l) => l.map((p) => p.name + ':' + p.versions)));
-    check('but the pages are there', JSON.stringify(again) === JSON.stringify(['notes:24']), again);
+    check('but the pages are there', JSON.stringify(again) === JSON.stringify(['notes:24', 'trip:1']), again);
 
     const unload = errors.filter((e) => /Blocked attempt to show a 'beforeunload' confirmation/.test(e));
     if (unload.length) note('the browser blocked ' + unload.length + ' "Leave site?" prompt(s), seen in: ' + unload.map((e) => e.match(/\[([^\]]*)\]/)[1]).join('; ') + ' (the test itself navigating before any click)');

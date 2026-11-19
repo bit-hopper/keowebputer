@@ -2,7 +2,8 @@
 // checked, sealed store of keo-wikistore.js. Pure logic over a store and two small functions about the signed-in identity, so a test with no
 // browser can run it. No DOM, no network, no passkey (the device key signs, as for the other things the session does without asking again).
 //
-// WHAT THE WORLD MAY DO, and nothing else: list the pages, open one, hand over what an editing session changed, close it. It never builds
+// WHAT THE WORLD MAY DO, and nothing else: list the pages, ask which of them mention some words (it is given the names and a short piece of
+// text around the first match, not the texts), open one, hand over what an editing session changed, close it. It never builds
 // an event, never names a client id of its own choosing, never sees a key, and is never the judge of its own edit: the SHELL builds the
 // signed event from the bytes the editor changed, adds it to the store, and says what the store made of it (accepted, pending, refused).
 // There is no operation here that signs anything it is handed, and none that lets the world say who may write a page.
@@ -21,9 +22,9 @@
 // Not here: events that arrive from another device (the next slice), the history view, checkpoints.
 (function (root, factory) {
   var node = typeof module === 'object' && module.exports;
-  var api = factory(node ? require('./keo-did.js') : root.keoDid, node ? require('./keo-wikilog.js') : root.keoWikiLog);
+  var api = factory(node ? require('./keo-did.js') : root.keoDid, node ? require('./keo-wikilog.js') : root.keoWikiLog, node ? require('./keo-worldtext.js') : root.keoWorldText);
   if (node) module.exports = api; else root.keoWikiPages = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (kd, W) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (kd, W, WT) {
   'use strict';
 
   // A person has a handful of pages open at once; this keeps what the shell holds per open page bounded, and the least recently used
@@ -80,6 +81,30 @@
         out.push(describe(rows[i], proof.did, meta));
       }
       return out;
+    }
+
+    // Which pages mention the words of a query, best first: [{ id, name, owner, mine, category, tags, score, where, snippet }], at most
+    // MAX_HITS. The same rules as the search of saved worlds (keo-worldtext.js: every word, or "quoted phrase", has to be found; case and
+    // accents do not matter; a name ranks above a category or tag, those above the text), over each page's name, its category and tags and
+    // its text. `where` says which of 'name', 'tags', 'text' matched, `snippet` is a piece of the text around the first match ('' when only
+    // the name, category or tags matched). Every page this device holds is searched, the person's own and others'; the caller says what it
+    // shows. A page whose history cannot be read is still found by its name. Each page is matched on its own because two pages of different
+    // owners may share a name.
+    var MAX_QUERY = 200, MAX_HITS = 50;
+    async function search(a) {
+      var query = a && typeof a.query === 'string' ? a.query.slice(0, MAX_QUERY) : null;
+      if (query === null) throw new Error('Say what to search for.');
+      if (!WT.terms(query).length) return [];
+      var proof = await identity.proof(), rows = (await store.pages()).filter(function (r) { return W.parsePageId(r.objId); }), hits = [];
+      for (var i = 0; i < rows.length; i++) {
+        var p = W.parsePageId(rows[i].objId), meta = rows[i].meta, text = '';
+        if (!meta) { try { meta = await store.summary(rows[i].objId); } catch (e) { meta = { category: null, tags: [] }; } }
+        try { text = await store.text(rows[i].objId); } catch (e) { text = ''; }
+        var h = WT.search([{ name: p.name, tags: (meta.category ? [meta.category] : []).concat(meta.tags || []), text: text }], query)[0];
+        if (h) hits.push({ id: rows[i].objId, name: p.name, owner: p.owner, mine: p.owner === proof.did, category: meta.category, tags: meta.tags || [], score: h.score, where: h.where, snippet: h.snippet });
+      }
+      hits.sort(function (x, y) { return y.score - x.score || (x.name < y.name ? -1 : x.name > y.name ? 1 : x.id < y.id ? -1 : 1); });
+      return hits.slice(0, MAX_HITS);
     }
 
     // Which page a request means: { name } is a page of the signed-in identity (made when it is first saved), { id } is any page's id.
@@ -167,7 +192,7 @@
     // The session ended: nothing about an open page stays.
     function reset() { sessions.clear(); offered = { did: null, events: -1 }; }
 
-    return { list: list, locate: locate, open: open, edit: edit, close: close, closeAll: closeAll, reset: reset, MAX_SESSIONS: MAX_SESSIONS };
+    return { list: list, search: search, locate: locate, open: open, edit: edit, close: close, closeAll: closeAll, reset: reset, MAX_SESSIONS: MAX_SESSIONS };
   }
 
   return { create: create, MAX_SESSIONS: MAX_SESSIONS };

@@ -304,5 +304,66 @@ const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); re
   ok('the other pages are listed as before', byName(rows4, 'places').category === 'Event' && byName(rows4, 'plain').unreadable === false && byName(rows4, 'places').unreadable === false);
   ok('setup check: the version record really is gone from the disk', (await T4.backend.get('version', rBroken.cid)) === undefined);
 
+  // ================================================================ searching the pages: names, categories, tags and the text
+  // The pages are written the way the editor writes them (paragraphs in the `prosemirror` fragment, category and tags in the `meta` map).
+  const T5 = await setup(A, A.d1);
+  await T5.store.offerLog(B.did, B.snapshot());
+  const pEl = (s) => { const el = new Y.XmlElement('paragraph'), t = new Y.XmlText(); t.insert(0, s); el.insert(0, [t]); return el; };
+  const writePage = async (name, paragraphs, meta) => {
+    const o = await T5.pages.open({ name }), e = editor(o);
+    return T5.pages.edit({ session: o.session, n: e.n(), update: e.change((d) => { d.getXmlFragment('prosemirror').push(paragraphs.map(pEl)); if (meta) { const m = d.getMap('meta'); if (meta.category) m.set('category', meta.category); if (meta.tags) m.set('tags', meta.tags); } }) });
+  };
+  await writePage('paris-trip', ['We stay near the river Seine.', 'Bring the blue bag.'], { category: 'Place', tags: ['France', 'Europe'] });
+  await writePage('meeting-notes', ['Budget is the first item.', 'Rome is not Paris, said Zoë.'], { category: 'Event' });
+  await writePage('plain', ['just a few words']);
+  await writePage('seine-guide', ['nothing about rivers here']);
+  const wb = await writer(B, B.d1, undefined, W.pageId(B.did, 'their-page'));
+  await T5.store.add(await wb.publish((d) => { d.getXmlFragment('prosemirror').push([pEl('their notes mention the Seine too')]); }, []));
+  const found = async (q) => { try { return await T5.pages.search({ query: q }); } catch (e) { return { threw: e.message }; } };
+  const names = (r) => Array.isArray(r) ? r.map((x) => x.name) : r;
+  let r = await found('seine');
+  ok('a word is found in a page\'s name and in the text of others, the name first', JSON.stringify(names(r)) === JSON.stringify(['seine-guide', 'paris-trip', 'their-page']), names(r));
+  ok('each hit says where it matched: the name, or the text with a piece of the text around the match', Array.isArray(r) && JSON.stringify(r[0].where) === JSON.stringify(['name']) && r[0].snippet === '' && r[1].where.includes('text') && /river Seine/.test(r[1].snippet), r);
+  ok('a hit says whose page it is: the person\'s own, or someone else\'s that this device holds', Array.isArray(r) && r[0].mine === true && r[1].mine === true && r[2].mine === false && r[2].owner === B.did, r);
+  ok('a hit carries the page\'s id, category and tags, and no text of the page but the snippet', Array.isArray(r) && r[1].id === W.pageId(A.did, 'paris-trip') && r[1].category === 'Place' && JSON.stringify(r[1].tags) === JSON.stringify(['France', 'Europe']) && r.every((x) => x.text === undefined && x.snippet.length <= 160), r && r[1]);
+  r = await found('BUDGET');
+  ok('case does not matter, and only the page that has the word is found', JSON.stringify(names(r)) === JSON.stringify(['meeting-notes']) && /Budget is the first item/.test(r[0].snippet), r);
+  r = await found('zoe');
+  ok('accents do not matter (Zoë is found by "zoe")', JSON.stringify(names(r)) === JSON.stringify(['meeting-notes']), r);
+  r = await found('paris river');
+  ok('every word has to be found: "paris river" is the page with both (the name has one, the text the other)', JSON.stringify(names(r)) === JSON.stringify(['paris-trip']), names(r));
+  r = await found('"is not paris"');
+  ok('a quoted phrase is found as a phrase, across the page\'s own sentences', JSON.stringify(names(r)) === JSON.stringify(['meeting-notes']), r);
+  r = await found('"paris is not"');
+  ok('and not when the words are in another order', Array.isArray(r) && r.length === 0, r);
+  r = await found('europe');
+  ok('a tag is found, with no snippet (the text did not match)', JSON.stringify(names(r)) === JSON.stringify(['paris-trip']) && r[0].where.join() === 'tags' && r[0].snippet === '', r);
+  r = await found('event');
+  ok('a category is found the same way', JSON.stringify(names(r)) === JSON.stringify(['meeting-notes']) && r[0].where.join() === 'tags', r);
+  r = await found('nosuchword');
+  ok('a word nothing holds finds nothing', Array.isArray(r) && r.length === 0, r);
+  ok('a query of only spaces or quotes finds nothing, and is not an error', JSON.stringify(await found('   ')) === '[]' && JSON.stringify(await found('""')) === '[]');
+  ok('a query that is not text is refused with a sentence', /Say what to search for/.test((await found(undefined)).threw || '') && /Say what to search for/.test((await found(42)).threw || ''), [await found(undefined), await found(42)]);
+  const spaced = await found('seine ' + ' '.repeat(5000) + 'zzzzzzzz');
+  ok('a query longer than 200 characters is cut (the word after the 5,000 spaces is not looked for), and what is left is answered', Array.isArray(spaced) && names(spaced).includes('seine-guide') && names(spaced).includes('paris-trip'), names(spaced));
+  // a change to a page is found at once (the kept text is not stale)
+  await writePage('plain', ['and now the lighthouse']);
+  r = await found('lighthouse');
+  ok('words added to a page are found at once', JSON.stringify(names(r)) === JSON.stringify(['plain']) && /lighthouse/.test(r[0].snippet), r);
+  // a page whose stored history is damaged is still found by its name, and does not take the others' results with it
+  const oBr = await T5.pages.open({ name: 'broken-seine' }), eBr = editor(oBr);
+  const rBr = await T5.pages.edit({ session: oBr.session, n: eBr.n(), update: eBr.change((d) => { d.getXmlFragment('prosemirror').push([pEl('some words')]); }) });
+  await T5.backend.del('version', rBr.cid);
+  await T5.store.unload();
+  r = await found('seine');
+  ok('a damaged page is still found by its name, with the others', Array.isArray(r) && names(r).includes('broken-seine') && names(r).includes('paris-trip') && names(r).includes('seine-guide'), r);
+  // many pages: the answer is cut to the best fifty
+  for (let i = 0; i < 55; i++) await writePage('many-' + String(i).padStart(2, '0'), ['the common word']);
+  r = await found('common');
+  ok('a word in many pages gives the first fifty, in name order when they rank alike', Array.isArray(r) && r.length === 50 && r[0].name === 'many-00' && r[49].name === 'many-49', r && r.length);
+  T5.state.signedIn = false;
+  ok('nobody signed in: searching says so', /Sign in/.test((await found('seine')).threw || ''));
+  T5.state.signedIn = true;
+
   console.log('\n' + passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('ERROR', e); process.exitCode = 1; });

@@ -1,7 +1,8 @@
 // Wiki pages on this device, used the way a person would. A wiki page is a kind of world, listed in the "My worlds" window (kernel
-// lively.identity.WorldsBrowser) and opened from its row there; it is MADE in the wiki's index (the Create card goes there: that, and the
-// index itself, are tests/keo-wikiindex-ui-test.js), so here a page starts as the shell is asked to go to it by name, as the index does for a page
-// that is not saved yet. Going to a page MOVES the person to a world of its own (the shell restarts the world frame with start kind 'wiki', world/keo-boot.js) in which
+// lively.identity.WorldsBrowser) and opened from its row there ("open" goes to the wiki's index with the page open in it: phase 5 and 6c here,
+// and tests/keo-wikiindex-ui-test.js for the index itself and for opening in place); it is MADE in the wiki's index (the Create card goes there), so
+// here a page starts as the shell is asked to go to it by name, as the index does for a page that is not saved yet. Going to a page as a
+// world of its own (a direct link does; so does "open" on a page that is not the person's own) MOVES the person to a world of its own (the shell restarts the world frame with start kind 'wiki', world/keo-boot.js) in which
 // the page's editor (kernel lively.identity.WikiEditor.openLocal) fills the world, as a page of a wiki does on a host: not a window. Real
 // typing, the autosave into the shell's sealed store (shell/keo-wikipages.js), the page in the same list as the worlds (labelled Wiki,
 // found by search), leaving with text typed in the last moments (it is saved first), a refused save that keeps the person on the page,
@@ -129,7 +130,7 @@ const versionsOf = async (frame, name) => { const l = await keoCall(frame, 'wiki
     // `frame` is looked up when these run: the world frame is a new one after every move.
     const openList = () => frame.evaluate(() => { const e = $world.get('IdentityMenuBarEntry'); e.morphMenuItems().find((i) => i[0] === 'My worlds')[1](); });
     const goHome = () => frame.evaluate(() => { const e = $world.get('IdentityMenuBarEntry'); e.morphMenuItems().find((i) => i[0] === 'My homestar')[1](); });
-    const startup = () => frame.evaluate(() => { const s = window.keo.init.startup; return { kind: s.kind, id: s.id, name: s.name }; });
+    const startup = () => frame.evaluate(() => { const s = window.keo.init.startup; return { kind: s.kind, id: s.id, name: s.name, open: s.open === undefined ? null : s.open }; });
 
     phase = '1 menu and window';
     const items = await frame.evaluate(() => { const e = $world.get('IdentityMenuBarEntry'); return e ? e.morphMenuItems().map((i) => i[0]) : null; });
@@ -229,23 +230,38 @@ const versionsOf = async (frame, name) => { const l = await keoCall(frame, 'wiki
     await openList();
     win = await until(async () => { const s = await readWin(frame); return s && s.rows.some((r) => r.wiki && r.name === 'Trip notes') ? s : null; }, 20000);
     check('My worlds, on the home page, lists the page', !!win && win.rows.filter((r) => r.wiki).length === 1, win);
+    // "open" on a page of the person's own goes to the wiki's index with that page open in it (tests/keo-wikiindex-ui-test.js covers the index
+    // itself and the other ways of opening); the editor is the same one, in the index's slot, and the person's text comes back as before.
     await click(page, await rowPart(frame, 'Trip notes', 'worldOpen'));
-    frame = await waitForWorld(page, 'wiki');
-    check('open on the page\'s row moves to its world', (await startup()).id === did + '/Trip notes');
+    frame = await waitForWorld(page, 'wikiindex');
+    check('open on the page\'s row moves to the wiki index, with that page to show', (await startup()).open === did + '/Trip notes');
     ed = await until(async () => { const r = await readEditor(frame, 'Trip notes'); return r && r.hasView && r.text ? r : null; }, 30000);
-    check('open brings the page back with the text', !!ed && /Pack the blue bag and the red one/.test(ed.text) && ed.inWorld && !ed.inWindow, ed);
+    check('open brings the page back with the text, in the world (the index\'s slot), in no window', !!ed && /Pack the blue bag and the red one/.test(ed.text) && ed.inWorld && !ed.inWindow, ed);
     check('the reopened editor was given another client id than the first', !!ed && typeof firstClient === 'number' && ed.clientId !== firstClient && ed.clientId > 0, [firstClient, ed && ed.clientId]);
     await click(page, await pmRect(frame, 'Trip notes'));
     await page.keyboard.press('Control+End');
     await page.keyboard.type(' plus a map');
     const more = await until(async () => { const t = await shellText(frame, 'Trip notes'); return /plus a map/.test(t || '') ? t : null; }, 15000);
     check('writing on after reopening is saved too (a new client id starts its own count)', !!more && /Pack the blue bag and the red one.*plus a map/.test(more), more);
-    // A reload of the whole page is the person reloading the tab: the shell remembers the page this tab is on (with the tab's session), so the
-    // person is back on it, with its text.
+    // A reload of the whole page is the person reloading the tab: the shell remembers where this tab is (with the tab's session), so the
+    // person is back on the index with the page open, with its text.
     await page.reload();
     let landed = await landedOn(page);
+    const backOpen = landed.frame ? await landed.frame.evaluate(() => window.keo.init.startup.open || null) : null;
+    check('after a reload of the whole page the person is back in the wiki, with the same page open', landed.kind === 'wikiindex' && backOpen === did + '/Trip notes', { kind: landed.kind, open: backOpen });
+    if (landed.kind !== 'wikiindex') throw new Error('the reload did not return to the wiki: nothing after this can be trusted');
+    frame = landed.frame;
+    ed = await until(async () => { const r = await readEditor(frame, 'Trip notes'); return r && r.hasView && r.text ? r : null; }, 30000);
+    check('with its text, in the world, in no window', !!ed && /Pack the blue bag and the red one plus a map/.test(ed.text) && ed.inWorld && !ed.inWindow, ed);
+    // The page as a world of its own is still a place (a direct link starts it, and so does going to a page that is not the person's own):
+    // a reload there comes back to that world, not to the index.
+    await frame.evaluate((d) => { lively.identity.localIdentity.wikiGo({ id: d + '/Trip notes' }); }, did);
+    frame = await waitForWorld(page, 'wiki');
+    check('going to the page as a world of its own moves to it', (await startup()).id === did + '/Trip notes');
+    await page.reload();
+    landed = await landedOn(page);
     const backId = landed.frame ? await landed.frame.evaluate(() => window.keo.init.startup.id || null) : null;
-    check('after a reload of the whole page the person is back on the same page', landed.kind === 'wiki' && backId === did + '/Trip notes', { kind: landed.kind, id: backId });
+    check('after a reload of the whole page the person is back on the same page, as that world', landed.kind === 'wiki' && backId === did + '/Trip notes', { kind: landed.kind, id: backId });
     if (landed.kind !== 'wiki') throw new Error('the reload did not return to the page: nothing after this can be trusted');
     frame = landed.frame;
     ed = await until(async () => { const r = await readEditor(frame, 'Trip notes'); return r && r.hasView && r.text ? r : null; }, 30000);
@@ -262,7 +278,7 @@ const versionsOf = async (frame, name) => { const l = await keoCall(frame, 'wiki
     win = await until(async () => { const s = await readWin(frame); return s && s.rows.some((r) => r.wiki && r.name === 'Trip notes') ? s : null; }, 20000);
     check('after a reload My worlds still lists the page', !!win && win.rows.filter((r) => r.wiki).length === 1, win);
     await click(page, await rowPart(frame, 'Trip notes', 'worldOpen'));
-    frame = await waitForWorld(page, 'wiki');
+    frame = await waitForWorld(page, 'wikiindex');
     ed = await until(async () => { const r = await readEditor(frame, 'Trip notes'); return r && r.hasView && r.text ? r : null; }, 30000);
     check('and opening it after the reload gives all the text', !!ed && /Pack the blue bag and the red one plus a map/.test(ed.text), ed);
 
@@ -294,8 +310,8 @@ const versionsOf = async (frame, name) => { const l = await keoCall(frame, 'wiki
     await sleep(1500);
     check('and none of those refusals replaced this world', await stillHere(frame, 'Trip notes'));
 
-    phase = '6b opening the page that is open (a page to a page)';
-    // What "open" on a page's row does when it is pressed from inside a page's own world: the world is replaced by a new one for the same page,
+    phase = '6b from the index to the page as a world of its own';
+    // The person is in the wiki's index with the page open (phase 5). Going to the page as a world of its own replaces the world by a new one,
     // and what was typed in the last moments is saved first (the same hook as for any other move).
     await frame.evaluate(() => { window.__sameWorld = 'yes'; });
     const clientBefore = (await readEditor(frame, 'Trip notes')).clientId;
@@ -313,12 +329,31 @@ const versionsOf = async (frame, name) => { const l = await keoCall(frame, 'wiki
       try { if (f && await f.evaluate(() => !!(window.$world && window.$world.submorphs && window.keo && window.keo.init && window.keo.init.startup && window.keo.init.startup.kind === 'wiki' && window.__sameWorld === undefined))) replaced = f; } catch (e) { /* the frame is being replaced */ }
       if (!replaced) await sleep(300);
     }
-    check('opening the page again replaces the world with a new one for the same page', !!replaced);
+    check('going to the page replaces the index\'s world with a new one for the page', !!replaced);
     frame = replaced || frame;
     await sleep(2500);
     ed = await until(async () => { const r = await readEditor(frame, 'Trip notes'); return r && r.hasView && r.text ? r : null; }, 30000);
     check('the page comes back with the text typed just before, which was saved first', !!ed && /\+\+typed just before/.test(ed.text) && /\+\+typed just before/.test((await shellText(frame, 'Trip notes')) || ''), ed);
     check('and it has a client id of its own again', !!ed && ed.clientId !== clientBefore && ed.clientId > 0, [clientBefore, ed && ed.clientId]);
+
+    phase = '6c "open" on the page\'s row, from the page\'s own world';
+    // From a page that is a world of its own, "open" goes up to the wiki's index with the page open: a new world, and what was typed in the
+    // last moments is saved first. Then back to the page's own world, which the next step is about.
+    await frame.evaluate(() => { lively.identity.WikiEditor.localEditors()[0].editorView.focus(); });
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' ++typed in the page world');
+    const pend6c = await readEditor(frame, 'Trip notes');
+    check('(setup) the last typing has not been sent when the person opens the page from My worlds', !!pend6c && pend6c.unsaved > 0, pend6c);
+    await openList();
+    win = await until(async () => { const s = await readWin(frame); return s && s.rows.some((r) => r.wiki && r.name === 'Trip notes') ? s : null; }, 20000);
+    await click(page, await rowPart(frame, 'Trip notes', 'worldOpen'));
+    frame = await waitForWorld(page, 'wikiindex');
+    check('"open" on the row, in the page\'s own world, moves to the wiki index with the page to show', (await startup()).open === did + '/Trip notes');
+    ed = await until(async () => { const r = await readEditor(frame, 'Trip notes'); return r && r.hasView && r.text ? r : null; }, 30000);
+    check('and what was typed in the last moments was saved first, and is in the page', !!ed && /\+\+typed in the page world/.test(ed.text) && /\+\+typed in the page world/.test((await shellText(frame, 'Trip notes')) || ''), ed);
+    await frame.evaluate((d) => { lively.identity.localIdentity.wikiGo({ id: d + '/Trip notes' }); }, did);
+    frame = await waitForWorld(page, 'wiki');
+    check('(setup) back on the page as a world of its own', (await startup()).id === did + '/Trip notes');
 
     phase = '7 a refused save';
     await frame.evaluate(() => window.__sameWorld = 'yes');

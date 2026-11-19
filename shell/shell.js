@@ -125,6 +125,9 @@
     // up for that session, adds it to the sealed store and answers what the store made of it, so the world is never the judge of its own
     // edit and cannot sign anything it chooses. `update` is a Yjs update (bytes), `n` the editor's own count of its saves.
     'wiki.list': function () { return window.keoWiki.pages().list(); },
+    // Which pages mention some words, best first, with a piece of the text around the first match (the shell reads the pages' text; the
+    // world is given no text but those snippets).
+    'wiki.search': function (a) { return window.keoWiki.pages().search({ query: a.query }); },
     'wiki.open': function (a) { return window.keoWiki.pages().open({ name: a.name, id: a.id }); },
     'wiki.edit': function (a) { return window.keoWiki.pages().edit({ session: a.session, n: a.n, update: a.update }); },
     'wiki.close': function (a) { return window.keoWiki.pages().close({ session: a.session }); },

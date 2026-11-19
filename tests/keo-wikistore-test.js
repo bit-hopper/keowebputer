@@ -528,6 +528,65 @@ const safeText = async (store, objId) => { try { return textOf((await store.stat
   const sh3 = await SM.store.summary(OBJH);
   ok('a category that is not text, and tags that are an object, give neither', h3.status === 'accepted' && sh3.category === null && sh3.tags.length === 0, sh3);
 
+  // ================================================================ the page's text, for searching it
+  // The text is read out of the editor's document (the `prosemirror` fragment: blocks, their text, marks on it), one block to a line, and kept
+  // in a sealed record of its own while the page holds the same versions. `cnt` counts what the store reads and writes on its disk, so
+  // "answered from the kept record" and "wrote nothing" are counts and not beliefs.
+  const mem1 = S.memoryBackend(), cnt = { version: 0, metaWrites: 0 };
+  const counting1 = Object.assign({}, mem1, {
+    get: async (k, id) => { if (k === 'version') cnt.version++; return mem1.get(k, id); },
+    put: async (k, id, rec) => { if (k === 'meta') cnt.metaWrites++; return mem1.put(k, id, rec); }
+  });
+  const ST = await makeStore(people, { backend: counting1 });
+  await feedLogs(ST.store, people);
+  const OBJT = pageOf(A, 'text-page'), wtx = await writer(A, A.d1, undefined, OBJT);
+  const block = (d, name, s, attrs) => { const el = new Y.XmlElement(name), t = new Y.XmlText(); Object.keys(attrs || {}).forEach((k) => el.setAttribute(k, attrs[k])); t.insert(0, s); el.insert(0, [t]); return el; };
+  const t1 = await ST.store.add(await wtx.publish((d) => {
+    const f = d.getXmlFragment('prosemirror'), p = new Y.XmlElement('paragraph'), tx = new Y.XmlText();
+    tx.insert(0, 'Hello '); tx.insert(6, 'bold & <b> x', { strong: {} });
+    p.insert(0, [tx]);
+    const list = new Y.XmlElement('bullet_list'), item = new Y.XmlElement('list_item');
+    item.insert(0, [block(d, 'paragraph', 'first item')]); list.insert(0, [item]);
+    f.push([p, block(d, 'heading', 'Where we stay', { level: 2 }), list, block(d, 'code_cell', '(+ 1 2)', { language: 'scheme' })]);
+  }, []));
+  ok('setup: a page written the way the editor writes it is accepted', t1.status === 'accepted', t1);
+  const text1 = await ST.store.text(OBJT);
+  ok('the text is what was typed, one block to a line, in order', JSON.stringify(text1.split('\n').filter(Boolean)) === JSON.stringify(['Hello bold & <b> x', 'Where we stay', 'first item', '(+ 1 2)']), text1);
+  ok('no mark, tag or attribute of the editor\'s document is in it, and what was typed is not changed or escaped', !/<(paragraph|strong|heading|bullet_list|code_cell)|level|scheme/.test(text1) && text1.includes('bold & <b> x'), text1);
+  const wroteOnce = cnt.metaWrites;
+  ok('working it out kept it, once, in a record of its own', wroteOnce === 1, wroteOnce);
+  cnt.version = 0;
+  const text1b = await ST.store.text(OBJT);
+  ok('asking again for a page that has not changed gives the same text and writes nothing', text1b === text1 && cnt.metaWrites === wroteOnce, { wrote: cnt.metaWrites });
+  const ST2 = S.create({ backend: counting1, key: ST.key, did: ST.did });
+  cnt.version = 0;
+  const text2 = await ST2.text(OBJT);
+  ok('a store opened later answers from the kept record without reading any version of the page', text2 === text1 && cnt.version === 0 && cnt.metaWrites === wroteOnce, { versionReads: cnt.version });
+  const dumpT = mem1.dump(), diskT = (() => { let s = ''; for (const k of Object.keys(dumpT)) for (const [id, rec] of dumpT[k]) s += id + '\n' + Buffer.from(rec.ct).toString('latin1') + '\n'; return s; })();
+  ok('the kept text is inside the encryption: nothing on disk shows a word of it', !diskT.includes('Where we stay') && !diskT.includes('first item') && !diskT.includes('Hello'));
+  const t2 = await ST.store.add(await wtx.publish((d) => d.getXmlFragment('prosemirror').push([block(d, 'paragraph', 'Added later')]), [t1.cid]));
+  const text3 = await ST.store.text(OBJT);
+  ok('after the page changes its text is worked out again, from all of it', t2.status === 'accepted' && /Added later/.test(text3) && /Where we stay/.test(text3) && cnt.metaWrites === wroteOnce + 1, text3);
+  const beforeNone = (await ST.store.pages()).length, writesNone = cnt.metaWrites;
+  ok('the text of a page that is not held is empty, and no record is made for it', (await ST.store.text(pageOf(A, 'never-text'))) === '' && (await ST.store.pages()).length === beforeNone && cnt.metaWrites === writesNone);
+  const OBJB = pageOf(A, 'plain-body'), wbd = await writer(A, A.d1, undefined, OBJB);
+  await ST.store.add(await wbd.publish((d) => d.getText('body').insert(0, 'only a body text'), []));
+  ok('a page whose document holds no editor content has no text', (await ST.store.text(OBJB)) === '');
+  // a writer may put anything in a page: the text kept is cut to size, and a document nested very deep is read without recursion
+  const OBJH2 = pageOf(A, 'text-hostile'), whh = await writer(A, A.d1, undefined, OBJH2);
+  const big = 'abcdefgh '.repeat(40000);                 // 360,000 characters
+  const hb = await ST.store.add(await whh.publish((d) => { const t = new Y.XmlText(), p = new Y.XmlElement('paragraph'); t.insert(0, big); p.insert(0, [t]); d.getXmlFragment('prosemirror').push([p]); }, []));
+  const bigText = await ST.store.text(OBJH2);
+  ok('a very long page is cut to 256 KB of text', hb.status === 'accepted' && bigText.length <= 256 * 1024 && bigText.length > 200 * 1024, { status: hb.status, length: bigText.length });
+  const OBJD = pageOf(A, 'text-deep'), wdp = await writer(A, A.d1, undefined, OBJD);
+  const hd = await ST.store.add(await wdp.publish((d) => {
+    const f = d.getXmlFragment('prosemirror'); let cur = new Y.XmlElement('a'); f.push([cur]);
+    for (let i = 0; i < 5000; i++) { const nx = new Y.XmlElement('a'); cur.insert(0, [nx]); cur = nx; }
+    const t = new Y.XmlText(); t.insert(0, 'at the bottom'); cur.insert(0, [t]);
+  }, []));
+  const deepText = await ST.store.text(OBJD).catch((e) => 'THREW: ' + e.message);
+  ok('a document nested five thousand deep is read to its text, with no stack overflow', hd.status === 'accepted' && deepText === 'at the bottom', String(deepText).slice(0, 200));
+
   // ================================================================ never throws on garbage
   const G = await makeStore(people); await feedLogs(G.store, people);
   const junk = [null, undefined, 0, 'x', [], {}, { event: {}, sig: 'a' }, { event: { objId: 'p' }, sig: 'a' }, { event: { objId: 5 }, sig: 'a' }];
