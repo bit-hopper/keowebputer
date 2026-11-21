@@ -181,21 +181,19 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     phase = '3 the menu, and Edit';
     let labels = await openMenu();
     check('the page\'s menu holds exactly Edit, the two downloads and Delete page (no link, no History)', !!labels && JSON.stringify(labels) === JSON.stringify(['Edit', 'Download as web page', 'Download as Markdown', 'Delete page']), labels);
-    // what is under the middle of the button: a click there lands on this element (the button, or the icon inside it)
+    // The button's own icon is what a click at its middle lands on: a second click there must close the menu (it used to leave it open: the
+    // outside-click handler took the icon for something outside the button, closed the menu on the press, and the click opened it again).
     const underBtn = await frame.evaluate(() => { const b = lively.identity.WikiIndex.current._activeContentMorph._moreBtn.getBoundingClientRect(), h = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2); return h ? h.tagName + '.' + String(h.className).slice(0, 30) : null; });
     await click(page, await ctl(frame, (I) => I._activeContentMorph._moreBtn), 'the more button again');
-    // NOT a check: observed on the first run (the middle of the button is its icon, and a click there leaves the menu open). The cause is
-    // not established; one candidate is the menu's outside-click handler, which treats the icon as outside the button. A click on the
-    // button's own rim is tried to tell the two apart. Reported, and the menu is closed before going on.
     const closedByIcon = (await until(async () => (await menuLabels(frame)).length === 0, 2000)) === true;
-    let closedByRim = null;
-    if (!closedByIcon) {
-      const br = await ctl(frame, (I) => I._activeContentMorph._moreBtn);
-      await page.mouse.click(br.x + 1.5, br.y + br.h / 2);
-      closedByRim = (await until(async () => (await menuLabels(frame)).length === 0, 2000)) === true;
-      if (!closedByRim) await page.keyboard.press('Escape');
-    }
-    note('the more button, clicked again while its menu is open: click landed on ' + underBtn + '; menu closed by that click: ' + closedByIcon + (closedByIcon ? '' : '; closed by a click on the rim instead: ' + closedByRim));
+    await sleep(700);   // a menu that closed on the press and opened again on the click would be back by now
+    check('a second click on the button, on its icon, closes the menu and it stays closed', closedByIcon && (await menuLabels(frame)).length === 0 && /material-symbols/.test(underBtn || ''), { clickLandedOn: underBtn, menu: await menuLabels(frame) });
+    if ((await menuLabels(frame)).length) await page.keyboard.press('Escape');
+    await openMenu();
+    const br = await ctl(frame, (I) => I._activeContentMorph._moreBtn);
+    await page.mouse.click(br.x + 1.5, br.y + br.h / 2);   // the button's own rim
+    await sleep(700);
+    check('a click on the rim of the button closes it too', (await menuLabels(frame)).length === 0, await menuLabels(frame));
     await openMenu();
     await click(page, await menuItem(frame, 'Edit'), 'Edit');
     ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.local && r.open.hasView && r.open.status === 'Saved' ? r : null; }, 30000);
