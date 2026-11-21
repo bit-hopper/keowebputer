@@ -1163,7 +1163,7 @@ module("lively.identity.WikiView")
           // immediately trigger this handler and close the menu it just
           // opened.
           this._moreMenuOutsideHandler = function (e) {
-            if (menu.contains(e.target) || e.target === anchorBtn) return;
+            if (menu.contains(e.target) || anchorBtn.contains(e.target)) return; // the icon inside the button is the button: its own click closes the menu
             self._closeMoreMenu();
           };
           setTimeout(function () {
