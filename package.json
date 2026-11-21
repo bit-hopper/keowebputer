@@ -22,7 +22,8 @@
     "test:hash": "node tests/keo-hash-test.js",
     "test:wikilog": "node tests/keo-wikilog-test.js",
     "test:wikistore": "node tests/keo-wikistore-test.js",
-    "test:wikipages": "node tests/keo-wikipages-test.js"
+    "test:wikipages": "node tests/keo-wikipages-test.js",
+    "test:wikiexport": "node tests/keo-wikiexport-test.js"
   },
   "devDependencies": {
     "jsqr": "1.4.0",

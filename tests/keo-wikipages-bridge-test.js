@@ -57,6 +57,9 @@ const keoCall = (frame, op, args) => frame.evaluate(([o, a]) => {
 }, [op, args || {}]);
 const bytes = (a) => Uint8Array.from(a);
 const textOf = (arr) => { const d = new Y.Doc(); if (arr.length) Y.applyUpdate(d, bytes(arr)); return d.getText('body').toString(); };
+// the words of a page written the way the editor writes it (paragraphs in the `prosemirror` fragment)
+const proseOf = (arr) => { const d = new Y.Doc(); if (arr.length) Y.applyUpdate(d, bytes(arr)); return d.getXmlFragment('prosemirror').toString().replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); };
+const waitFor = async (fn, ms) => { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > (ms || 6000)) return v; await sleep(150); } };
 // the editor's side
 function editor(o) {
   const doc = new Y.Doc(); doc.clientID = o.clientId;
@@ -90,6 +93,9 @@ const type = (s) => (d) => d.getText('body').insert(d.getText('body').length, s)
     const page = await ctx.newPage();
     page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message.slice(0, 200)));
     page.on('console', (m) => { if (m.type() === 'error' && !/compute-pressure|ERR_FILE_NOT_FOUND/.test(m.text())) errors.push('console: [' + phase + '] ' + m.text().slice(0, 200)); });
+    // the downloads the shell page starts (wiki.export): the shell makes the file and the browser's own download saves it
+    const downloads = [];
+    page.on('download', (d) => downloads.push(d));
     const cdp = await ctx.newCDPSession(page);
     await cdp.send('WebAuthn.enable', { enableUI: false });
     await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
@@ -99,7 +105,7 @@ const type = (s) => (d) => d.getText('body').insert(d.getText('body').length, s)
 
     phase = '0 nobody signed in';
     check('the shell page has the page operations and the package lists them', await page.evaluate(() => !!window.keoWikiPages && typeof window.keoWiki.pages === 'function'));
-    for (const [op, args] of [['wiki.list', {}], ['wiki.open', { name: 'notes' }], ['wiki.edit', { session: 'x', n: 0, update: [1, 2, 3] }], ['wiki.search', { query: 'x' }]]) {
+    for (const [op, args] of [['wiki.list', {}], ['wiki.open', { name: 'notes' }], ['wiki.edit', { session: 'x', n: 0, update: [1, 2, 3] }], ['wiki.search', { query: 'x' }], ['wiki.read', { name: 'notes' }], ['wiki.delete', { id: 'x' }], ['wiki.export', { id: 'x', format: 'markdown' }]]) {
       const r = await keoCall(frame, op, args);
       check(op + ' with nobody signed in is an error that says so', r.ok === false && /Sign in/.test(r.e), r);
     }
@@ -164,6 +170,95 @@ const type = (s) => (d) => d.getText('body').insert(d.getText('body').length, s)
     check('an empty query finds nothing and is not an error', r.ok && Array.isArray(r.r) && r.r.length === 0, r);
     const noQuery = await keoCall(frame, 'wiki.search', {}), numQuery = await keoCall(frame, 'wiki.search', { query: 42 });
     check('a query that is not text is an error with a sentence', noQuery.ok === false && /Say what to search for/.test(noQuery.e) && numQuery.ok === false && /Say what to search for/.test(numQuery.e), [noQuery, numQuery]);
+
+    phase = '4c reading, saving as a file and deleting a page';
+    // A page written the way the editor writes it. Reading opens no editing session and makes nothing; the file is made by the shell and
+    // downloaded by the shell page, so the world is answered with the file's name and size and never its bytes; a delete takes the page
+    // and its history off the disk. The page is deleted again at the end of the phase, so the pages the later phases count are the same.
+    const recs0 = (await page.evaluate(() => window.__scan([]))).records;
+    const oD = (await keoCall(frame, 'wiki.open', { name: 'Day trip' })).r, dD = new Y.Doc(); dD.clientID = oD.clientId;
+    const svD = Y.encodeStateVector(dD), pD = new Y.XmlElement('paragraph'), xD = new Y.XmlText();
+    xD.insert(0, 'Bring the green thermos'); pD.insert(0, [xD]); dD.getXmlFragment('prosemirror').insert(0, [pD]);
+    r = await keoCall(frame, 'wiki.edit', { session: oD.session, n: 0, update: Array.from(Y.encodeStateAsUpdate(dD, svD)) });
+    check('(setup) a third page is saved, to be read, saved as a file and deleted', r.ok && r.r.saved === true, r);
+    await keoCall(frame, 'wiki.close', { session: oD.session });
+    const dayId = did + '/Day trip';
+    r = await keoCall(frame, 'wiki.read', { id: dayId });
+    const rd = r.r;
+    check('reading a page answers its id, owner, who may write it, how many edits it holds and its state as bytes, and no session', r.ok && rd.id === dayId && rd.name === 'Day trip' && rd.owner === did && rd.mine === true && rd.canEdit === true && rd.versions === 1 && rd.pending === 0 && rd.stateType === '[object Uint8Array]' && !('session' in rd) && Array.isArray(rd.heads), r);
+    check('and the text of the page is in that state, its authors are the one who wrote it, and it says when this device took the change in', r.ok && proseOf(rd.state) === 'Bring the green thermos' && JSON.stringify(rd.authors) === JSON.stringify([did]) && rd.updated !== null && rd.updated !== undefined, r.ok && { text: proseOf(rd.state), authors: rd.authors, updated: rd.updated });
+    note('what "updated" is as it crosses the bridge: ' + JSON.stringify(rd.updated) + ' (' + typeof rd.updated + ')');
+    r = await keoCall(frame, 'wiki.read', { name: 'Day trip' });
+    check('a page can be read by its name as well', r.ok && r.r.id === dayId && proseOf(r.r.state) === 'Bring the green thermos', r);
+    r = await keoCall(frame, 'wiki.list');
+    check('reading made nothing and opened no editing session (the list is the three pages)', r.ok && r.r.length === 3, r);
+    r = await keoCall(frame, 'wiki.read', { name: 'never saved' });
+    check('reading a page that was never saved is an error that says the device holds none', r.ok === false && /holds no such page/.test(r.e), r);
+    r = await keoCall(frame, 'wiki.read', { id: 'did:keo:' + 'a'.repeat(52) + ':' + 'B'.repeat(43) + '/theirs' });
+    check('and so is a page of someone else\'s that the device does not hold (reading it does not make it)', r.ok === false && /holds no such page/.test(r.e), r);
+    const readNone = await keoCall(frame, 'wiki.read', {}), readBad = await keoCall(frame, 'wiki.read', { id: 'not a page' });
+    check('no page named, or an id that is not a page\'s, is an error with a sentence', readNone.ok === false && /Say which page/.test(readNone.e) && readBad.ok === false && /not the name of a page/.test(readBad.e), [readNone, readBad]);
+
+    // saving as a file: the answer carries a name and a size only, the shell page's download carries the file
+    const nDl = downloads.length;
+    r = await keoCall(frame, 'wiki.export', { id: dayId, format: 'markdown' });
+    const exMd = r;
+    // asked again at once (before a second has gone by): refused with a sentence, and no second file
+    const tooSoon = await keoCall(frame, 'wiki.export', { id: dayId, format: 'html' });
+    check('the answer to saving as a file is the file\'s name and size and nothing else', exMd.ok && JSON.stringify(Object.keys(exMd.r).sort()) === JSON.stringify(['name', 'size']) && exMd.r.name === 'Day-trip.md' && Number.isSafeInteger(exMd.r.size) && exMd.r.size > 0, exMd);
+    check('a second file asked for at once is refused with a sentence', tooSoon.ok === false && /Wait a moment/.test(tooSoon.e), tooSoon);
+    const gotMd = await waitFor(() => downloads.length > nDl, 8000);
+    check('the shell page started one download, named as answered', !!gotMd && downloads.length === nDl + 1 && downloads[nDl].suggestedFilename() === 'Day-trip.md', downloads.map((d) => d.suggestedFilename()));
+    let mdFile = null;
+    if (gotMd) { mdFile = path.join(WORK, 'day-trip.md'); await downloads[nDl].saveAs(mdFile); }
+    const mdText = mdFile ? fs.readFileSync(mdFile, 'utf8') : '';
+    check('the file holds the page\'s name and words, and its size is the size answered', !!mdFile && /Day trip/.test(mdText) && /Bring the green thermos/.test(mdText) && Buffer.byteLength(mdText) === exMd.r.size, mdText.slice(0, 200));
+    await sleep(1300);
+    const exHtml = await keoCall(frame, 'wiki.export', { id: dayId, format: 'html' });
+    const gotHtml = await waitFor(() => downloads.length > nDl + 1, 8000);
+    let htmlText = '';
+    if (gotHtml) { const f = path.join(WORK, 'day-trip.html'); await downloads[nDl + 1].saveAs(f); htmlText = fs.readFileSync(f, 'utf8'); }
+    check('a second after the first, a web page file is made too (the answer is a name and a size)', exHtml.ok && exHtml.r.name === 'Day-trip.html' && JSON.stringify(Object.keys(exHtml.r).sort()) === JSON.stringify(['name', 'size']) && !!gotHtml && Buffer.byteLength(htmlText) === exHtml.r.size, [exHtml, gotHtml]);
+    check('the web page holds the page\'s words and says that nothing in it may run', /<title>Day trip<\/title>/.test(htmlText) && /Bring the green thermos/.test(htmlText) && /Content-Security-Policy/.test(htmlText) && !/<script/i.test(htmlText), htmlText.slice(0, 300));
+    await sleep(1300);
+    const exBad = await keoCall(frame, 'wiki.export', { id: dayId, format: 'pdf' });
+    const exNone = await keoCall(frame, 'wiki.export', { id: 'did:keo:' + 'a'.repeat(52) + ':' + 'B'.repeat(43) + '/theirs', format: 'markdown' });
+    const exNoId = await keoCall(frame, 'wiki.export', { format: 'markdown' });
+    check('a format that is not offered, a page the device does not hold and no page at all are each an error with a sentence', exBad.ok === false && /"markdown" or "html"/.test(exBad.e) && exNone.ok === false && /holds no such page/.test(exNone.e) && exNoId.ok === false && /Say which page/.test(exNoId.e), [exBad, exNone, exNoId]);
+    await sleep(500);
+    check('and none of those started a download', downloads.length === nDl + 2, downloads.map((d) => d.suggestedFilename()));
+
+    // deleting: only a page the person made, with its history, from the disk. Searching for a word of it first makes the shell keep the page's
+    // text for searching (a record of its own on the disk, which is only made when the text is first searched), so that the delete has to
+    // take that record too.
+    r = await keoCall(frame, 'wiki.search', { query: 'thermos' });
+    check('(setup) before it goes the page is found by a word of its text, which keeps that text on the disk', r.ok && r.r.length === 1 && r.r[0].name === 'Day trip', r);
+    const recs1 = (await page.evaluate(() => window.__scan([]))).records;
+    const oldSession = (await keoCall(frame, 'wiki.open', { id: dayId })).r;
+    const delOther = await keoCall(frame, 'wiki.delete', { id: 'did:keo:' + 'a'.repeat(52) + ':' + 'B'.repeat(43) + '/theirs' });
+    const delNone = await keoCall(frame, 'wiki.delete', {}), delBad = await keoCall(frame, 'wiki.delete', { id: 'not a page' });
+    check('deleting a page of someone else\'s, no page, or something that is not a page is an error with a sentence', delOther.ok === false && /Only a page you made/.test(delOther.e) && delNone.ok === false && /Say which page/.test(delNone.e) && delBad.ok === false && /not the name of a page/.test(delBad.e), [delOther, delNone, delBad]);
+    r = await keoCall(frame, 'wiki.list');
+    check('(control) those refusals left the three pages as they were', r.ok && r.r.length === 3, r);
+    const del = await keoCall(frame, 'wiki.delete', { id: dayId });
+    check('deleting the page answers that it was removed, with its one edit', del.ok && del.r.removed === true && del.r.versions === 1 && del.r.pending === 0, del);
+    r = await keoCall(frame, 'wiki.list');
+    check('the page is gone from the list', r.ok && r.r.length === 2 && !r.r.some((p) => p.name === 'Day trip'), r);
+    r = await keoCall(frame, 'wiki.read', { id: dayId });
+    check('it cannot be read any more', r.ok === false && /holds no such page/.test(r.e), r);
+    r = await keoCall(frame, 'wiki.search', { query: 'thermos' });
+    check('its text is not found when searching', r.ok && r.r.length === 0, r);
+    r = await keoCall(frame, 'wiki.edit', { session: oldSession.session, n: 0, update: [1, 2, 3] });
+    check('an editing session that was open on it when it went is given up: a late edit does not bring it back', r.ok === false && /not open for editing/.test(r.e), r);
+    r = await keoCall(frame, 'wiki.list');
+    check('(control) and the list still does not hold it', r.ok && r.r.length === 2, r);
+    const recs2 = (await page.evaluate(() => window.__scan([]))).records;
+    check('the records on the disk are the ones from before the page was made (nothing of it is left behind)', recs2 === recs0 && recs1 > recs0, { before: recs0, withPage: recs1, after: recs2 });
+    r = await keoCall(frame, 'wiki.delete', { id: dayId });
+    check('deleting it again is not an error, and says nothing was removed', r.ok && r.r.removed === false && r.r.versions === 0, r);
+    r = await keoCall(frame, 'wiki.open', { name: 'Day trip' });
+    check('the name can be used again: it opens as a new page with nothing in it', r.ok && r.r.isNew === true && proseOf(r.r.state) === '', r);
+    if (r.ok) await keoCall(frame, 'wiki.close', { session: r.r.session });
 
     phase = '5 what is refused';
     const forged = new Y.Doc(); forged.clientID = o2.clientId + 1; const sv0 = Y.encodeStateVector(forged); forged.getText('body').insert(0, 'forged');

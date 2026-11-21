@@ -3,7 +3,8 @@
 // browser can run it. No DOM, no network, no passkey (the device key signs, as for the other things the session does without asking again).
 //
 // WHAT THE WORLD MAY DO, and nothing else: list the pages, ask which of them mention some words (it is given the names and a short piece of
-// text around the first match, not the texts), open one, hand over what an editing session changed, close it. It never builds
+// text around the first match, not the texts), read one (its text and what a reading view shows, with no editing session), open one for
+// editing, hand over what an editing session changed, close it, and delete one of the person's own pages. It never builds
 // an event, never names a client id of its own choosing, never sees a key, and is never the judge of its own edit: the SHELL builds the
 // signed event from the bytes the editor changed, adds it to the store, and says what the store made of it (accepted, pending, refused).
 // There is no operation here that signs anything it is handed, and none that lets the world say who may write a page.
@@ -22,9 +23,10 @@
 // Not here: events that arrive from another device (the next slice), the history view, checkpoints.
 (function (root, factory) {
   var node = typeof module === 'object' && module.exports;
-  var api = factory(node ? require('./keo-did.js') : root.keoDid, node ? require('./keo-wikilog.js') : root.keoWikiLog, node ? require('./keo-worldtext.js') : root.keoWorldText);
+  var api = factory(node ? require('./keo-did.js') : root.keoDid, node ? require('./keo-wikilog.js') : root.keoWikiLog, node ? require('./keo-worldtext.js') : root.keoWorldText,
+    node ? require('./keo-wikiexport.js') : root.keoWikiExport);
   if (node) module.exports = api; else root.keoWikiPages = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (kd, W, WT) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (kd, W, WT, E) {
   'use strict';
 
   // A person has a handful of pages open at once; this keeps what the shell holds per open page bounded, and the least recently used
@@ -41,10 +43,14 @@
     return null;
   }
 
-  // o: { store (keo-wikistore.js), identity: { proof() -> { did, deviceId, log }, sign(bytes, did) -> base64url signature } }
+  // A file may be made at most once a second, and one at a time: the world can ask for as many as it likes, and every one of them ends as a
+  // download on the person's disk (keo-wiki.js hands it to the browser), so a world that asks in a loop is stopped here, not by the browser.
+  var EXPORT_GAP_MS = 1000;
+
+  // o: { store (keo-wikistore.js), identity: { proof() -> { did, deviceId, log }, sign(bytes, did) -> base64url signature }, now? (a clock in ms) }
   // `proof` throws when nobody is signed in; `sign` throws when the identity signed in is no longer `did`.
   function create(o) {
-    var store = o.store, identity = o.identity;
+    var store = o.store, identity = o.identity, clock = o.now || Date.now, exporting = false, lastExport = -Infinity;
     var sessions = new Map();               // session id -> { objId, name, did, deviceId, nonce, clientId, heads, canEdit, chain, last }
     var offered = { did: null, events: -1 };
 
@@ -121,11 +127,14 @@
 
     // Whether a page can be made the world a person is taken to (shell.js `go`, kind 'wiki'): the signed-in identity's own page, held or not
     // (a new one is made when it is first saved), or a page of someone else's that this device holds. A page of someone else's that it does
-    // not hold would open empty and unwritable, so no world is started for it. Answers { id, name, owner, mine }; opens no session.
+    // not hold would open empty and unwritable, so no world is started for it. Answers { id, name, owner, mine, held }; opens no session.
+    // `held` is whether this device has the page now: a page that is held is read (its reading view) and a page that is not (a new name of the
+    // person's own) is written (the editor), so the world that is started for it knows which to show without asking again.
     async function locate(a) {
       var proof = await identity.proof(), r = refOf(proof, a), mine = r.parsed.owner === proof.did;
-      if (!mine && !(await store.heads(r.id)).length) throw new Error('This device holds no such page.');
-      return { id: r.id, name: r.parsed.name, owner: r.parsed.owner, mine: mine };
+      var held = (await store.heads(r.id)).length > 0;
+      if (!mine && !held) throw new Error('This device holds no such page.');
+      return { id: r.id, name: r.parsed.name, owner: r.parsed.owner, mine: mine, held: held };
     }
 
     // a: { name } for a page of the signed-in identity (made when it is first saved), or { id } for any page the store holds.
@@ -143,6 +152,56 @@
       sessions.set(session, { id: session, objId: id, did: proof.did, deviceId: proof.deviceId, nonce: nonce, clientId: clientId, heads: heads.slice(), canEdit: canEdit, chain: Promise.resolve(), last: null });
       return { session: session, id: id, name: parsed.name, owner: parsed.owner, mine: parsed.owner === proof.did, isNew: heads.length === 0,
         canEdit: canEdit, clientId: clientId, heads: heads, state: st.update };
+    }
+
+    // A page to READ, not to edit: a: { name } or { id }, as for open(). Answers { id, name, owner, mine, canEdit, heads, state, versions,
+    // pending, updated, authors }: `state` is the page's Yjs update at its current heads, `canEdit` whether this identity may write it, `versions`
+    // how many edits it holds (a change of the writer list is not one), `pending` how many more wait for something and are not in the text,
+    // `updated` when THIS device last took a change into it (its own clock), `authors` the DIDs that wrote an edit, in the order they first
+    // did (the owner's own page lists the owner first). Opens NO editing session: nothing is held for the reader, so there is nothing to give
+    // back, and a reader of a page cannot end up writing one. Throws a sentence for a page this device does not hold (a page that was never
+    // saved is not one: it is only made when it is first written).
+    async function read(a) {
+      var proof = await identity.proof(), r = refOf(proof, a), id = r.id;
+      var heads = await store.heads(id);
+      if (!heads.length) throw new Error('This device holds no such page.');
+      var st = await store.state(id, heads), writers = await store.writers(id, heads), rows = await store.versions(id), info = await store.info(id);
+      var authors = [], edits = 0;
+      rows.forEach(function (v) {
+        if (v.kind !== 'edit') return;
+        edits++;
+        if (authors.indexOf(v.did) < 0) authors.push(v.did);
+      });
+      return { id: id, name: r.parsed.name, owner: r.parsed.owner, mine: r.parsed.owner === proof.did, canEdit: writers.indexOf(proof.did) >= 0,
+        heads: heads, state: st.update, versions: edits, pending: info.pending, updated: info.touched, authors: authors };
+    }
+
+    // A file made of a page (Markdown or a standalone web page: keo-wikiexport.js), for the shell to hand to the browser's download.
+    // a: { id } (or { name }) and { format: 'markdown' | 'html' }. Answers { name, type, bytes }: the BYTES STAY IN THE SHELL (shell.js's
+    // wiki.export answers the world with the file's name and size only). A page is read the way read() reads it, so the same pages and the same
+    // refusals; at most one file at a time and one a second (EXPORT_GAP_MS), and a refused or failed one does not count.
+    async function exportFile(a) {
+      if (exporting) throw new Error('A file is being made. Wait for it.');
+      if (clock() - lastExport < EXPORT_GAP_MS) throw new Error('Wait a moment before saving another file.');
+      exporting = true;
+      try {
+        var r = await read({ id: a && a.id, name: a && a.name });
+        var f = E.exportPage({ name: r.name, update: r.state, format: a && a.format });
+        lastExport = clock();
+        return f;
+      } finally { exporting = false; }
+    }
+
+    // Takes one of the signed-in identity's own pages off this device, with its whole history. a: { id } (or { name }). Answers
+    // { removed, versions, pending } (the store's own answer). Not for a page someone else made: a copy of theirs is not this person's to
+    // destroy for everyone (there is no other device to destroy it on yet, but the rule is the one that will hold when there is), so that is
+    // refused with a sentence. Any editing session on the page is given up FIRST (before the store is asked, in the same turn): an edit that
+    // is still being built when the page goes cannot bring it back, because it is checked against its session just before it is added.
+    async function remove(a) {
+      var proof = await identity.proof(), r = refOf(proof, a);
+      if (r.parsed.owner !== proof.did) throw new Error('Only a page you made can be deleted here.');
+      Array.from(sessions.keys()).forEach(function (k) { if (sessions.get(k).objId === r.id) sessions.delete(k); });
+      return store.remove(r.id);
     }
 
     // a: { session, n, update }. Answers { status, cid?, error?, saved }: `saved` is true when the store holds the edit now (accepted, or
@@ -174,6 +233,9 @@
       var point = await W.logPoint(proof.log);
       var ev = await W.buildVersion({ objId: s.objId, parents: s.heads, author: { did: s.did, deviceId: s.deviceId }, authorLog: point, nonces: [s.nonce], update: update });
       var env = await W.seal(ev, function (bytes) { return identity.sign(bytes, s.did); });
+      // The page may have been deleted while the event was being built (remove() gives its sessions up): adding it now would make a one-edit
+      // page out of nothing. Nothing awaits between this check and the call, so a delete that comes after it is queued behind the add.
+      if (sessions.get(s.id) !== s) throw new Error(NOT_OPEN);
       var r = await store.add(env);
       var answer = { status: r.status, cid: r.cid, error: r.error, saved: r.status === 'accepted' || r.status === 'duplicate' };
       if (r.status === 'accepted') s.heads = [r.cid];            // it names every earlier head as a parent, so it is the only head now
@@ -190,9 +252,9 @@
     // left to use one (a session whose editor is gone would otherwise sit here until later ones pushed it out).
     function closeAll() { sessions.clear(); }
     // The session ended: nothing about an open page stays.
-    function reset() { sessions.clear(); offered = { did: null, events: -1 }; }
+    function reset() { sessions.clear(); offered = { did: null, events: -1 }; lastExport = -Infinity; }
 
-    return { list: list, search: search, locate: locate, open: open, edit: edit, close: close, closeAll: closeAll, reset: reset, MAX_SESSIONS: MAX_SESSIONS };
+    return { list: list, search: search, locate: locate, read: read, exportFile: exportFile, remove: remove, open: open, edit: edit, close: close, closeAll: closeAll, reset: reset, MAX_SESSIONS: MAX_SESSIONS };
   }
 
   return { create: create, MAX_SESSIONS: MAX_SESSIONS };

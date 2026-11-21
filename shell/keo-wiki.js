@@ -1,8 +1,8 @@
 // The shell's hold on the local wiki store (keo-wikistore.js): WHERE its sealed records are kept (IndexedDB `keo-wiki`) and WHICH SESSION
 // owns it. The checking and the sealing are keo-wikistore.js's; this file only gives it a disk and a lifetime. Runs in the extension's own
-// page. The world reaches pages only through the four bridge ops of shell.js (wiki.list, wiki.open, wiki.edit, wiki.close), which call
-// pages() below (keo-wikipages.js); the store itself, the log book and the signing stay out of its reach, and every edit goes through the
-// store's checks.
+// page. The world reaches pages only through the bridge ops of shell.js (wiki.list, wiki.search, wiki.read, wiki.open, wiki.edit, wiki.close,
+// wiki.delete, wiki.export, wiki.here), which call pages() below (keo-wikipages.js) or exportPage(); the store itself, the log book and the
+// signing stay out of its reach, and every edit goes through the store's checks.
 //
 //   IndexedDB `keo-wiki`, one object store `records`: key `<DID> NUL <kind> NUL <id>` -> { iv, ct } (the sealed record of keo-wikistore.js).
 //   The key is the only thing readable without the session key besides the sizes and the order of writes: the identity's DID (as in the
@@ -112,6 +112,19 @@
     if (!cur.pages) cur.pages = window.keoWikiPages.create({ store: s, identity: identityForPages });
     return cur.pages;
   }
+  // A page saved as a file on the computer: the page operations make the file (keo-wikipages.js exportFile, from the stored page: Markdown or a
+  // standalone web page), and it is handed to the browser's download HERE, because this page may download and the world's frame (sandboxed
+  // without that right) may not. The bytes never go to the world: it is told the file's name and size. The save dialog or the downloads folder
+  // is the browser's, so this cannot say where the copy went. a: { id, format: 'markdown' | 'html' }.
+  function exportPage(a) {
+    return Promise.resolve().then(function () { return pages().exportFile({ id: a.id, format: a.format }); }).then(function (f) {
+      var url = URL.createObjectURL(new Blob([f.bytes], { type: f.type })), el = document.createElement('a');
+      el.href = url; el.download = f.name; el.rel = 'noopener'; el.style.display = 'none';
+      document.body.appendChild(el); el.click(); el.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 10 * 60 * 1000);      // the browser reads the Blob while it downloads
+      return { name: f.name, size: f.bytes.length };
+    });
+  }
   // The world frame is being replaced: the editing sessions its editors held are given up. Starts nothing (no store is made for it).
   function closePages() { if (cur && cur.pages) cur.pages.closeAll(); }
   // The session ended: nothing of the identity stays in memory, and the store starts nothing more.
@@ -152,5 +165,5 @@
     return draining.then(function () { return run('readwrite', function (st) { st['delete'](IDBKeyRange.bound(p, p + MAXCH)); }); });
   }
 
-  window.keoWiki = { store: store, pages: pages, closePages: closePages, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
+  window.keoWiki = { store: store, pages: pages, exportPage: exportPage, closePages: closePages, reset: reset, purge: purge, backend: backend, pin: pin, pinFriend: pinFriend };
 })();

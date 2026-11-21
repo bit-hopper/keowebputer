@@ -442,6 +442,43 @@ const safeText = async (store, objId) => { try { return textOf((await store.stat
   await S1.store.purge();
   ok('removing the store\'s contents leaves nothing on disk and nothing in memory', (await Promise.all(['page', 'version', 'pending', 'log', 'meta'].map((k) => S1.backend.ids(k)))).every((l) => l.length === 0) && (await S1.store.heads(OBJ)).length === 0 && (await S1.store.logOf(A.did)) === null);
 
+  // ================================================================ removing ONE page, and what a page's reading view asks (info)
+  {                                                     // a block of its own: the names below are used by this section only
+  const RS = await makeStore(people); await feedLogs(RS.store, people);
+  const OBJ2 = pageOf(A, 'page-two');
+  const rw1 = await writer(A, A.d1, undefined, OBJ), rw2 = await writer(A, A.d1, undefined, OBJ2);
+  const x1 = await rw1.publish((d) => d.getText('body').insert(0, 'gone soon')), xr1 = await RS.store.add(x1);
+  const x2 = await rw1.publish((d) => d.getText('body').insert(9, ' for good'), [xr1.cid]), xr2 = await RS.store.add(x2);
+  const y1 = await rw2.publish((d) => d.getText('body').insert(0, 'stays')), yr1 = await RS.store.add(y1);
+  const xWait = await rw1.publish((d) => d.getText('body').insert(0, '!'), ['Q'.repeat(43)]);
+  ok('setup: a page with two versions and a waiting edit, and another page with one', xr2.status === 'accepted' && yr1.status === 'accepted' && (await RS.store.add(xWait)).status === 'pending');
+  await RS.store.text(OBJ); await RS.store.text(OBJ2); await RS.store.summary(OBJ);
+  const inf = await RS.store.info(OBJ);
+  ok('info: how many versions are held, how many edits wait, and when this device last took a change in', inf.versions === 2 && inf.pending === 1 && typeof inf.touched === 'string', inf);
+  const dumpInfo = JSON.stringify(RS.backend.dump(), (k, v) => (v instanceof Uint8Array ? Array.from(v) : v));
+  await RS.store.info(pageOf(A, 'never-held'));
+  ok('info: a page that is not held answers with nothing and writes nothing', JSON.stringify(await RS.store.info(pageOf(A, 'never-held'))) === JSON.stringify({ versions: 0, pending: 0, touched: null }) && JSON.stringify(RS.backend.dump(), (k, v) => (v instanceof Uint8Array ? Array.from(v) : v)) === dumpInfo);
+  const dBefore = RS.backend.dump(), cnt = (d, k) => (d[k] || []).length;
+  const logBefore = JSON.stringify(await RS.store.logOf(A.did));
+  const removed = await RS.store.remove(OBJ);
+  const dAfter = RS.backend.dump();
+  ok('remove: answers that the page was removed, with the versions and waiting edits that went', removed.removed === true && removed.versions === 2 && removed.pending === 1, removed);
+  ok('remove: the page\'s record, versions, waiting edit and kept text are gone from the disk, and the other page\'s are not', cnt(dAfter, 'page') === cnt(dBefore, 'page') - 1 && cnt(dAfter, 'version') === cnt(dBefore, 'version') - 2 && cnt(dAfter, 'pending') === 0 && cnt(dAfter, 'meta') === cnt(dBefore, 'meta') - 1 && dAfter.version.some(([id]) => id === yr1.cid) && !dAfter.version.some(([id]) => id === xr1.cid || id === xr2.cid), ['page', 'version', 'pending', 'meta'].map((k) => k + ' ' + cnt(dBefore, k) + '->' + cnt(dAfter, k)));
+  ok('remove: the identity logs are untouched (they are shared by every page)', cnt(dAfter, 'log') === cnt(dBefore, 'log') && JSON.stringify(await RS.store.logOf(A.did)) === logBefore && logBefore !== "null");
+  ok('remove: the page has no heads, history, text or state any more, and the other page reads as before', (await RS.store.heads(OBJ)).length === 0 && (await RS.store.versions(OBJ)).length === 0 && (await RS.store.text(OBJ)) === '' && (await RS.store.pending(OBJ)).length === 0 && textOf((await RS.store.state(OBJ2)).update) === 'stays');
+  ok('remove: the list of pages holds only the other one', JSON.stringify((await RS.store.pages()).map((p) => p.objId)) === JSON.stringify([OBJ2]), await RS.store.pages());
+  await RS.store.unload();
+  ok('remove: after the store forgets what is in memory the page is still gone', (await RS.store.heads(OBJ)).length === 0 && (await RS.store.pages()).length === 1);
+  const dNone = JSON.stringify(RS.backend.dump(), (k, v) => (v instanceof Uint8Array ? Array.from(v) : v));
+  const none = await RS.store.remove(OBJ);
+  ok('remove: a page that is not held answers removed:false and writes nothing', none.removed === false && none.versions === 0 && none.pending === 0 && JSON.stringify(RS.backend.dump(), (k, v) => (v instanceof Uint8Array ? Array.from(v) : v)) === dNone, none);
+  ok('remove: something that is not a page\'s id is refused with a sentence', /not the name of a page/.test(await rejects(RS.store.remove('page-one')) || '') && /not the name of a page/.test(await rejects(RS.store.remove(undefined)) || ''));
+  ok('remove: nothing marks the page as deleted: the same edits are taken again if they are offered again', (await RS.store.add(x1)).status === 'accepted' && (await RS.store.add(x2)).status === 'accepted' && textOf((await RS.store.state(OBJ)).update) === 'gone soon for good');
+  await RS.store.close();
+  ok('remove: after the session ended it refuses to run', /closed/.test(await rejects(RS.store.remove(OBJ2)) || '') && /closed/.test(await rejects(RS.store.info(OBJ2)) || ''));
+
+  }
+
   // ================================================================ close (a session that ended)
   // A backend whose write of a version waits for a gate, so that one add is RUNNING while the store is closed and another has not started.
   const mem = S.memoryBackend(); let release, started = false; const gate = new Promise((r) => { release = r; });

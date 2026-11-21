@@ -8,7 +8,8 @@
 //   guest     the document as it is: the blank world
 //   world     a saved world: its serialized data replaces the blank world's in this document, before the bootstrap reads it
 //   homestar  a new identity (nothing saved yet): the blank world, then the identity's home page opened on it
-//   wiki      a page kept on this device: the blank world, with the page's editor filling it (the shell has checked which page it is)
+//   wiki      a page kept on this device: the blank world, with the page filling it (the shell has checked which page it is): its reading view
+//             when the device holds it (startup.held), the editor for a new name that nothing has written yet
 //   wikiindex the person's wiki on this device: the blank world, with the index of their pages filling it (cards, lists, a page opened inside
 //             it), as the host's own page for a wiki does; startup.open names a page to show open, startup.newPage asks for the new-page dialog
 // and, once the world is up, what a save and a move between pages do here. Saved worlds live in the shell, encrypted under
@@ -195,14 +196,15 @@
     });
   }
 
-  // A wiki page kept on this device, as the world: this world is blank and the page's editor fills it, the way the host's own page for a
-  // wiki page does (the page is not a window to open and close, it is where the person is; leaving is moving to another world, from the
-  // menu bar or My worlds). What was typed in the last moments is saved before the shell replaces this world with another page: a move
-  // that cannot do that stops, with the reason on screen and the text still there.
+  // A wiki page kept on this device, as the world: this world is blank and the page fills it, the way the host's own page for a wiki page
+  // does (the page is not a window to open and close, it is where the person is; leaving is moving to another world, from the menu bar or My
+  // worlds). A page the device holds shows its reading view (Edit swaps the editor in, and a Save swaps the view back); a new name that
+  // nothing has written yet starts in the editor. The shell says which (startup.held). What was typed in the last moments is saved before the
+  // shell replaces this world with another page: a move that cannot do that stops, with the reason on screen and the text still there.
   function openWiki(startup) {
-    lively.require('lively.identity.WikiEditor').toRun(function () {
+    lively.require('lively.identity.WikiView').toRun(function () {
       var E = lively.identity.WikiEditor;
-      if (!E.openLocal({ id: startup.id })) return;
+      if (!lively.identity.WikiView.openLocalWorld({ id: startup.id }, startup.held === true)) return;
       window.keo.beforeLeave(function () {
         return new Promise(function (ok, no) { E.leaveLocal(function (err) { if (err) no(err); else ok(); }); });
       });

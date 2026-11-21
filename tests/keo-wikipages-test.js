@@ -14,7 +14,7 @@ let passed = 0;
 const ok = (name, cond, extra) => { if (!cond) { console.error('FAIL ' + name + (extra !== undefined ? ' ' + (typeof extra === 'string' ? extra : JSON.stringify(extra)).slice(0, 600) : '')); process.exitCode = 1; } else { passed++; console.log('ok   ' + name); } };
 const rejects = async (p) => { try { await p; return null; } catch (e) { return e.message; } };
 
-const { makePerson, writer, cidOf } = require(path.join(__dirname, 'wiki-fixtures.js'));
+const { makePerson, writer, policy, cidOf } = require(path.join(__dirname, 'wiki-fixtures.js'));
 
 // A clock the tests can read: each call is one second later, so "newest change first" has something to be checked against.
 function ticker() { let t = Date.UTC(2026, 10, 18, 9, 0, 0); return () => new Date(t += 1000).toISOString(); }
@@ -32,10 +32,12 @@ async function setup(person, dev) {
   const identity = {
     proof: async () => { if (!state.signedIn) throw new Error('Sign in first.'); return { did: state.current.did, deviceId: dev.id, log: state.current.snapshot() }; },
     // `lenientSign` is a signer that does not check which identity is signed in, so that a test can see the shell's own check stand alone
-    sign: async (bytes, did) => { if (did !== state.current.did && !state.lenientSign) throw new Error('The signed-in identity changed.'); if (state.failSign) throw new Error('signing failed'); return state.current.signer(dev)(bytes); }
+    // `signGate` (a promise) holds a signature back until the test lets it go: a way to be in the middle of building an edit
+    sign: async (bytes, did) => { if (state.signGate) { state.gated = true; await state.signGate; } if (did !== state.current.did && !state.lenientSign) throw new Error('The signed-in identity changed.'); if (state.failSign) throw new Error('signing failed'); return state.current.signer(dev)(bytes); }
   };
-  const pages = P.create({ store: spied, identity });
-  return { store, backend, pages, adds, offers, state, identity };
+  // `state.nowMs` (a number) is the clock of the file export's throttle, so that a test does not have to wait for a second to go by
+  const pages = P.create({ store: spied, identity, now: () => (state.nowMs === undefined ? Date.now() : state.nowMs) });
+  return { store, backend, pages, adds, offers, state, identity, key };
 }
 // The editor's side: a document under the client id the shell gave, holding the page's state.
 function editor(opened) {
@@ -140,9 +142,9 @@ const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); re
   // which page a world may be started for (the shell's `go`, kind 'wiki'): the identity's own, held or not; someone else's only if held
   const nLoc = T.adds.length, locBefore = (await T.pages.list()).length;
   const lNew = await T.pages.locate({ name: 'never saved' });
-  ok('locate: the identity\'s own page that was never saved is a page to go to', lNew.id === W.pageId(A.did, 'never saved') && lNew.name === 'never saved' && lNew.owner === A.did && lNew.mine === true, lNew);
+  ok('locate: the identity\'s own page that was never saved is a page to go to', lNew.id === W.pageId(A.did, 'never saved') && lNew.name === 'never saved' && lNew.owner === A.did && lNew.mine === true && lNew.held === false, lNew);
   const lId = await T.pages.locate({ id: W.pageId(A.did, 'notes') });
-  ok('locate: the same for a held page of its own, asked for by id', lId.id === W.pageId(A.did, 'notes') && lId.name === 'notes' && lId.mine === true, lId);
+  ok('locate: the same for a held page of its own, asked for by id', lId.id === W.pageId(A.did, 'notes') && lId.name === 'notes' && lId.mine === true && lId.held === true, lId);
   ok('locate: a page of someone else\'s that this device does not hold is refused, with a sentence', /holds no such page/.test(await rejects(T.pages.locate({ id: W.pageId(B.did, 'theirs') })) || ''));
   ok('locate: no name, an empty name and an id that is not a page\'s are refused as open refuses them', /Say which page/.test(await rejects(T.pages.locate({})) || '') && /Say which page/.test(await rejects(T.pages.locate()) || '') && /named by its owner/.test(await rejects(T.pages.locate({ name: '' })) || '') && /not the name of a page/.test(await rejects(T.pages.locate({ id: 'notes' })) || ''));
   ok('locate makes nothing: no event, no page in the list', T.adds.length === nLoc && (await T.pages.list()).length === locBefore && !(await T.pages.list()).some((r) => r.name === 'never saved'));
@@ -157,7 +159,7 @@ const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); re
   const oB2 = await T.pages.open({ id: W.pageId(B.did, 'theirs') });
   ok('reading B\'s page gives B\'s text', textOf(oB2.state) === 'from B' && oB2.canEdit === false && oB2.isNew === false);
   const lB = await T.pages.locate({ id: W.pageId(B.did, 'theirs') });
-  ok('locate: a page of someone else\'s that this device holds is a page to go to, and is not mine', lB.id === W.pageId(B.did, 'theirs') && lB.owner === B.did && lB.mine === false, lB);
+  ok('locate: a page of someone else\'s that this device holds is a page to go to, and is not mine', lB.id === W.pageId(B.did, 'theirs') && lB.owner === B.did && lB.mine === false && lB.held === true, lB);
 
   // ================================================================ sessions
   ok('an unknown session is refused', /not open for editing/.test(await rejects(T.pages.edit({ session: 'nope', n: 0, update: u1 })) || ''));
@@ -364,6 +366,144 @@ const textOf = (update) => { const d = new Y.Doc(); Y.applyUpdate(d, update); re
   T5.state.signedIn = false;
   ok('nobody signed in: searching says so', /Sign in/.test((await found('seine')).threw || ''));
   T5.state.signedIn = true;
+
+  // ================================================================ reading a page (no editing session) and deleting one
+  const T6 = await setup(A, A.d1);
+  await T6.store.offerLog(B.did, B.snapshot());
+  const o60 = await T6.pages.open({ name: 'doc' }), e60 = editor(o60);
+  await T6.pages.edit({ session: o60.session, n: e60.n(), update: e60.change(insert('first')) });
+  const r60 = await T6.pages.edit({ session: o60.session, n: e60.n(), update: e60.change(insert(' second')) });
+  const wb6 = await writer(B, B.d1, undefined, W.pageId(B.did, 'theirs'));
+  await T6.store.add(await wb6.publish(insert('from B'), []));
+  const addsBefore6 = T6.adds.length, offersBefore6 = T6.offers.length, heldBefore6 = (await T6.store.pages()).length;
+  let rd = await T6.pages.read({ name: 'doc' });
+  ok('read: a page of the person\'s own comes with its text, who made it and may write it', textOf(rd.state) === 'first second' && rd.name === 'doc' && rd.owner === A.did && rd.mine === true && rd.canEdit === true && rd.id === W.pageId(A.did, 'doc'), { name: rd.name, mine: rd.mine, canEdit: rd.canEdit });
+  ok('read: how many edits it holds, none waiting, who wrote them, when this device last changed it', rd.versions === 2 && rd.pending === 0 && JSON.stringify(rd.authors) === JSON.stringify([A.did]) && typeof rd.updated === 'string' && /^2026-11-18T/.test(rd.updated), rd);
+  ok('read: the page\'s current heads are handed over with the state', JSON.stringify(rd.heads) === JSON.stringify([r60.cid]) && rd.state instanceof Uint8Array, rd.heads);
+  ok('read: asked for by id it is the same page', JSON.stringify((await T6.pages.read({ id: W.pageId(A.did, 'doc') })).heads) === JSON.stringify(rd.heads));
+  ok('read opens no editing session and writes nothing: no event built, the log book not touched, nothing new held', T6.adds.length === addsBefore6 && T6.offers.length === offersBefore6 && (await T6.store.pages()).length === heldBefore6);
+  const rdB = await T6.pages.read({ id: W.pageId(B.did, 'theirs') });
+  ok('read: a page someone else made, held here, is read as theirs and cannot be written by this person', textOf(rdB.state) === 'from B' && rdB.mine === false && rdB.canEdit === false && rdB.owner === B.did && JSON.stringify(rdB.authors) === JSON.stringify([B.did]), rdB);
+  ok('read: a page that was never saved is not held, and asking makes nothing', /holds no such page/.test(await rejects(T6.pages.read({ name: 'never saved' })) || '') && /holds no such page/.test(await rejects(T6.pages.read({ id: W.pageId(B.did, 'not held') })) || '') && (await T6.store.pages()).length === heldBefore6 && !(await T6.pages.list()).some((x) => x.name === 'never saved'));
+  ok('read: no name, an id that is not a page\'s and a name the id cannot hold are refused with sentences', /Say which page/.test(await rejects(T6.pages.read({})) || '') && /Say which page/.test(await rejects(T6.pages.read()) || '') && /not the name of a page/.test(await rejects(T6.pages.read({ id: 'doc' })) || '') && /named by its owner/.test(await rejects(T6.pages.read({ name: '' })) || ''));
+  // a waiting edit is counted apart, and its text is not in what is read
+  const wDoc = await writer(A, A.d1, undefined, W.pageId(A.did, 'doc'));
+  await T6.store.add(await wDoc.publish(insert('lost'), ['B'.repeat(43)]));
+  rd = await T6.pages.read({ name: 'doc' });
+  ok('read: an edit that waits for something is counted as waiting, and is not in the text', rd.pending === 1 && rd.versions === 2 && textOf(rd.state) === 'first second', { pending: rd.pending, versions: rd.versions });
+  // edits of two people: both are named, in the order they first wrote, once each
+  await T6.store.add(await policy(A, A.d1, { op: 'add-writer', did: B.did }, rd.heads, { objId: W.pageId(A.did, 'doc') }));
+  const wB6 = await writer(B, B.d1, undefined, W.pageId(A.did, 'doc'));
+  const heads6 = await T6.store.heads(W.pageId(A.did, 'doc'));
+  wB6.apply((await T6.store.state(W.pageId(A.did, 'doc'))).update);
+  await T6.store.add(await wB6.publish(insert(' third'), heads6));
+  const wB6b = await T6.store.heads(W.pageId(A.did, 'doc'));
+  await T6.store.add(await wB6.publish(insert(' fourth'), wB6b));
+  rd = await T6.pages.read({ name: 'doc' });
+  ok('read: when a listed writer wrote too, both are named once each, the owner first, and the list change is not counted as an edit', JSON.stringify(rd.authors) === JSON.stringify([A.did, B.did]) && rd.versions === 4 && /first second/.test(textOf(rd.state)) && /third/.test(textOf(rd.state)), { authors: rd.authors.length, versions: rd.versions, text: textOf(rd.state) });
+  // on a device where nothing has been offered to the log book through the pages yet, reading offers nothing (a reader of a page needs no write path)
+  const T7 = await setup(A, A.d1);
+  await T7.store.offerLog(A.did, A.snapshot());
+  await T7.store.add(await (await writer(A, A.d1, undefined, W.pageId(A.did, 'readonly-case'))).publish(insert('plain'), []));
+  const r7 = await T7.pages.read({ name: 'readonly-case' });
+  ok('read: on a fresh device it reads the page and offers nothing to the log book and builds no event', textOf(r7.state) === 'plain' && T7.offers.length === 0 && T7.adds.length === 0, [T7.offers.length, T7.adds.length]);
+  T6.state.signedIn = false;
+  ok('read and delete with nobody signed in say so', /Sign in/.test(await rejects(T6.pages.read({ name: 'doc' })) || '') && /Sign in/.test(await rejects(T6.pages.remove({ id: W.pageId(A.did, 'doc') })) || ''));
+  T6.state.signedIn = true;
+
+  // ---- a page as a file (keo-wikiexport.js has its own test; this is what the shell's page operation makes of it)
+  {                                                                          // a block of its own: the names below are this section's only
+  const TX = await setup(A, A.d1);
+  await TX.store.offerLog(B.did, B.snapshot());
+  const oX = await TX.pages.open({ name: 'to export' }), eX = editor(oX);
+  await TX.pages.edit({ session: oX.session, n: eX.n(), update: eX.change((d) => { d.getXmlFragment('prosemirror').push([pEl('The words of the page.'), pEl('A second paragraph.')]); }) });
+  const oY = await TX.pages.open({ name: 'other page' }), eY = editor(oY);
+  await TX.pages.edit({ session: oY.session, n: eY.n(), update: eY.change((d) => { d.getXmlFragment('prosemirror').push([pEl('Nothing to do with the first.')]); }) });
+  await TX.store.add(await (await writer(B, B.d1, undefined, W.pageId(B.did, 'theirs'))).publish((d) => { d.getXmlFragment('prosemirror').push([pEl('Their words, read here.')]); }, []));
+  TX.state.nowMs = 1000000;
+  const txtOf = (f) => new TextDecoder().decode(f.bytes);
+  const fx = await TX.pages.exportFile({ name: 'to export', format: 'markdown' });
+  ok('export: a page of the person\'s own is a Markdown file with its name, type and bytes', fx.name === 'to-export.md' && fx.type === 'text/markdown;charset=utf-8' && fx.bytes instanceof Uint8Array && txtOf(fx) === '# to export\n\nThe words of the page.\n\nA second paragraph.\n', txtOf(fx));
+  ok('export: it holds nothing of any other page', !/Nothing to do/.test(txtOf(fx)) && !/Their words/.test(txtOf(fx)));
+  const addsX = TX.adds.length, offersX = TX.offers.length;
+  ok('export: a second file straight after is refused with a sentence (one a second)', /Wait a moment before saving another file/.test(await rejects(TX.pages.exportFile({ name: 'to export', format: 'html' })) || ''));
+  TX.state.nowMs += 999;
+  ok('export: and still refused 999 ms later', /Wait a moment/.test(await rejects(TX.pages.exportFile({ id: W.pageId(A.did, 'to export'), format: 'html' })) || ''));
+  TX.state.nowMs += 1;
+  const fh = await TX.pages.exportFile({ id: W.pageId(A.did, 'to export'), format: 'html' });
+  ok('export: a second after the first it is made, as a web page, when the page is asked for by id', fh.name === 'to-export.html' && fh.type === 'text/html;charset=utf-8' && /<p>The words of the page\.<\/p>/.test(txtOf(fh)), fh.name);
+  TX.state.nowMs += 5000;
+  ok('export: a refusal (a format that is not one, a page that is not held, no name) does not count as a file made, and says why', /markdown" or "html/.test(await rejects(TX.pages.exportFile({ name: 'to export', format: 'pdf' })) || '') && /holds no such page/.test(await rejects(TX.pages.exportFile({ name: 'never saved', format: 'html' })) || '') && /Say which page/.test(await rejects(TX.pages.exportFile({ format: 'html' })) || '') && /Say which page/.test(await rejects(TX.pages.exportFile()) || ''));
+  ok('export: so a good request right after the refusals is made', (await TX.pages.exportFile({ name: 'other page', format: 'markdown' })).name === 'other-page.md');
+  TX.state.nowMs += 5000;
+  const fB = await TX.pages.exportFile({ id: W.pageId(B.did, 'theirs'), format: 'markdown' });
+  ok('export: a page someone else made, held here, can be read into a file too', /Their words, read here\./.test(txtOf(fB)) && fB.name === 'theirs.md', txtOf(fB));
+  TX.state.nowMs += 5000;
+  const two = await Promise.all([TX.pages.exportFile({ name: 'to export', format: 'html' }).then((f) => 'made ' + f.name, (e) => e.message), TX.pages.exportFile({ name: 'to export', format: 'html' }).then((f) => 'made ' + f.name, (e) => e.message)]);
+  ok('export: two asked for at once: one is made and the other is told a file is being made', two.filter((x) => /^made /.test(x)).length === 1 && two.filter((x) => /A file is being made/.test(x)).length === 1, two);
+  TX.state.nowMs += 5000;
+  ok('export: making files changed nothing in the store, built no event and offered nothing to the log book', TX.adds.length === addsX && TX.offers.length === offersX && (await TX.store.pages()).length === 3);
+  TX.state.signedIn = false; TX.state.nowMs += 5000;
+  ok('export: with nobody signed in it says so', /Sign in/.test(await rejects(TX.pages.exportFile({ name: 'to export', format: 'html' })) || ''));
+  TX.state.signedIn = true;
+  TX.pages.reset(); TX.state.nowMs = 1;
+  const afterReset = await TX.pages.exportFile({ name: 'to export', format: 'html' }).catch((e) => ({ name: 'THREW: ' + e.message }));
+  ok('export: when the session ends the wait is forgotten (the next person is not made to wait for the last)', afterReset.name === 'to-export.html', afterReset.name);
+  TX.pages.reset();
+  }
+
+  // ---- deleting
+  const idDoc = W.pageId(A.did, 'doc');
+  const o61 = await T6.pages.open({ name: 'doc' }), e61 = editor(o61);
+  await T6.pages.search({ query: 'second' });                                 // makes the kept text of the page
+  await T6.pages.list();                                                     // and its kept summary
+  const dumpBefore = T6.backend.dump(), count = (d, k) => (d[k] || []).length;
+  ok('delete setup: the page has versions, a waiting edit, a kept summary and a kept text on disk', count(dumpBefore, 'version') >= 6 && count(dumpBefore, 'pending') === 1 && count(dumpBefore, 'meta') >= 1, Object.keys(dumpBefore).map((k) => k + ':' + dumpBefore[k].length));
+  const gone = await T6.pages.remove({ id: idDoc });
+  ok('delete answers that it removed the page, with how many versions and waiting edits went', gone.removed === true && gone.versions === 5 && gone.pending === 1, gone);
+  const dumpAfter = T6.backend.dump();
+  ok('delete: every record of the page is gone from the disk (its versions, its waiting edit, its text), and nothing else is touched but the other page\'s', count(dumpAfter, 'version') === count(dumpBefore, 'version') - 5 && count(dumpAfter, 'pending') === 0 && count(dumpAfter, 'page') === count(dumpBefore, 'page') - 1 && count(dumpAfter, 'log') === count(dumpBefore, 'log') && count(dumpAfter, 'meta') === count(dumpBefore, 'meta') - 1, ['version', 'pending', 'page', 'log', 'meta'].map((k) => k + ' ' + count(dumpBefore, k) + '->' + count(dumpAfter, k)));
+  ok('delete: the page is not listed, not found by a search, and cannot be read', !(await T6.pages.list()).some((x) => x.name === 'doc') && (await T6.pages.search({ query: 'second' })).length === 0 && /holds no such page/.test(await rejects(T6.pages.read({ name: 'doc' })) || ''));
+  ok('delete: the store holds no heads for it any more (the copy kept in memory went too)', (await T6.store.heads(idDoc)).length === 0);
+  ok('delete: the other person\'s page is still there, read as before', textOf((await T6.pages.read({ id: W.pageId(B.did, 'theirs') })).state) === 'from B' && (await T6.pages.list()).some((x) => x.name === 'theirs'));
+  ok('delete: an editing session that was open on the page cannot write it any more, and nothing is brought back', /not open for editing/.test(await rejects(T6.pages.edit({ session: o61.session, n: 0, update: e61.change(insert('late')) })) || '') && !(await T6.store.pages()).some((p) => p.objId === idDoc));
+  ok('delete: deleting it again says nothing was there, and is not an error', (await T6.pages.remove({ id: idDoc })).removed === false);
+  // the same name can be made again, from nothing
+  const o62 = await T6.pages.open({ name: 'doc' }), e62 = editor(o62);
+  ok('delete: the name is free again: it opens as a new page', o62.isNew === true && o62.heads.length === 0 && textOf(o62.state) === '');
+  const r62 = await T6.pages.edit({ session: o62.session, n: e62.n(), update: e62.change(insert('again')) });
+  ok('delete: and is written from the start, holding nothing of the old page', r62.saved === true && textOf((await T6.pages.read({ name: 'doc' })).state) === 'again' && (await T6.pages.read({ name: 'doc' })).versions === 1);
+  // not someone else's page
+  const nDel = (await T6.store.pages()).length;
+  ok('delete: a page someone else made is refused with a sentence, and stays', /Only a page you made/.test(await rejects(T6.pages.remove({ id: W.pageId(B.did, 'theirs') })) || '') && (await T6.store.pages()).length === nDel && (await T6.pages.read({ id: W.pageId(B.did, 'theirs') })).versions === 1);
+  ok('delete: no name, an id that is not a page\'s are refused with sentences', /Say which page/.test(await rejects(T6.pages.remove({})) || '') && /not the name of a page/.test(await rejects(T6.pages.remove({ id: 'doc' })) || ''));
+  ok('delete: asked for by name, a page that was never saved removes nothing and makes nothing', (await T6.pages.remove({ name: 'never saved' })).removed === false && (await T6.store.pages()).length === nDel);
+  // a delete that comes while a save is being built: the page must not come back as a page of one edit
+  const o63 = await T6.pages.open({ name: 'racing' }), e63 = editor(o63);
+  await T6.pages.edit({ session: o63.session, n: e63.n(), update: e63.change(insert('base')) });
+  let release; T6.state.signGate = new Promise((res) => { release = res; });
+  const late = T6.pages.edit({ session: o63.session, n: e63.n(), update: e63.change(insert(' late')) });
+  for (let i = 0; i < 400 && !T6.state.gated; i++) await new Promise((res) => setTimeout(res, 5));
+  ok('delete during a save setup: the save is really waiting for its signature', T6.state.gated === true);
+  const delRace = await T6.pages.remove({ id: W.pageId(A.did, 'racing') });
+  T6.state.signGate = null; release();
+  ok('delete during a save: the delete answers, and the save that was waiting for its signature is refused', delRace.removed === true && /not open for editing/.test(await rejects(late) || ''));
+  ok('delete during a save: the page did not come back (no record, no version, not listed)', !(await T6.store.pages()).some((p) => p.objId === W.pageId(A.did, 'racing')) && (await T6.store.heads(W.pageId(A.did, 'racing'))).length === 0 && !(await T6.pages.list()).some((x) => x.name === 'racing'));
+  // a page whose history cannot be read is still listed, and a person must be able to delete it
+  const o64 = await T6.pages.open({ name: 'damaged' }), e64 = editor(o64);
+  const r64 = await T6.pages.edit({ session: o64.session, n: e64.n(), update: e64.change(insert('soon damaged')) });
+  await T6.backend.del('version', r64.cid); await T6.store.unload();
+  ok('delete setup: the damaged page is listed as unreadable', (await T6.pages.list()).filter((x) => x.name === 'damaged')[0].unreadable === true);
+  ok('delete: a page whose history cannot be read is removed', (await T6.pages.remove({ name: 'damaged' })).removed === true && !(await T6.pages.list()).some((x) => x.name === 'damaged'));
+  // a page whose own record cannot be decrypted takes the whole list down (the store's listing reads every record): deleting it must work
+  const o65 = await T6.pages.open({ name: 'garbled' }), e65 = editor(o65);
+  await T6.pages.edit({ session: o65.session, n: e65.n(), update: e65.change(insert('x')) });
+  // (the page's record is kept under the hash of its id: the same hash the store uses)
+  const keyOfGarbled = kd.b64u(await kd.sha256(new TextEncoder().encode('keo-wiki-page\u0000' + W.pageId(A.did, 'garbled'))));
+  ok('delete setup: the page\'s record is where the hash says', !!(await T6.backend.get('page', keyOfGarbled)));
+  await T6.backend.put('page', keyOfGarbled, { iv: kd.b64u(new Uint8Array(12)), ct: new Uint8Array(40) }); await T6.store.unload();
+  ok('delete setup: with one page record garbled the list cannot be read at all', /could not be decrypted/.test(await rejects(T6.pages.list()) || ''));
+  ok('delete: the page with the garbled record is removed, and the list reads again', (await T6.pages.remove({ name: 'garbled' })).removed === true && !(await T6.pages.list()).some((x) => x.name === 'garbled'));
 
   console.log('\n' + passed + ' checks passed' + (process.exitCode ? ', SOME FAILED' : ''));
 })().catch((e) => { console.error('ERROR', e); process.exitCode = 1; });

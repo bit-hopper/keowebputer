@@ -128,6 +128,16 @@
     // Which pages mention some words, best first, with a piece of the text around the first match (the shell reads the pages' text; the
     // world is given no text but those snippets).
     'wiki.search': function (a) { return window.keoWiki.pages().search({ query: a.query }); },
+    // A page to READ: its text and what its reading view shows (who wrote it, when it last changed), with no editing session.
+    'wiki.read': function (a) { return window.keoWiki.pages().read({ name: a.name, id: a.id }); },
+    // Deleting one of the person's own pages, with its whole history, from this device. The shell checks that the page is the signed-in
+    // identity's own and refuses a page someone else made. It does not put the question to the person: the world does, in words that
+    // say the history goes too, as it does for removing a saved world or a library file (world.remove, library.fileRemove), which are
+    // the identity's own data in the same way. Unlike removing an identity, nothing here destroys a key.
+    'wiki.delete': function (a) { return window.keoWiki.pages().remove({ id: a.id }); },
+    // A page saved as a file on the computer ("markdown" or "html"): the shell makes the file from the stored page and hands it to the
+    // browser's download; the world is answered with the file's name and size, never its bytes.
+    'wiki.export': function (a) { return window.keoWiki.exportPage({ id: a.id, format: a.format }); },
     'wiki.open': function (a) { return window.keoWiki.pages().open({ name: a.name, id: a.id }); },
     'wiki.edit': function (a) { return window.keoWiki.pages().edit({ session: a.session, n: a.n, update: a.update }); },
     'wiki.close': function (a) { return window.keoWiki.pages().close({ session: a.session }); },
@@ -334,7 +344,7 @@
     }
     if (p.kind !== 'wiki') return Promise.resolve(null);
     return Promise.resolve().then(function () { return window.keoWiki.pages().locate({ id: p.id }); })
-      .then(function (page) { return { kind: 'wiki', session: session, id: page.id, name: page.name }; }, function () { return null; });
+      .then(function (page) { return { kind: 'wiki', session: session, id: page.id, name: page.name, held: page.held }; }, function () { return null; });
   }
   // What a start remembers for a refresh: the wiki page, or the wiki's index with the page open in it, or nothing (moving to a world, the home
   // page or a new blank world forgets it, so a refresh there lands where it always did).
@@ -390,11 +400,12 @@
         });
       }
       if (kind === 'wiki') {
-        // A page kept on this device is a world of its own, as a page of a wiki is on a host: the world starts blank and the editor fills it
-        // (world/keo-boot.js). Nothing is saved as a world and it is not "the world saved last", so a reload or a new sign-in lands on that
+        // A page kept on this device is a world of its own, as a page of a wiki is on a host: the world starts blank and the page fills it
+        // (world/keo-boot.js): its reading view when the device holds it (`held`), the editor for a new name that nothing has written yet.
+        // Nothing is saved as a world and it is not "the world saved last", so a reload or a new sign-in lands on that
         // world (or the home page), not on the page. The shell says which page it is (and refuses a page of someone else's that it does not
         // hold) before the world is replaced.
-        return window.keoWiki.pages().locate({ id: a.id, name: a.name }).then(function (p) { return { kind: 'wiki', session: session, id: p.id, name: p.name }; });
+        return window.keoWiki.pages().locate({ id: a.id, name: a.name }).then(function (p) { return { kind: 'wiki', session: session, id: p.id, name: p.name, held: p.held }; });
       }
       if (kind === 'wikiindex') {
         // The person's wiki on this device: the blank world with the index of their pages in it, which may start with a page open (`id`, only

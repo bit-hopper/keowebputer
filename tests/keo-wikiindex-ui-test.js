@@ -84,8 +84,12 @@ const readIndex = (frame) => frame.evaluate(() => {
   const panel = (I._categoriesPanel && I._categoriesPanel._itemMorphs || []).map((m) => txt(m) !== null ? { text: txt(m) } : { pill: (m.submorphs[0] && txt(m.submorphs[0])) || null, fill: String(m.getFill && m.getFill()) });
   const a = I._activeContentMorph;
   return { title: txt(I._titleLabel), kind: I._scope && I._scope.kind, cards, left, leftHeader: txt(I._sidebarHeader), panel, sort: I._sortBy, sortLabel: txt(I._sortByLabel),
-    open: a ? { name: a._wikiName, local: !!a._local, inIndex: !!a._inIndex, inWorld: a.owner === $world, hasView: !!a.editorView, canEdit: !!a._canEdit, status: a._statusEl ? a._statusEl.textContent : null,
-      text: a._pmContainer && a._pmContainer.querySelector('.ProseMirror') ? a._pmContainer.querySelector('.ProseMirror').textContent : null, unsaved: a._unsaved ? a._unsaved.length : null, session: a._pageSession || null } : null,
+    // A page in the slot is its READING VIEW (reading: true, a WikiView of a page on this device) or its EDITOR (local: true). `ready` says the
+    // page is drawn in either state (the editor has its document, the view has drawn the page); `hasView` is the editor's own.
+    open: a ? { name: a._wikiName, local: !!a._local, reading: !!a._localPage, inIndex: !!a._inIndex || !!a._localPage, inWorld: a.owner === $world, hasView: !!a.editorView, ready: a._localPage ? !!a._localDrawn : !!a.editorView,
+      canEdit: !!a._canEdit, canDelete: !!a._canDelete, status: a._statusEl ? a._statusEl.textContent : null,
+      text: a._localPage ? (a._contentEl ? a._contentEl.textContent : null) : (a._pmContainer && a._pmContainer.querySelector('.ProseMirror') ? a._pmContainer.querySelector('.ProseMirror').textContent : null),
+      unsaved: a._unsaved ? a._unsaved.length : null, session: a._pageSession || null } : null,
     editors: lively.identity.WikiEditor.localEditors().length, pagesHeld: (I._pages || []).map((p) => p.wikiName), categoryFilter: I._categoryFilter, tagFilter: I._tagFilter,
     canWrite: !!I._canWrite, newBtnVisible: I._newBtn ? I._newBtn.isVisible() : null, dialog: !!($world.newWikiPageDialog && $world.newWikiPageDialog.world && $world.newWikiPageDialog.world()),
     searchDropdown: I._searchDropdown ? (() => { const out = []; (function walk(m) { if (txt(m) !== null && txt(m) !== '') out.push(txt(m)); (m.submorphs || []).forEach(walk); })(I._searchDropdown); return out; })() : null };
@@ -165,6 +169,14 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
       return !!(await until(async () => (await textRect(frame, needle)) === null, 6000));
     };
     const waitSaved = (name, needle) => until(async () => { const t = await shellText(page, name); return needle.test(t) ? t : null; }, 20000);
+    // The reading view's "more" button and its menu, by real clicks: Edit swaps the view for the page's editor, as it does on a host. Waits until
+    // the editor has its document and says Saved, so that what is typed next goes into the page.
+    const menuItem = (label) => rectOf(frame, (l) => Array.from(document.querySelectorAll('div')).find((d) => d.children.length === 2 && d.firstElementChild.className.indexOf('material-symbols') >= 0 && d.lastElementChild.textContent === l), label);
+    const clickEdit = async () => {
+      await click(page, await ctl(frame, (I) => I._activeContentMorph._moreBtn), 'the more button of the page');
+      await click(page, await until(() => menuItem('Edit'), 4000), 'Edit in the menu');
+      return until(async () => { const r = await readIndex(frame); return r && r.open && r.open.local && r.open.hasView && r.open.status === 'Saved' ? r : null; }, 30000);
+    };
 
     phase = '1 Create > Wiki page goes to the index';
     await openList();
@@ -300,7 +312,7 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     // With a page open the sort menu stays, whatever the width: it holds "All pages", the only way back from a page to the cards.
     await resizeTo(640);
     await click(page, await cardRect(frame, 'rome'), 'card rome');
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView ? r : null; }, 30000);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.ready ? r : null; }, 30000);
     const Lopen = await layoutOf();
     check('at 640 px with a page open the sort menu is shown again (it holds "All pages")', !!ix && !!Lopen.sort, { open: !!ix, sort: Lopen.sort });
     await click(page, await ctl(frame, (I) => I._sortByBox), 'sort button');
@@ -314,22 +326,30 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
 
     phase = '5 opening pages: a card, the left list, the home button';
     await click(page, await cardRect(frame, 'rome'), 'card rome');
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView && /Colosseum/.test(r.open.text || '') ? r : null; }, 30000);
-    check('a click on a card opens that page in the slot, with its text', !!ix && ix.open.inIndex && ix.editors === 1, ix);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.ready && /Colosseum/.test(r.open.text || '') ? r : null; }, 30000);
+    check('a click on a card opens that page in the slot, as its READING VIEW, with its text', !!ix && ix.open.reading && !ix.open.local && ix.open.inIndex && ix.open.inWorld, ix);
+    check('reading holds no editing session: there is no editor, and the view has no session with the shell', !!ix && ix.editors === 0 && ix.open.session === null, ix);
     await click(page, await ctl(frame, (I) => I._sidebarHomeBtn), 'home button of the left panel');
     ix = await until(async () => { const r = await readIndex(frame); return r && r.leftHeader === 'ALL WIKI PAGES' ? r : null; }, 6000);
     check('the left panel\'s home button switches it to the list of every page, with a page still open', !!ix && ix.open && ix.open.name === 'rome' && ix.left.includes('paris-trip'), ix);
-    const sessionBefore = ix && ix.open && ix.open.session;
+    // Edit (the menu of the view) swaps in the editor: that has a session, which the shell must be given back when the page is left
+    const ed5 = await clickEdit();
+    check('Edit in the page\'s menu swaps the view for the page\'s editor, in the same slot, on the same page, with its text', !!ed5 && ed5.open.name === 'rome' && ed5.open.inIndex && ed5.open.inWorld && /Colosseum/.test(ed5.open.text || '') && ed5.editors === 1 && !!ed5.open.session, ed5 && ed5.open);
+    const sessionBefore = ed5 && ed5.open && ed5.open.session;
+    // a page that takes the slot puts the left panel back on that page's outline (the host's swap does too): the home button again
+    check('after the swap the left panel is the page\'s outline again', !!ed5 && ed5.leftHeader === 'ON THIS PAGE', ed5 && ed5.leftHeader);
+    await click(page, await ctl(frame, (I) => I._sidebarHomeBtn), 'home button of the left panel, again');
+    await until(async () => { const r = await readIndex(frame); return r && r.leftHeader === 'ALL WIKI PAGES' ? r : null; }, 6000);
     await click(page, await leftRect(frame, 'paris-trip'), 'paris-trip in the left list');
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.hasView && /Rome is not Paris/.test(r.open.text || '') ? r : null; }, 30000);
-    check('a page in the left list opens in the slot, in place of the one that was open, with its text', !!ix && ix.editors === 1 && ix.open.inIndex, ix);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.ready && /Rome is not Paris/.test(r.open.text || '') ? r : null; }, 30000);
+    check('a page in the left list opens in the slot, in place of the one that was open, with its text, as a reading view', !!ix && ix.editors === 0 && ix.open.reading && ix.open.inIndex, ix);
     const closedSession = await page.evaluate(async (s) => { try { await window.keoWiki.pages().edit({ session: s, n: 99, update: new Uint8Array([1]) }); return 'accepted'; } catch (e) { return e.message; } }, sessionBefore);
     check('the shell session of the page that was left was given back', /not open for editing/.test(closedSession), closedSession);
 
     phase = '5b the window is made smaller and bigger';
     // The page in the slot is placed and sized by the index (below the cards, between the panels), not fitted to the whole world as a page
     // that is a world of its own is: when the window changes size it must still sit where the index puts it.
-    const slotGeo = () => frame.evaluate(() => { const I = lively.identity.WikiIndex.current, e = lively.identity.WikiEditor.localEditors()[0], b = e.getBounds(); return { top: b.y, left: b.x, w: b.width, gridBottom: I._gridY + (I._gridContentHeight || 0), contentW: I._contentWidth(), contentLeft: I._contentLeft(), worldW: Math.round($world.visibleBounds().width), panelsShown: [I._sidebarBox.isVisible(), I._categoriesPanel.isVisible()] }; });
+    const slotGeo = () => frame.evaluate(() => { const I = lively.identity.WikiIndex.current, e = I._activeContentMorph, b = e.getBounds(); return { top: b.y, left: b.x, w: b.width, gridBottom: I._gridY + (I._gridContentHeight || 0), contentW: I._contentWidth(), contentLeft: I._contentLeft(), worldW: Math.round($world.visibleBounds().width), panelsShown: [I._sidebarBox.isVisible(), I._categoriesPanel.isVisible()] }; });
     await page.setViewportSize({ width: 1100, height: 800 });
     const small = await until(async () => { const g = await slotGeo(); return g.worldW <= 1100 && Math.abs(g.w - g.contentW) < 2 ? g : null; }, 10000);
     check('when the window is made smaller the open page keeps the place the index gives it: below the cards, as wide as the space left for it', !!small && small.top >= small.gridBottom && Math.abs(small.left - small.contentLeft) < 2, small || await slotGeo());
@@ -345,8 +365,8 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.length ? r : null; }, 8000);
     check('typing in the search bar shows a dropdown of the pages whose name, category or tag matches', !!ix && ix.searchDropdown.includes('meeting-notes') && !ix.searchDropdown.includes('rome'), ix && ix.searchDropdown);
     await click(page, await rectOf(frame, () => { const I = lively.identity.WikiIndex.current, d = I._searchDropdown; return d && d.submorphs[0]; }), 'first result');
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'meeting-notes' && r.open.hasView ? r : null; }, 30000);
-    check('a click on a result opens that page', !!ix && ix.editors === 1 && ix.searchDropdown === null, ix);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'meeting-notes' && r.open.ready ? r : null; }, 30000);
+    check('a click on a result opens that page, as its reading view', !!ix && ix.editors === 0 && ix.open.reading && ix.searchDropdown === null, ix);
     await click(page, await ctl(frame, (I) => I._searchField), 'the search field');
     await page.keyboard.press('Control+A'); await page.keyboard.type('zzzz', { delay: 30 });
     ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.some((t) => /No wiki pages match/.test(t)) ? r : null; }, 8000);
@@ -356,11 +376,11 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
 
     phase = '6b search inside the pages';
     // The shell searches the TEXT of the pages too (names, categories and tags as before). Real typing in the search bar and real clicks on
-    // the results; what is marked in the opened page is read from the editor's DOM.
+    // the results; what is marked in the opened page is read from its DOM: the reading view's content, or the editor's document.
     const searchFor = async (q) => { await click(page, await ctl(frame, (I) => I._searchField), 'the search field'); await page.keyboard.press('Control+A'); await page.keyboard.type(q, { delay: 30 }); };
-    // what the editor holds about the marks, so that a failed check names the step that did not happen
-    const markDiag = () => frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0], v = e && e.editorView, k = e && e._searchMarkKey, set = v && k && k.getState(v.state); return e ? { pending: e._pendingSearch, hasKey: !!k, hasView: !!v, text: v ? v.state.doc.textContent.slice(0, 60) : null, decorations: set ? set.find().length : null, nodes: v ? v.dom.querySelectorAll('.keo-search-mark').length : null } : null; });
-    const markedText = () => frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0]; return e && e.editorView ? Array.from(e.editorView.dom.querySelectorAll('.keo-search-mark')).map((n) => n.textContent) : null; });
+    // what the page in the slot holds about the marks, so that a failed check names the step that did not happen
+    const markDiag = () => frame.evaluate(() => { const a = lively.identity.WikiIndex.current._activeContentMorph; if (!a) return null; if (a._localPage) return { reading: true, drawn: !!a._localDrawn, pending: a._highlightQuery, nodes: a._contentEl.querySelectorAll('.keo-search-mark').length }; const v = a.editorView, k = a._searchMarkKey, set = v && k && k.getState(v.state); return { pending: a._pendingSearch, hasKey: !!k, hasView: !!v, text: v ? v.state.doc.textContent.slice(0, 60) : null, decorations: set ? set.find().length : null, nodes: v ? v.dom.querySelectorAll('.keo-search-mark').length : null }; });
+    const markedText = () => frame.evaluate(() => { const a = lively.identity.WikiIndex.current._activeContentMorph; if (!a) return null; const root = a._localPage ? a._contentEl : (a.editorView ? a.editorView.dom : null); return root ? Array.from(root.querySelectorAll('.keo-search-mark')).map((n) => n.textContent) : null; });
     const firstResult = () => rectOf(frame, () => { const I = lively.identity.WikiIndex.current, d = I._searchDropdown; return d && d.submorphs[0]; });
     await searchFor('colosseum');
     ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.includes('rome') ? r : null; }, 10000);
@@ -368,21 +388,31 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     check('the result shows the piece of the text around the word', !!ix && ix.searchDropdown.some((t) => /Colosseum/.test(t)), ix && ix.searchDropdown);
     const vRome = (await shellList(page)).find((p) => p.name === 'rome').versions;
     await click(page, await firstResult(), 'first result');
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView && /Colosseum/.test(r.open.text || '') ? r : null; }, 30000);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.ready && /Colosseum/.test(r.open.text || '') ? r : null; }, 30000);
     const mk = await until(async () => { const m = await markedText(); return m && m.length ? m : null; }, 10000);
-    check('the page opened from the result has the word marked in its text', !!ix && !!mk && mk.length === 1 && mk[0] === 'Colosseum', mk || await markDiag());
+    check('the page opened from the result is the reading view, with the word marked in its text', !!ix && ix.open.reading && !!mk && mk.length === 1 && mk[0] === 'Colosseum', mk || await markDiag());
     await sleep(2600);
-    check('marking changed nothing: the page still says Saved and no version was made', (await readIndex(frame)).open.status === 'Saved' && (await shellList(page)).find((p) => p.name === 'rome').versions === vRome, { status: (await readIndex(frame)).open.status });
+    check('marking changed nothing: no version was made, and the text of the page is as it was', (await shellList(page)).find((p) => p.name === 'rome').versions === vRome && /The Colosseum$/.test((await readIndex(frame)).open.text || ''), { versions: (await shellList(page)).find((p) => p.name === 'rome').versions, text: (await readIndex(frame)).open.text });
     await searchFor('"is not paris"');
     ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.includes('paris-trip') ? r : null; }, 10000);
     check('a quoted phrase finds the page that has it', !!ix && ix.searchDropdown.includes('paris-trip') && !ix.searchDropdown.includes('rome'), ix && ix.searchDropdown);
     await click(page, await firstResult(), 'first result');
-    await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.hasView && /Rome is not Paris/.test(r.open.text || '') ? r : null; }, 30000);
+    await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.ready && /Rome is not Paris/.test(r.open.text || '') ? r : null; }, 30000);
     const mk2 = await until(async () => { const m = await markedText(); return m && m.length ? m : null; }, 10000);
     check('the whole phrase is marked, as it is written in the page', !!mk2 && mk2.length === 1 && mk2[0] === 'is not Paris', mk2 || await markDiag());
+    // a result for a page that is open in its reading view marks the words in that view and does not open it again (the same view object)
+    await frame.evaluate(() => { window.__viewRef = lively.identity.WikiIndex.current._activeContentMorph; });
+    await searchFor('"is not"');
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.searchDropdown && r.searchDropdown.includes('paris-trip') ? r : null; }, 10000);
+    await click(page, await firstResult(), 'first result');
+    const mkAgain = await until(async () => { const m = await markedText(); return m && m.length && m[0] === 'is not' ? m : null; }, 10000);
+    check('a result for the page that is open as a view marks the new words in that same view (the old marks go), and does not open the page again', !!mkAgain && mkAgain.length === 1 && (await frame.evaluate(() => lively.identity.WikiIndex.current._activeContentMorph === window.__viewRef)) && (await readIndex(frame)).editors === 0, { mkAgain, diag: await markDiag() });
+    // Edit: the editor opens with no marks, and writing in it saves as before
+    await clickEdit();
+    check('the editor that Edit opens carries no marks', (await markedText() || []).length === 0, await markedText());
     await typeInPage(' zzz');
     const gone = await until(async () => { const m = await markedText(); return m && m.length === 0 ? true : null; }, 6000);
-    check('writing in the page takes the marks off', gone === true, await markedText());
+    check('writing in the page leaves it with no marks', gone === true, await markedText());
     await waitSaved('paris-trip', /Rome is not Paris zzz/);
     // a result for the page that is open already marks the words in it, and does not open it again
     const sessionOpen = (await readIndex(frame)).open.session;
@@ -432,7 +462,8 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     phase = '8 a save that fails keeps the person on the page';
     ix = await readIndex(frame);
     await click(page, await cardRect(frame, 'rome'), 'card rome');
-    await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView && r.open.status === 'Saved' ? r : null; }, 30000);
+    await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.ready ? r : null; }, 30000);
+    await clickEdit();
     await frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0]; e.yDoc.clientID = e.yDoc.clientID + 1; });
     const vBefore = (await shellList(page)).find((p) => p.name === 'rome').versions;
     await typeInPage(' forged');
@@ -446,8 +477,8 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     check('and nothing of the refused text is stored', (await shellList(page)).find((p) => p.name === 'rome').versions === vBefore);
     await frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0]; e._userHasEdited = false; e._unsaved = []; e._unconfirmed = null; });
     await click(page, await cardRect(frame, 'paris-trip'), 'card paris-trip');
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.hasView ? r : null; }, 30000);
-    check('once the unsaved text is given up the page can be left', !!ix && ix.editors === 1, ix);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.ready ? r : null; }, 30000);
+    check('once the unsaved text is given up the page can be left (the other page opens, as a reading view, and no editor is left)', !!ix && ix.editors === 0 && ix.open.reading, ix);
 
     phase = '9 a reload comes back to the index, with the page open';
     await waitSaved('paris-trip', /Rome is not Paris/);
@@ -458,9 +489,9 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     check('after a reload of the whole page the person lands on the wiki index', landed.kind === 'wikiindex', landed.kind);
     if (landed.kind !== 'wikiindex') throw new Error('the reload did not return to the wiki index: nothing after this can be trusted');
     frame = landed.frame; await installTell(frame);
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.hasView ? r : null; }, 30000);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.ready ? r : null; }, 30000);
     const sUp = await startup();
-    check('with the same page open in it, with its text, and the new-page dialog not asked for again', !!ix && ix.open.name === 'paris-trip' && /Rome is not Paris/.test(ix.open.text || '') && ix.dialog === false && sUp.newPage === false, { open: ix && ix.open, sUp });
+    check('with the same page open in it, as its reading view (not the editor), with its text, and the new-page dialog not asked for again', !!ix && ix.open.name === 'paris-trip' && ix.open.reading && /Rome is not Paris/.test(ix.open.text || '') && ix.dialog === false && sUp.newPage === false, { open: ix && ix.open, sUp });
     check('and the three cards', !!ix && ix.cards.length === 3, ix && ix.cards);
     await click(page, await ctl(frame, (I) => I._sortByBox), 'sort button');
     await click(page, await rectOf(frame, () => { const I = lively.identity.WikiIndex.current; return I._sortByDropdown.submorphs.find((m) => typeof m.textString === 'string' && m.textString.trim() === 'All pages'); }), 'All pages');
@@ -473,7 +504,8 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     phase = '10 leaving with typing not yet saved';
     frame = landed.frame || frame; await installTell(frame);
     await click(page, await cardRect(frame, 'meeting-notes'), 'card meeting-notes');
-    await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'meeting-notes' && r.open.hasView && r.open.status === 'Saved' ? r : null; }, 30000);
+    await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'meeting-notes' && r.open.ready ? r : null; }, 30000);
+    await clickEdit();
     const v0 = (await shellList(page)).find((p) => p.name === 'meeting-notes').versions;
     await typeInPage(' and the red one');
     const pending = (await readIndex(frame)).open;
@@ -504,8 +536,8 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     await installTell(frame);
     const sRow = await startup();
     check('"open" on a page\'s row moves to the wiki index, with that page named as the one to show', sRow.kind === 'wikiindex' && sRow.open === did + '/rome' && sRow.newPage === false, sRow);
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.hasView ? r : null; }, 30000);
-    check('the page is open in the index\'s slot, with the three cards and the list of the wiki around it', !!ix && ix.open.name === 'rome' && ix.open.inIndex && ix.open.inWorld && ix.editors === 1 && ix.cards.length === 3 && ix.leftHeader === 'ON THIS PAGE', ix);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.ready ? r : null; }, 30000);
+    check('the page is open in the index\'s slot, as its reading view, with the three cards and the list of the wiki around it', !!ix && ix.open.name === 'rome' && ix.open.reading && ix.open.inIndex && ix.open.inWorld && ix.editors === 0 && ix.cards.length === 3 && ix.leftHeader === 'ON THIS PAGE', ix);
     const sides = await frame.evaluate(() => { const I = lively.identity.WikiIndex.current, v = $world.visibleBounds(), c = (m) => { const b = m.getBounds(); return b.x + b.width / 2; }; return { list: c(I._sidebarBox), cats: c(I._categoriesPanel), mid: v.x + v.width / 2 }; });
     check('the list of pages is on the left and the categories panel on the right, as on the host', sides.list < sides.mid && sides.cats > sides.mid, sides);
     pl = await place(page);
@@ -514,14 +546,15 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     phase = '11b "open" on a page\'s row, inside the index';
     // The world already is the index: the page opens in the slot, no new world, and the window that was asked has done its work.
     await frame.evaluate(() => { window.__sameWorld = 'yes'; });
+    await clickEdit();
     await typeInPage(' ++typed before the next page');
     const pend11 = (await readIndex(frame)).open;
     check('(setup) the last typing has not been sent when the person opens another page', !!pend11 && pend11.unsaved > 0, pend11);
     await openList();
     await rowsListed();
     await click(page, await rowOpen('paris-trip'), 'open on the row of paris-trip');
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.hasView ? r : null; }, 30000);
-    check('opening another page from My worlds, inside the index, opens it in the slot', !!ix && ix.editors === 1 && ix.cards.length === 3, ix && ix.open);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'paris-trip' && r.open.ready ? r : null; }, 30000);
+    check('opening another page from My worlds, inside the index, opens it in the slot, as its reading view (the editor of the old page is gone)', !!ix && ix.editors === 0 && ix.open.reading && ix.cards.length === 3, ix && ix.open);
     check('and it is the same world: no new world was started for it', (await frame.evaluate(() => window.__sameWorld)) === 'yes' && (await startup()).kind === 'wikiindex');
     check('the My worlds window is gone, as it is when a move replaces the world', (await winCount()) === 0);
     check('what was typed in the page that was left was saved first', /\+\+typed before the next page/.test((await shellText(page, 'rome')) || ''), await shellText(page, 'rome'));
@@ -532,9 +565,10 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     await click(page, await rowOpen('paris-trip'), 'open on the row of the page that is open');
     await until(async () => (await winCount()) === 0, 8000);
     ix = await readIndex(frame);
-    check('"open" on the page that is already open leaves it as it is (one editor, the same world) and closes the window', !!ix && ix.open && ix.open.name === 'paris-trip' && ix.editors === 1 && (await winCount()) === 0 && (await frame.evaluate(() => window.__sameWorld)) === 'yes', ix && ix.open);
+    check('"open" on the page that is already open leaves it as it is (the same reading view, the same world) and closes the window', !!ix && ix.open && ix.open.name === 'paris-trip' && ix.open.reading && ix.editors === 0 && (await winCount()) === 0 && (await frame.evaluate(() => window.__sameWorld)) === 'yes', ix && ix.open);
 
     phase = '11c "open" on a page\'s row while the text cannot be saved';
+    await clickEdit();
     await frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0]; e.yDoc.clientID = e.yDoc.clientID + 1; });
     const v11 = (await shellList(page)).find((p) => p.name === 'paris-trip').versions;
     await typeInPage(' forged again');
@@ -551,8 +585,8 @@ const told = (frame) => frame.evaluate(() => window.__told || []);
     check('and nothing of the refused text is stored', (await shellList(page)).find((p) => p.name === 'paris-trip').versions === v11);
     await frame.evaluate(() => { const e = lively.identity.WikiEditor.localEditors()[0]; e._userHasEdited = false; e._unsaved = []; e._unconfirmed = null; });
     await click(page, await rowOpen('rome'), 'open on the row of rome, again');
-    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.hasView ? r : null; }, 30000);
-    check('once the unsaved text is given up it opens, and the window closes', !!ix && ix.editors === 1 && (await winCount()) === 0, ix && ix.open);
+    ix = await until(async () => { const r = await readIndex(frame); return r && r.open && r.open.name === 'rome' && r.open.ready ? r : null; }, 30000);
+    check('once the unsaved text is given up it opens (as a reading view), and the window closes', !!ix && ix.editors === 0 && ix.open.reading && (await winCount()) === 0, ix && ix.open);
 
     phase = '11d a page of someone else\'s, and the page as a world of its own';
     // The index lists the person's own pages only, so a page of someone else's that this device holds cannot be opened inside it: "open" goes

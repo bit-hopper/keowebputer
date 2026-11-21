@@ -33,6 +33,8 @@
 //   pages(), summary(objId)  every page held, newest change first, with what a list shows of each (created, category, tags: read out of the
 //                       page's own history and kept in its sealed record while it holds the same versions, see "what a list of pages shows").
 //   text(objId)         the page's readable text for searching it, kept sealed in a record of its own while the page holds the same versions
+//   info(objId)         how many versions and waiting edits a page holds and when this device last changed it (for a reading view)
+//   remove(objId)       takes one page off this device: its record, versions, waiting edits and kept text (not undone)
 //   close()             for a session that ended: operations that have not started are refused from then on (see serial()).
 // Not here: checkpoints and dropping old events, private pages, how events travel. The IndexedDB backend and the store's lifetime in the
 // shell (made for the signed-in identity, closed when the session ends, its records deleted when the identity is removed) are keo-wiki.js.
@@ -441,6 +443,35 @@
       summary: function (objId) { return serial(async function () { return summarize(await loadPage(objId)); }); },
       // The page's text as it stands now (a string, '' for a page with nothing held): for searching it, see "the page's text" above.
       text: function (objId) { return serial(function () { return textNow(objId); }); },
+      // What a page's reading view shows besides its text: { versions, pending, touched } (how many versions are held, how many edits wait
+      // for something, and when this device last took a change into it, by its own clock: null for a page with none). Reads the page's
+      // versions like state() does, and writes nothing.
+      info: function (objId) {
+        return serial(async function () {
+          var p = await loadPage(objId);
+          return { versions: p.versions.size, pending: p.pending.size, touched: p.touched };
+        });
+      },
+      // Removes ONE page from this device: its list record, every version and waiting edit it names, and the text kept for searching it.
+      // Answers { removed, versions, pending }: `removed` is false when no record of the page was held (nothing was changed). The page's own
+      // record goes FIRST, so that a stop part-way leaves unused records and never a page that names a version that is gone. It works on a
+      // page whose history cannot be read (it is still listed, and a person must be able to remove it): the versions it names are removed
+      // when its record can be read, and when it cannot, the versions stay as records nothing names (sealed, and unreachable). Not undone;
+      // and not a wiki-wide purge (purge() below is for an identity that is removed). The identity logs stay: they are shared by every page.
+      remove: function (objId) {
+        return serial(async function () {
+          if (!W.parsePageId(objId)) throw new Error('That is not the name of a page (its owner\'s identity, a slash and a name).');
+          var id = await pageKey(objId), rec = null, held = await backend.get('page', id);
+          if (held) { try { rec = await open('page', id, held); } catch (e) { rec = null; } }
+          pages.delete(objId);
+          await backend.del('page', id);
+          await backend.del('meta', 'text:' + id);
+          var cids = rec && Array.isArray(rec.cids) ? rec.cids : [], pend = rec && Array.isArray(rec.pending) ? rec.pending : [];
+          for (var i = 0; i < pend.length; i++) await backend.del('pending', pend[i]);
+          for (var j = 0; j < cids.length; j++) await backend.del('version', cids[j]);
+          return { removed: !!held, versions: cids.length, pending: pend.length };
+        });
+      },
       alerts: function () { return serial(async function () { return (await read('meta', 'alerts')) || []; }); },
       // removes everything this store holds (an identity removed from this device takes its pages with it)
       purge: function () {
