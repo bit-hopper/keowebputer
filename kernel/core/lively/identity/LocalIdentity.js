@@ -251,6 +251,17 @@ module("lively.identity.LocalIdentity")
       //                       or "quoted phrase", has to be found; case and accents do not matter), best first, at most fifty. The shell reads the
       //                       page's name, category, tags and TEXT; `where` says which of "name", "tags", "text" matched and `snippet` is a short
       //                       piece of the text around the first match ("" when the text did not match). No page's text is handed over but that.
+      //   wikiRead(ref)    -> { id, name, owner, mine, canEdit, heads, state, versions, pending, updated, authors }   a page to READ, with no editing
+      //                       session (nothing is held for the reader, so there is nothing to give back). `state` is the page's Yjs update, `canEdit`
+      //                       whether this identity may write it, `versions` how many edits it holds, `pending` how many more wait for something
+      //                       and are not in the text, `updated` when THIS device last took a change into it (its own clock), `authors` the DIDs
+      //                       that wrote an edit. Fails with a sentence for a page this device does not hold.
+      //   wikiExport({ id, format }) -> { name, size }   saves the page as a file on the computer: format is "markdown" or "html". The SHELL makes
+      //                       the file from the stored page and hands it to the browser's download (this frame may not download, and the world
+      //                       must not be able to make a file out of anything it likes); the world is told the file's name and size. At most
+      //                       one file a second.
+      //   wikiDelete(id)   -> { removed, versions, pending }   takes one of this identity's own pages off this device, with its whole history
+      //                       (not undone). The shell refuses a page someone else made. The question to the person is the caller's.
       //   wikiOpen(ref)    -> { session, id, name, owner, mine, isNew, canEdit, clientId, heads, state }
       //                       ref is { name } for this identity's own page (made when first saved) or { id } for any page held here. `state`
       //                       is the page's Yjs update; `clientId` is the number the editor must give its Yjs document (a fresh one at every
@@ -258,8 +269,9 @@ module("lively.identity.LocalIdentity")
       //   wikiEdit({ session, n, update }) -> { status, cid, error, saved }   `n` counts the editor's saves; the same n with the same bytes
       //                       gets the earlier answer, so a lost answer can be asked for again. saved is false for anything but a stored edit.
       //   wikiClose(session) -> true
-      //   wikiGo(ref)      -> true   moves to the page: the world frame restarts as a world of its own with the page's editor filling it, the
-      //                       way a page of a wiki is on a host (go("world", name) does the same for a saved world). ref is { id } for a page
+      //   wikiGo(ref)      -> true   moves to the page: the world frame restarts as a world of its own with the page filling it (its reading
+      //                       view if the device holds it, the editor for a new name), the way a page of a wiki is on a host (go("world", name)
+      //                       does the same for a saved world). ref is { id } for a page
       //                       held here or { name } for this identity's own page. The shell refuses a page of someone else's that it does not
       //                       hold. What the editor has typed and not yet saved is saved first (the bridge's beforeLeave).
       //   wikiIndexGo(opts) -> true   moves to the person's wiki: the world frame restarts as a world of its own with the index of their pages
@@ -277,6 +289,9 @@ module("lively.identity.LocalIdentity")
         this._run("wiki.here", ref && ref.id ? { id: ref.id } : ref && ref.name ? { name: ref.name } : {}, 30000, thenDo || function () {});
       },
       wikiGo: function wikiGo(ref, thenDo) { this._run("world.go", ref.id ? { kind: "wiki", id: ref.id } : { kind: "wiki", name: ref.name }, 120000, thenDo || function () {}); },
+      wikiRead: function wikiRead(ref, thenDo) { this._run("wiki.read", ref.id ? { id: ref.id } : { name: ref.name }, 30000, thenDo); },
+      wikiExport: function wikiExport(a, thenDo) { this._run("wiki.export", { id: String(a.id), format: String(a.format) }, 60000, thenDo); },
+      wikiDelete: function wikiDelete(id, thenDo) { this._run("wiki.delete", { id: String(id) }, 30000, thenDo); },
       wikiOpen: function wikiOpen(ref, thenDo) { this._run("wiki.open", ref.id ? { id: ref.id } : { name: ref.name }, 30000, thenDo); },
       wikiEdit: function wikiEdit(a, thenDo) { this._run("wiki.edit", { session: a.session, n: a.n, update: a.update }, 60000, thenDo); },
       wikiClose: function wikiClose(session, thenDo) { this._run("wiki.close", { session: session }, 30000, thenDo || function () {}); },

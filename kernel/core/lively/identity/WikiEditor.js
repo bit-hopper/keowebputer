@@ -1123,46 +1123,12 @@ module('lively.identity.WikiEditor')
 
       // Inject postcard-runtime.js if Yjs/PM aren't on the page yet — shared
       // runtime bundle with PostCardEditor.js, same lazy-load mechanism.
+      // The loading itself is WikiEditor.ensureRuntime (class side), which the page's reading view (WikiView, on this device) uses too.
       _ensureRuntime: function (callback) {
-        // Stylesheets first, before the early return below: a page that
-        // already carries the runtime bundle in its own HTML (the wiki
-        // index route) skips the load path, and used to end up with no
-        // KaTeX/highlight CSS at all -- math rendered twice (MathML +
-        // HTML) and display math at thousands of px wide.
-        if (!document.getElementById('katex-css')) {
-          var link = document.createElement('link');
-          link.id = 'katex-css';
-          link.rel = 'stylesheet';
-          link.href = '/core/lib/postcard/katex.min.css';
-          document.head.appendChild(link);
-        }
-        if (!document.getElementById('hljs-css')) {
-          var hljsLink = document.createElement('link');
-          hljsLink.id = 'hljs-css';
-          hljsLink.rel = 'stylesheet';
-          hljsLink.href = '/core/lib/postcard/hljs-github.css';
-          document.head.appendChild(hljsLink);
-        }
-        if (this._Y() && this._ProseMirror() && this._yProsemirror()) {
-          return callback();
-        }
         var self = this;
-        if (window._postcardRuntimeLoading) {
-          var poll = setInterval(function () {
-            if (self._Y() && self._ProseMirror()) { clearInterval(poll); callback(); }
-          }, 80);
-          return;
-        }
-        window._postcardRuntimeLoading = true;
-        this._setStatus('Loading…');
-        var s = document.createElement('script');
-        s.src = '/core/lib/postcard/postcard-runtime.js';
-        s.onload = function () { window._postcardRuntimeLoading = false; callback(); };
-        s.onerror = function () {
-          window._postcardRuntimeLoading = false;
-          self._showError('Failed to load /core/lib/postcard/postcard-runtime.js');
-        };
-        document.head.appendChild(s);
+        WikiEditorClass.ensureRuntime(callback,
+          function () { self._showError('Failed to load /core/lib/postcard/postcard-runtime.js'); },
+          function () { self._setStatus('Loading…'); });
       },
 
       // A new wiki page always gets a fresh Y.Doc — there is no plain mode
@@ -3688,6 +3654,45 @@ module('lively.identity.WikiEditor')
 
     Object.extend(WikiEditorClass, {
 
+      // Loads what a page needs to be drawn or edited, once: the two stylesheets (math and code), and the runtime bundle (Yjs, ProseMirror,
+      // y-prosemirror: /core/lib/postcard/postcard-runtime.js) unless the page already carries it. callback() when it is all there;
+      // onError() when the bundle would not load; onStart() just before it starts loading. Not an instance method so that the reading view
+      // of a page on this device (WikiView.openLocal), which has no editor, can draw a page from its Yjs document too.
+      ensureRuntime: function (callback, onError, onStart) {
+        // Stylesheets first, before the early return below: a page that
+        // already carries the runtime bundle in its own HTML (the wiki
+        // index route) skips the load path, and used to end up with no
+        // KaTeX/highlight CSS at all -- math rendered twice (MathML +
+        // HTML) and display math at thousands of px wide.
+        [['katex-css', '/core/lib/postcard/katex.min.css'], ['hljs-css', '/core/lib/postcard/hljs-github.css']].forEach(function (p) {
+          if (document.getElementById(p[0])) return;
+          var link = document.createElement('link');
+          link.id = p[0];
+          link.rel = 'stylesheet';
+          link.href = p[1];
+          document.head.appendChild(link);
+        });
+        var probe = WikiEditorClass.prototype;
+        function there() { return !!(probe._Y() && probe._ProseMirror() && probe._yProsemirror()); }
+        if (there()) return callback();
+        if (window._postcardRuntimeLoading) {
+          var poll = setInterval(function () {
+            if (there()) { clearInterval(poll); callback(); }
+          }, 80);
+          return;
+        }
+        window._postcardRuntimeLoading = true;
+        if (onStart) onStart();
+        var s = document.createElement('script');
+        s.src = '/core/lib/postcard/postcard-runtime.js';
+        s.onload = function () { window._postcardRuntimeLoading = false; callback(); };
+        s.onerror = function () {
+          window._postcardRuntimeLoading = false;
+          if (onError) onError();
+        };
+        document.head.appendChild(s);
+      },
+
       // Same pattern as WikiView's _openInWorld/_currentWorldView (see that
       // file): when no opts.target is given, the editor opens as a plain
       // self-rendering Box directly in the world, no lively.morphic.Window
@@ -3709,9 +3714,10 @@ module('lively.identity.WikiEditor')
       },
 
       // Load an existing wiki page and open the editor.
-      // opts.forceReadOnly: used only by WikiView to embed this editor
-      // purely as a render engine for content — strips all editing chrome
-      // and disables autosave regardless of ownership.
+      // opts.forceReadOnly: strips all editing chrome and disables autosave
+      // regardless of ownership. NOTHING passes it any more: WikiView draws a
+      // page's snapshot itself (postCardUtils.snapshotToHtml) and no longer
+      // embeds this editor to do it; the option is left in place.
       // opts.onSaved(handle, objId, extra): fires once, only after an explicit
       // Save-button click succeeds (never from the debounced autosave) —
       // lets an embedding caller swap this editor for a read-only view in
@@ -3800,6 +3806,9 @@ module('lively.identity.WikiEditor')
         editor._localRef = ref.id ? { id: ref.id } : { name: ref.name };
         editor._wikiName = ref.name || (ref.id ? ref.id.slice(ref.id.indexOf('/') + 1) : null);
         editor._newMeta = opts.meta || null;
+        // After an explicit Save succeeds (never an autosave) the caller may swap this editor for the page's reading view, as the host's
+        // index does (_buildSaveControls calls it with the page's id).
+        editor._onSaved = opts.onSaved || null;
         // The words of the search this page was opened from: marked in the page once it has text (markSearch)
         editor._pendingSearch = opts.highlightQuery || null;
         if (slot) {

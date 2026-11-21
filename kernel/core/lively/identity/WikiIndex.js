@@ -1975,8 +1975,10 @@ module("lively.identity.WikiIndex")
       },
 
       // ─── pages kept on this device ────────────────────────────────────────────
-      // The same slot as a host's page, filled with the page's EDITOR (there is no read-only view of a page on this device yet): what the
-      // person sees is the page, with its toolbar, and what they type is saved as they go.
+      // The same slot as a host's page, and the same two states: the page's READING VIEW (WikiView.openLocal: what a card, a row of the list, a
+      // search result, a reload and "open" in My worlds all lead to, as on a host), and its EDITOR, which "Edit" in the view's menu swaps in
+      // and an explicit Save swaps back out of (a page that is new starts in the editor and goes to the view on its first Save). What is
+      // typed in the editor is saved as it goes. Only the editor holds an editing session with the shell; the view holds none.
 
       // Where and how big the open page is, and that it grows with its text (the host's own options for the slot).
       _slotOpts: function () {
@@ -2042,26 +2044,98 @@ module("lively.identity.WikiIndex")
       // twice): the slot is never filled by two editors.
       // thenDo (optional) is told how it ended: no error when the page is open (it was already, or it is now) and an error when it is not (the
       // old page could not be saved and stays, or the editor would not open); a request ignored for the one still being served is no error.
-      // highlightQuery (optional): the words of the search the page was chosen from, marked in the page (WikiEditor.markSearch), as the host's
-      // page marks the term it was opened with.
+      // highlightQuery (optional): the words of the search the page was chosen from, marked in the page (markSearch of the view or the editor),
+      // as the host's page marks the term it was opened with.
+      // The page opens in its READING VIEW. A page that is already open, in either state, stays as it is: asking for the page the person is
+      // editing does not take their editor away.
       _openLocalPage: function (page, thenDo, highlightQuery) {
         var self = this, done = thenDo || function () {};
         var open = this._activeContentMorph;
-        if (open && open._local && open._wikiName === page.wikiName && open.world()) {
+        if (open && (open._local || open._localPage) && open._wikiName === page.wikiName && open.world()) {
           if (highlightQuery) open.markSearch(highlightQuery);
           return done(null);
         }
+        this._showLocalView(page.objId, done, highlightQuery);
+      },
+
+      // Puts the reading view of the page with this id in the slot, in the place of whatever is there (saved first, as _dropActive does).
+      // thenDo(err) as for _openLocalPage; a second request while the first is still being served is ignored (the person clicked twice).
+      _showLocalView: function (id, thenDo, highlightQuery) {
+        var self = this, done = thenDo || function () {};
         if (this._opening) return done(null);
         this._opening = true;
         this._dropActive(function (err) {
           if (err) { self._opening = false; return done(err); }
-          var editor = lively.identity.WikiEditor.openLocal({ id: page.objId }, Object.assign(self._slotOpts(), highlightQuery ? { highlightQuery: highlightQuery } : {}));
+          var view = lively.identity.WikiView.openLocal({ id: id }, Object.assign(self._slotOpts(), {
+            highlightQuery: highlightQuery || null,
+            onEdit: function () { self._editLocalPage(id); },
+            onDeleted: function () { self._pageDeletedLocal(id); },
+          }));
           self._opening = false;
-          if (!editor) return done(new Error("The page could not be opened."));
-          self._setActiveContentMorph(editor);
-          self._watchOutline(editor);
-          self._reportHere({ id: page.objId });
+          if (!view) return done(new Error("The page could not be opened."));
+          self._setActiveContentMorph(view);
+          self._watchOutline(view);
+          self._reportHere({ id: id });
           done(null);
+        });
+      },
+
+      // "Edit" in the reading view: the editor takes the view's place on the same page. A Save in it (an explicit click, not the autosave)
+      // brings the view back (_afterLocalSave).
+      _editLocalPage: function (id) {
+        var self = this;
+        if (this._opening) return;
+        this._opening = true;
+        this._dropActive(function (err) {
+          if (err) { self._opening = false; return; }
+          self._openLocalEditor({ id: id }, null);
+          self._opening = false;
+        });
+      },
+
+      // The editor of a page in the slot (the slot is empty): `ref` is { id } for a page that is held, { name } for a new one, `meta` is the
+      // category and tags a new page was given. Its Save swaps it for the page's reading view.
+      _openLocalEditor: function (ref, meta) {
+        var self = this, editor;
+        var opts = Object.assign(this._slotOpts(), {
+          onSaved: function (handle, objId) { self._afterLocalSave(editor, objId); },
+        });
+        if (meta) opts.meta = meta;
+        editor = lively.identity.WikiEditor.openLocal(ref, opts);
+        if (!editor) return null;
+        this._setActiveContentMorph(editor);
+        this._watchOutline(editor);
+        this._reportHere(ref.id ? { id: ref.id } : { name: ref.name });
+        return editor;
+      },
+
+      // The person clicked Save in the editor and it saved: the page's reading view takes its place, as on a host. A page that holds nothing
+      // yet (a new page saved with nothing written, which the shell does not make a page of) cannot be read: the editor stays, and the person
+      // is told what to do.
+      _afterLocalSave: function (editor, id) {
+        var self = this;
+        if (!id || this._activeContentMorph !== editor) return;
+        lively.identity.localIdentity.wikiRead({ id: id }, function (err) {
+          if (self._activeContentMorph !== editor) return;
+          if (err) return self._showError("There is nothing in this page to save yet. Write something, then save.", true);
+          self._showLocalView(id);
+        });
+      },
+
+      // The reading view's "Delete page" has deleted the page (the shell has removed it with its history): the view goes, the list is read
+      // again and drawn, and the index is back on the cards with no page open. Nothing is saved first: the view holds nothing unsaved.
+      _pageDeletedLocal: function (id) {
+        var self = this, view = this._activeContentMorph;
+        if (this._outlineObserver) { this._outlineObserver.disconnect(); this._outlineObserver = null; }
+        if (view) view.remove();
+        this._activeContentMorph = null;
+        this._reportHere(null);
+        this._pages = (this._pages || []).filter(function (p) { return p.objId !== id; });
+        this._fetchLocal(function (err) {
+          if (err) self._showError("Your wiki pages could not be read: " + (err.message || err), true);
+          self._renderCategoriesPanel();
+          self._renderPages();
+          self._afterPageClosed();
         });
       },
 
@@ -2471,14 +2545,9 @@ module("lively.identity.WikiIndex")
         this._opening = true;
         this._dropActive(function (err) {
           if (err) { self._opening = false; return; }
-          var editor = lively.identity.WikiEditor.openLocal({ name: fields.wikiName }, Object.assign(self._slotOpts(), {
-            meta: { category: fields.category, tags: fields.tags },
-          }));
+          // the editor, as on a host: its first Save takes the person to the page's reading view (_afterLocalSave)
+          self._openLocalEditor({ name: fields.wikiName }, { category: fields.category, tags: fields.tags });
           self._opening = false;
-          if (!editor) return;
-          self._setActiveContentMorph(editor);
-          self._watchOutline(editor);
-          self._reportHere({ name: fields.wikiName });
         });
       },
 

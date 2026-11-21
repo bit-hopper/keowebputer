@@ -45,12 +45,33 @@
  * embedded call sites (ConstellationLounge/Canvas feeds) pass their own
  * target + bounds and keep their smaller, card-shaped sizing.
  *
+ * A PAGE KEPT ON THIS DEVICE (keo, signed in with a local identity; openLocal below, `_localPage` is true): the same view, drawn the
+ * same way, with the shell behind it instead of a server. There is no envelope to fetch: the page is read from the shell
+ * (lively.identity.localIdentity.wikiRead: the page's Yjs document, who may write it, who wrote it, when this device last changed it), its
+ * snapshot is made from that document (the editor's own Preview does the same) and drawn by the same snapshotToHtml, and nothing here asks a
+ * host: no profile, no handle lookup, no version list, no edit-token, no signer key. Different from the host's view where the host's
+ * answers do not exist on a device:
+ *   - Details: Author and Contributors are named by their label (or a shortened DID), the date is when THIS device last took a change into
+ *     the page, and the badge says what is known: how many edits it holds, each of which was checked when the device kept it. CID and
+ *     Constellation are not shown (a page here has neither).
+ *   - the menu has no "Copy link" (a page here has no address) and no "History" yet; "Edit" is shown when the page may be written by this
+ *     identity and "Delete page" for a page the person made (the shell refuses any other).
+ *   - Edit does not ask the passkey priming question (no passkey is used to write a page here); it calls opts.onEdit(handle, id, view).
+ *   - Delete asks, in words that say the history goes too, then asks the shell (wikiDelete); opts.onDeleted(handle, id, view) runs after.
+ *   - a download is made by the SHELL from the stored page (the world's frame may not start one, and what the world made must not become a
+ *     file on the person's disk): see wikiExport.
+ *
  * Entry point:
  *   lively.identity.WikiView.open(handle, objId, options)
  *     options.target      -> embed via target.addMorph(view) instead of the world
  *     options.envelope    -> render immediately, skip the fetch
  *     options.cid         -> view a specific historical version
  *     options.bounds      -> override the default extent
+ *   lively.identity.WikiView.openLocal({ id }, options)   a page kept on this device; options: target, bounds, autoHeight, onHeightChanged,
+ *     onEdit(handle, id, view), onDeleted(handle, id, view), highlightQuery (words of a search, marked in the page), world (the page is the
+ *     whole world)
+ *   lively.identity.WikiView.openLocalWorld({ id }, held)   a page kept on this device as the WORLD the person is in: its reading view when the
+ *     device holds it, the editor for a new name; Edit and Save swap the two (keo's start kind 'wiki')
  */
 
 module("lively.identity.WikiView")
@@ -93,6 +114,8 @@ module("lively.identity.WikiView")
           "_history",
           "_heightObserver",
           "_onHeightChanged",
+          "_localInfo",
+          "_localRef",
         ],
       },
 
@@ -232,7 +255,8 @@ module("lively.identity.WikiView")
             "font-size:11px", "color:" + (this._pinkHandle ? "#CC0057" : "#888"), "white-space:nowrap",
             "overflow:hidden", "text-overflow:ellipsis",
           ].join(";");
-          handleEl.textContent = "@" + this._handle;
+          // A page on this device names its author when it has been read (_renderLocal): a label is not a host's @handle.
+          handleEl.textContent = this._localPage ? "" : "@" + this._handle;
           topBar.appendChild(handleEl);
           this._handleEl = handleEl;
 
@@ -424,6 +448,7 @@ module("lively.identity.WikiView")
       "data loading",
       {
         _loadEnvelope: function () {
+          if (this._localPage) return this._loadLocal();
           var self = this;
           var base = lively.identity.did.baseUrl();
           var url =
@@ -853,6 +878,216 @@ module("lively.identity.WikiView")
         },
       },
 
+      "a page kept on this device",
+      {
+        // Reads the page from the shell (no editing session is opened for a reader), then draws it. The runtime (Yjs, y-prosemirror) is
+        // loaded first: the snapshot is made from the page's document.
+        _loadLocal: function () {
+          var self = this;
+          lively.identity.localIdentity.wikiRead(this._localRef, function (err, r) {
+            if (!self.owner) return;                      // taken out of its place while the shell was answering
+            if (err) return self._showError(err.message || String(err));
+            lively.identity.WikiEditor.ensureRuntime(
+              function () { if (self.owner) self._renderLocal(r); },
+              function () { self._showError("The page could not be drawn: its runtime did not load."); });
+          });
+        },
+
+        // The person's own label for their own page; a shortened DID for anyone else (no host to ask for a handle).
+        _localName: function (did) {
+          var me = lively.identity.did.currentUser();
+          // (a local session carries the label as displayLabel, and the DID as its "handle": see DID.setLocalSession)
+          if (me && did === me.did && (me.displayLabel || me.displayName)) return me.displayLabel || me.displayName;
+          return lively.identity.postCardUtils.truncateDid(did);
+        },
+
+        // `_envelope` is what the rest of this file reads for a title (download, delete question); there is no envelope on a device.
+        _renderLocal: function (r) {
+          var utils = lively.identity.postCardUtils, Y = lively.identity.WikiEditor.prototype._Y();
+          this._localInfo = r;
+          this._objId = r.id;
+          this._wikiName = r.name;
+          this._isOwner = !!r.mine;
+          this._canEdit = !!r.canEdit;
+          this._canDelete = !!r.mine;
+          this._constellation = null;
+          this._envelope = { local: true, did: r.owner, state: { title: r.name, wikiName: r.name } };
+          this._avatarImgEl.src = utils.identiconDataUrl(r.owner, 32);
+          this._handleEl.textContent = this._localName(r.owner);
+          this._titleEl.textContent = r.name;
+
+          var snapshot = null;
+          try {
+            var doc = new Y.Doc({ gc: false });
+            Y.applyUpdate(doc, r.state);
+            snapshot = lively.identity.wikiSerializer._extractSnapshot(doc);
+          } catch (e) {
+            console.error("[WikiView]", e);
+            this._contentEl.textContent = "The page could not be drawn: " + (e && e.message || e);
+          }
+          if (snapshot) {
+            this._contentEl.innerHTML = utils.snapshotToHtml(snapshot);
+            utils.hydrateEmbeddedParts(this._contentEl);
+            utils.hydrateCodeCells(this._contentEl);
+            utils.hydrateLinkPreviewEmbeds(this._contentEl);
+            utils.hydrateLinkPreviews(this._contentEl);
+          }
+          this._localDrawn = true;
+          this._renderDetailsLocal(r);
+          if (this._highlightQuery) this.markSearch(this._highlightQuery);
+        },
+
+        _buildLocalChip: function (did) {
+          var chip = document.createElement("span");
+          chip.style.cssText = "display:inline-flex;align-items:center;gap:3px;";
+          var img = document.createElement("img");
+          img.style.cssText = "width:18px;height:18px;border-radius:50%;box-shadow:0 0 0 1px #fff,0 1px 2px rgba(0,0,0,0.25);";
+          img.src = lively.identity.postCardUtils.identiconDataUrl(did, 32);
+          chip.appendChild(img);
+          var name = document.createElement("span");
+          name.textContent = this._localName(did);
+          chip.appendChild(name);
+          return chip;
+        },
+
+        // The Details block with what is known on a device: who made the page, who else wrote it, when this device last changed it, and what
+        // was checked. CID and Constellation have no meaning here and are hidden, not left empty.
+        _renderDetailsLocal: function (r) {
+          this._cidEl.parentNode.style.display = "none";
+          this._visibilityEl.parentNode.style.display = "none";
+          this._dateEl.textContent = this._formatDate(r.updated);
+
+          this._authorRowEl.innerHTML = "";
+          var label = document.createElement("span");
+          label.textContent = "Author:";
+          label.style.color = "#999";
+          this._authorRowEl.appendChild(label);
+          this._authorRowEl.appendChild(this._buildLocalChip(r.owner));
+
+          this._contributorsRowEl.innerHTML = "";
+          var others = (r.authors || []).filter(function (d) { return d !== r.owner; });
+          if (others.length) {
+            var cl = document.createElement("span");
+            cl.textContent = "Contributors:";
+            cl.style.color = "#999";
+            this._contributorsRowEl.appendChild(cl);
+            others.forEach(function (d) { this._contributorsRowEl.appendChild(this._buildLocalChip(d)); }, this);
+          }
+
+          // What is known: each edit in the page was checked (its signature, and its author's identity) at the moment this device kept it,
+          // and the sealed copy on disk cannot be changed without that being noticed. Not a check made again now.
+          var edits = r.versions || 0;
+          var text = "✓ " + edits + (edits === 1 ? " edit" : " edits") + ", each checked when this device kept it";
+          var colour = "#2a7";
+          if (r.pending) {
+            text += " · " + r.pending + (r.pending === 1 ? " more is" : " more are") + " waiting for something and not shown";
+            colour = "#b8860b";
+          }
+          this._verifyBadgeEl.textContent = text;
+          this._verifyBadgeEl.style.color = colour;
+        },
+
+        // Marks the words of a search in the page and brings the first into view, as the editor's markSearch does (the same reading of a
+        // query: words, and "quoted phrases", case and accents not mattering; a phrase is found inside one block, across styled pieces).
+        // The page's content is drawn from a snapshot, so marking adds <mark> elements and nothing is saved. Asked for before the page is
+        // drawn, it is done once it is.
+        markSearch: function (query) {
+          if (!query) return;
+          if (!this._localDrawn || !this._contentEl) { this._highlightQuery = query; return; }
+          var MAX_MARKS = 500, MAX_TERMS = 8, content = this._contentEl;
+          function fold(s) {
+            return String(s).split("").map(function (c) {
+              var f = c.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+              return f.length === 1 ? f : (f.charAt(0) || " ");
+            }).join("");
+          }
+          var terms = [], re = /"([^"]+)"|(\S+)/g, m;
+          while ((m = re.exec(String(query)))) {
+            var t = fold(m[1] != null ? m[1] : m[2]).replace(/\s+/g, " ").trim();
+            if (t && terms.indexOf(t) < 0) terms.push(t);
+          }
+          terms = terms.slice(0, MAX_TERMS);
+          // the earlier marks go first (another search)
+          Array.prototype.forEach.call(content.querySelectorAll("mark.keo-search-mark"), function (el) {
+            var parent = el.parentNode;
+            parent.replaceChild(document.createTextNode(el.textContent), el);
+            parent.normalize();
+          });
+          if (!terms.length) return;
+          var BLOCKS = "p, h1, h2, h3, h4, h5, h6, li, pre, blockquote, td, th, figcaption";
+          var walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, null, false), groups = [], n;
+          while ((n = walker.nextNode())) {
+            var block = (n.parentElement && n.parentElement.closest(BLOCKS)) || content;
+            var g = groups.filter(function (x) { return x.block === block; })[0];
+            if (!g) groups.push(g = { block: block, nodes: [] });
+            g.nodes.push(n);
+          }
+          var made = 0, first = null;
+          groups.forEach(function (g) {
+            if (made >= MAX_MARKS) return;
+            var text = "", starts = [];
+            g.nodes.forEach(function (node) { starts.push(text.length); text += node.nodeValue; });
+            var f = fold(text), spans = [];
+            terms.forEach(function (t) {
+              var i = f.indexOf(t);
+              while (i >= 0 && made + spans.length < MAX_MARKS) { spans.push([i, i + t.length]); i = f.indexOf(t, i + t.length); }
+            });
+            if (!spans.length) return;
+            spans.sort(function (a, b) { return a[0] - b[0]; });
+            var merged = [spans[0].slice()];
+            spans.slice(1).forEach(function (s) { var l = merged[merged.length - 1]; if (s[0] <= l[1]) l[1] = Math.max(l[1], s[1]); else merged.push(s.slice()); });
+            g.nodes.forEach(function (node, k) {
+              var from = starts[k], to = from + node.nodeValue.length, frag = document.createDocumentFragment(), pos = 0, hit = false;
+              merged.forEach(function (s) {
+                var a = Math.max(s[0], from), b = Math.min(s[1], to);
+                if (a >= b) return;
+                hit = true;
+                if (a - from > pos) frag.appendChild(document.createTextNode(node.nodeValue.slice(pos, a - from)));
+                var mark = document.createElement("mark");
+                mark.className = "keo-search-mark";
+                mark.style.cssText = "background:#fff3a0;color:inherit;border-radius:2px;";
+                mark.textContent = node.nodeValue.slice(a - from, b - from);
+                frag.appendChild(mark);
+                if (!first) first = mark;
+                made++;
+                pos = b - from;
+              });
+              if (!hit) return;
+              if (pos < node.nodeValue.length) frag.appendChild(document.createTextNode(node.nodeValue.slice(pos)));
+              node.parentNode.replaceChild(frag, node);
+            });
+          });
+          if (first && first.scrollIntoView) first.scrollIntoView({ behavior: "smooth", block: "center" });
+        },
+
+        // The shell makes the file from the stored page and hands it to the browser's download (this frame may not start one, and the
+        // world must not be able to make a file out of anything it likes). format: "html" or "markdown".
+        _downloadLocal: function (format) {
+          var self = this;
+          lively.identity.localIdentity.wikiExport({ id: this._objId, format: format }, function (err, r) {
+            if (err) {
+              if (typeof $world !== "undefined" && $world && $world.setStatusMessage) $world.setStatusMessage("The page could not be saved as a file: " + (err.message || err), Color.red, 8);
+              return;
+            }
+            self._flashNearMoreBtn("Downloaded " + (r && r.name ? r.name : ""));
+          });
+        },
+
+        // Asks the shell to delete the page, with its history. thenDo(errMsg|null), as _deletePage does for a host.
+        _deleteLocal: function (thenDo) {
+          var self = this;
+          lively.identity.localIdentity.wikiDelete(this._objId, function (err) {
+            if (err) return thenDo((err && err.message) || String(err));
+            // the list of worlds and pages (My worlds) reads again, as after a save
+            try { window.dispatchEvent(new CustomEvent("keo-wiki-changed")); } catch (e) { /* no listener matters */ }
+            thenDo(null);
+            if (self._onDeleted) return self._onDeleted(self._handle, self._objId, self);
+            // not in the index (the page is the whole world): the person goes to their wiki, where the page is no longer
+            lively.identity.localIdentity.wikiIndexGo({}, function () {});
+          });
+        },
+      },
+
       "sharing",
       {
         // Small dropdown anchored under the "more" button, appended to
@@ -869,8 +1104,9 @@ module("lively.identity.WikiView")
           menu.style.cssText = [
             "position:fixed", "z-index:9999",
             "top:" + Math.round(rect.bottom + 4) + "px",
-            "left:" + Math.round(rect.right - 160) + "px",
-            "width:160px", "background:#fff", "border:1px solid #ddd",
+            // wide enough for "Download as Markdown" on one line (the host's menu has no entry that long)
+            "left:" + Math.round(rect.right - (this._localPage ? 210 : 160)) + "px",
+            "width:" + (this._localPage ? 210 : 160) + "px", "background:#fff", "border:1px solid #ddd",
             "border-radius:8px", "box-shadow:0 4px 14px rgba(0,0,0,0.2)",
             "padding:4px", "font-family:sans-serif", "font-size:13px",
             "box-sizing:border-box",
@@ -901,12 +1137,19 @@ module("lively.identity.WikiView")
           if (this._canEdit) {
             menu.appendChild(makeItem("Edit", "edit", function () { self._handleEditClick(); }));
           }
-          menu.appendChild(makeItem("Copy link", "link", function () { self._copyShareLink(); }));
-          menu.appendChild(makeItem("Download", "download", function () { self._downloadPage(); }));
-          // Full-page views only: embedded fixed-size cards (lounge feed,
-          // canvas placement) have no room for the two-column panel.
-          if (this._autoHeight) {
-            menu.appendChild(makeItem("History", "history", function () { self._openHistory(); }));
+          if (this._localPage) {
+            // No link (a page on this device has no address) and no History yet. The file is made by the shell from the stored page, in
+            // the format asked for (WikiView._downloadLocal).
+            menu.appendChild(makeItem("Download as web page", "download", function () { self._downloadLocal("html"); }));
+            menu.appendChild(makeItem("Download as Markdown", "download", function () { self._downloadLocal("markdown"); }));
+          } else {
+            menu.appendChild(makeItem("Copy link", "link", function () { self._copyShareLink(); }));
+            menu.appendChild(makeItem("Download", "download", function () { self._downloadPage(); }));
+            // Full-page views only: embedded fixed-size cards (lounge feed,
+            // canvas placement) have no room for the two-column panel.
+            if (this._autoHeight) {
+              menu.appendChild(makeItem("History", "history", function () { self._openHistory(); }));
+            }
           }
           if (this._canDelete) {
             menu.appendChild(makeItem("Delete page", "delete", function () { self._confirmDeletePage(); }, true));
@@ -964,6 +1207,8 @@ module("lively.identity.WikiView")
         // just reached through the menu now.
         _handleEditClick: function () {
           var self = this;
+          // No passkey is used to write a page on this device, so there is nothing to warn about first.
+          if (this._localPage) { if (this._onEdit) this._onEdit(this._handle, this._objId, this); return; }
           // Saving a wiki page signs its envelope with the device's soft
           // signing key, unwrapped via a WebAuthn PRF ceremony
           // (WikiSerializer.js's _signEnvelopeIfPossible) -- warn before
@@ -1058,7 +1303,7 @@ module("lively.identity.WikiView")
           box.innerHTML =
             '<div style="font-size:16px;font-weight:600;margin-bottom:8px;">Delete “' + esc(title) + '”?</div>' +
             '<div style="font-size:13px;line-height:1.45;color:#555;">This permanently deletes the page and its ' +
-            'entire edit history. It can’t be undone.</div>' +
+            'entire edit history' + (this._localPage ? ' from this device' : '') + '. It can’t be undone.</div>' +
             '<div data-role="error" style="font-size:12px;color:#c33;margin-top:10px;display:none;"></div>' +
             '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;"></div>';
           var errEl = box.querySelector('[data-role="error"]');
@@ -1105,6 +1350,7 @@ module("lively.identity.WikiView")
         // navigate to the wiki index it belonged to.
         _deletePage: function (thenDo) {
           var self = this;
+          if (this._localPage) return this._deleteLocal(thenDo);
           var base = lively.identity.did.baseUrl();
           var url = base + "/@" + encodeURIComponent(this._handle) + "/" +
             encodeURIComponent(this._objId) + "/wikipage";
@@ -1151,6 +1397,19 @@ module("lively.identity.WikiView")
             bubble.style.opacity = "0";
             setTimeout(function () { bubble.remove(); }, 200);
           }, 1200);
+        },
+      },
+
+      "world",
+      {
+        // The world calls this on each of its morphs when the browser window changes size (World>>onWindowResize, after it has fitted itself to
+        // the new size). A page that is the whole world follows, as the editor of such a page does (WikiEditor>>onWorldResize); a view in the
+        // wiki index's slot, or in any other place, is placed and sized by whatever holds it.
+        onWorldResize: function () {
+          if (!this._localPage || !this._standalone || !this.owner || !this.owner.isWorld) return;
+          var fit = lively.identity.WikiEditor._worldFit();
+          this.setExtent(fit.extent);
+          this.setPosition(fit.pos);
         },
       },
     );
@@ -1259,6 +1518,95 @@ module("lively.identity.WikiView")
           view._setup();
         }
         return view;
+      },
+
+      // A page kept on THIS device (see the file header): ref is { id } (or { name } for this identity's own page). options as for open(),
+      // without envelope and cid. Returns the view, or null when nobody is signed in with a local identity (the person is told).
+      // The page is read from the shell once the view is in its place; the view holds no editing session, so there is nothing to give back.
+      // options.world: the page is the WHOLE WORLD (see openLocalWorld): sized and placed as the editor of such a page is (below the menu bar,
+      // as wide as a page reads well, as tall as what is left, so the page scrolls inside it), put at the back, and the menu bar names the
+      // world after the page. The view then follows the world when the browser window changes size (onWorldResize).
+      openLocal: function (ref, options) {
+        var opts = options || {};
+        var user = lively.identity.did.currentUser();
+        if (!(user && user.local && lively.identity.localIdentity.isAvailable())) {
+          $world.inform("Wiki pages on this device need keo webputer with an identity signed in.");
+          return null;
+        }
+        if (!ref || !(ref.id || ref.name)) return null;
+        var fit = opts.world ? lively.identity.WikiEditor._worldFit() : null;
+        var view = new lively.identity.WikiView(opts.bounds || (fit ? lively.rect(0, 0, fit.extent.x, fit.extent.y) : lively.rect(0, 0, 960, 780)));
+        view.setName("WikiView");
+        view._localPage = true;
+        view._localRef = ref.id ? { id: ref.id } : { name: ref.name };
+        view._handle = user.handle;
+        view._objId = ref.id || null;
+        view._wikiName = ref.name || (ref.id ? ref.id.slice(ref.id.indexOf("/") + 1) : null);
+        view._envelope = null;
+        view._onEdit = opts.onEdit || null;
+        view._onDeleted = opts.onDeleted || null;
+        view._highlightQuery = opts.highlightQuery || null;
+        view._autoHeight = opts.autoHeight !== undefined ? !!opts.autoHeight : !opts.target && !fit;
+        view._onHeightChanged = opts.onHeightChanged || null;
+        if (opts.target) {
+          opts.target.addMorph(view);
+          view._setup();
+        } else if (fit) {
+          // not _openInWorld: that centres the view and keeps the host's one-view-per-world and no-rename rules, and the world here is named
+          // after the page by the same call the editor of a page uses
+          view._standalone = true;
+          view.openInWorld(fit.pos);
+          view.sendToBack();
+          view._setup();
+          lively.identity.WikiEditor._nameWorldAfterPage(view._wikiName);
+        } else {
+          this._openInWorld(view);
+          view._setup();
+        }
+        return view;
+      },
+
+      // A page kept on THIS device as the WORLD the person is in (keo's start kind 'wiki', world/keo-boot.js), the same two states as in the
+      // wiki's index and as on a host: a page the device holds shows its READING VIEW, "Edit" in the view's menu swaps the editor in, and an
+      // explicit Save in the editor swaps the view back. A page the device does not hold (`held` false: a new name of the person's own, which is
+      // made when it is first saved) starts in the editor, and its first Save shows the view. `held` is the shell's word (the start's own
+      // `held`); anything but true is taken as a new page, which the editor can open whether or not the page exists. Deleting the page goes up to
+      // the wiki's index (_deleteLocal). ref is { id } or { name }. Returns the view or the editor, or null (nobody is signed in: the person
+      // is told).
+      openLocalWorld: function (ref, held) {
+        var E = lively.identity.WikiEditor, li = lively.identity.localIdentity, editor = null;
+        function showView(id) {
+          return WikiViewClass.openLocal({ id: id }, {
+            world: true,
+            onEdit: function (handle, objId, view) { edit(objId, view); },
+          });
+        }
+        // The editor takes the view's place on the same page. If it will not open, the view comes back: the person keeps the page.
+        function edit(id, view) {
+          view.remove();
+          if (!openEditor({ id: id })) showView(id);
+        }
+        function openEditor(editorRef) {
+          editor = E.openLocal(editorRef, { onSaved: function (handle, objId) { saved(editor, objId); } });
+          return editor;
+        }
+        // A Save that went through: the page's reading view takes the editor's place (the editing session is given back first). A page that holds
+        // nothing yet (a new page saved with nothing written, which the shell does not make a page of) cannot be read: the editor stays, and the
+        // person is told what to do.
+        function saved(ed, id) {
+          if (!ed || !id || !ed.world()) return;
+          li.wikiRead({ id: id }, function (err) {
+            if (!ed.world()) return;
+            if (err) return ed._tellLocal("There is nothing in this page to save yet. Write something, then save.");
+            ed._closeLocal(function (closeErr) {
+              if (closeErr) return;
+              ed.remove();
+              showView(id);
+            });
+          });
+        }
+        if (held === true && ref.id) return showView(ref.id);
+        return openEditor(ref);
       },
     });
   }); // end module('lively.identity.WikiView')
